@@ -1,0 +1,30 @@
+# dependencies
+/node_modules
+
+# next
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+
+# local env files
+.env
+.env*.local
+
+# typescript / payload generated
+*.tsbuildinfo
+next-env.d.ts
+
+# migration working files (NDJSON exports, never commit live content)
+/migration-data/
+
+# media (local dev fallback when R2 is not configured)
+/media/
