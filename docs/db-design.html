@@ -1,0 +1,1675 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Database Architecture & Multi-Tenancy Design - APC Central CMS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-main: #0B0F19;
+      --bg-card: #151D30;
+      --bg-card-hover: #1E2942;
+      --border-color: #263554;
+      --text-main: #F3F4F6;
+      --text-muted: #9CA3AF;
+      --text-dark: #6B7280;
+      
+      --primary: #6366F1;
+      --primary-glow: rgba(99, 102, 241, 0.15);
+      --secondary: #38BDF8;
+      --secondary-glow: rgba(56, 189, 248, 0.15);
+      --accent: #A78BFA;
+      --success: #34D399;
+      --warning: #FBBF24;
+      --danger: #F87171;
+      
+      --gradient-primary: linear-gradient(135deg, #6366F1 0%, #38BDF8 100%);
+      --gradient-accent: linear-gradient(135deg, #A78BFA 0%, #F472B6 100%);
+      --gradient-glow: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(11, 15, 25, 0) 70%);
+      
+      --font-outfit: 'Outfit', sans-serif;
+      --font-inter: 'Inter', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 20px;
+      
+      --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-family: var(--font-inter);
+      line-height: 1.6;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* Ambient background glow */
+    body::before {
+      content: "";
+      position: absolute;
+      width: 600px;
+      height: 600px;
+      top: -200px;
+      right: -100px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, rgba(56, 189, 248, 0.05) 50%, rgba(0,0,0,0) 70%);
+      z-index: -1;
+      pointer-events: none;
+      filter: blur(40px);
+    }
+
+    body::after {
+      content: "";
+      position: absolute;
+      width: 500px;
+      height: 500px;
+      bottom: 10%;
+      left: -200px;
+      background: radial-gradient(circle, rgba(167, 139, 250, 0.08) 0%, rgba(0,0,0,0) 70%);
+      z-index: -1;
+      pointer-events: none;
+      filter: blur(40px);
+    }
+
+    header {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 4rem 2rem 2rem 2rem;
+      position: relative;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.35rem 0.85rem;
+      border-radius: 50px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+      border: 1px solid var(--border-color);
+      background: rgba(21, 29, 48, 0.6);
+      backdrop-filter: blur(10px);
+    }
+
+    .badge-primary {
+      color: var(--secondary);
+      border-color: rgba(56, 189, 248, 0.3);
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    h1 {
+      font-family: var(--font-outfit);
+      font-size: clamp(2.5rem, 5vw, 3.75rem);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      margin-bottom: 1.5rem;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      filter: drop-shadow(0 2px 8px rgba(99, 102, 241, 0.3));
+    }
+
+    .lead {
+      font-size: clamp(1.1rem, 2vw, 1.25rem);
+      color: var(--text-muted);
+      max-width: 800px;
+      margin-bottom: 2rem;
+      font-weight: 300;
+    }
+
+    .main-container {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 0 2rem 6rem 2rem;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 3rem;
+    }
+
+    /* Sidebar Navigation */
+    aside {
+      position: sticky;
+      top: 2rem;
+      height: fit-content;
+    }
+
+    .nav-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      border-left: 1px solid var(--border-color);
+      padding-left: 1rem;
+    }
+
+    .nav-item a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.95rem;
+      font-weight: 500;
+      transition: var(--transition-smooth);
+      display: block;
+      padding: 0.35rem 0;
+      border-radius: 4px;
+    }
+
+    .nav-item a:hover {
+      color: var(--secondary);
+      padding-left: 0.25rem;
+    }
+
+    .nav-item.active a {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    /* Content Area */
+    main {
+      min-width: 0; /* Prevents grid items from overflowing */
+    }
+
+    section {
+      margin-bottom: 5rem;
+      scroll-margin-top: 2rem;
+    }
+
+    h2 {
+      font-family: var(--font-outfit);
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      position: relative;
+    }
+
+    h2::after {
+      content: "";
+      position: absolute;
+      bottom: -6px;
+      left: 0;
+      width: 40px;
+      height: 3px;
+      background: var(--gradient-primary);
+      border-radius: 2px;
+    }
+
+    p {
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      font-size: 1.05rem;
+    }
+
+    /* Card Layouts */
+    .grid-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.75rem;
+      transition: var(--transition-smooth);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      background: transparent;
+      transition: var(--transition-smooth);
+    }
+
+    .card:hover {
+      background: var(--bg-card-hover);
+      transform: translateY(-4px);
+      box-shadow: 0 10px 25px -10px rgba(0, 0, 0, 0.3);
+      border-color: rgba(99, 102, 241, 0.4);
+    }
+
+    .card:hover::before {
+      background: var(--gradient-primary);
+    }
+
+    .card-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+      font-size: 1.25rem;
+    }
+
+    .icon-global { background: rgba(167, 139, 250, 0.15); color: var(--accent); }
+    .icon-tenant { background: rgba(56, 189, 248, 0.15); color: var(--secondary); }
+    .icon-features { background: rgba(52, 211, 153, 0.15); color: var(--success); }
+
+    .card-title {
+      font-family: var(--font-outfit);
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .card-meta {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-dark);
+      background: rgba(11, 15, 25, 0.4);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      display: inline-block;
+      margin-bottom: 0.75rem;
+      border: 1px solid rgba(255,255,255,0.03);
+    }
+
+    .card-description {
+      font-size: 0.92rem;
+      color: var(--text-muted);
+    }
+
+    /* Tabs Component */
+    .tabs-wrapper {
+      margin-top: 2rem;
+    }
+
+    .tabs-buttons {
+      display: flex;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.5rem;
+      overflow-x: auto;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.75rem 1.25rem;
+      font-family: var(--font-outfit);
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      transition: var(--transition-smooth);
+      white-space: nowrap;
+      position: relative;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-main);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .tab-btn.active {
+      color: var(--secondary);
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    .tab-btn.active::after {
+      content: "";
+      position: absolute;
+      bottom: -0.5rem;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: var(--secondary);
+    }
+
+    .tab-content {
+      display: none;
+      padding-top: 1.5rem;
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Custom Tables / Interactive Accordions */
+    .accordion {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin: 1.5rem 0;
+    }
+
+    .accordion-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+
+    .accordion-header {
+      padding: 1.25rem 1.5rem;
+      font-family: var(--font-outfit);
+      font-weight: 600;
+      font-size: 1.1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+      transition: var(--transition-smooth);
+    }
+
+    .accordion-header:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .accordion-toggle-icon {
+      font-size: 1.25rem;
+      transition: var(--transition-smooth);
+      color: var(--secondary);
+    }
+
+    .accordion-item.active .accordion-toggle-icon {
+      transform: rotate(45deg);
+    }
+
+    .accordion-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s cubic-bezier(0, 1, 0, 1);
+      background: rgba(11, 15, 25, 0.3);
+      border-top: 1px solid transparent;
+    }
+
+    .accordion-item.active .accordion-content {
+      max-height: 1000px;
+      border-top: 1px solid var(--border-color);
+      transition: max-height 0.5s ease-in-out;
+    }
+
+    .accordion-inner {
+      padding: 1.5rem;
+    }
+
+    /* Step flow */
+    .step-flow {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      margin: 2rem 0;
+      position: relative;
+    }
+
+    .step-flow::before {
+      content: "";
+      position: absolute;
+      left: 19px;
+      top: 10px;
+      bottom: 10px;
+      width: 2px;
+      background: var(--border-color);
+      z-index: 1;
+    }
+
+    .step-item {
+      display: flex;
+      gap: 1.5rem;
+      position: relative;
+      z-index: 2;
+    }
+
+    .step-number {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--bg-card);
+      border: 2px solid var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-family: var(--font-outfit);
+      color: var(--secondary);
+      flex-shrink: 0;
+      box-shadow: 0 0 10px var(--primary-glow);
+    }
+
+    .step-content {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.25rem 1.5rem;
+      flex-grow: 1;
+    }
+
+    .step-title {
+      font-family: var(--font-outfit);
+      font-weight: 600;
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+      color: var(--text-main);
+    }
+
+    .step-desc {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+    }
+
+    /* Code Blocks */
+    pre {
+      background: #07090F;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 1.25rem;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      color: #E5E7EB;
+      margin: 1.5rem 0;
+      position: relative;
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+      color: var(--accent);
+      background: rgba(167, 139, 250, 0.08);
+      padding: 0.15rem 0.35rem;
+      border-radius: 4px;
+      border: 1px solid rgba(167, 139, 250, 0.15);
+    }
+
+    pre code {
+      color: inherit;
+      background: transparent;
+      padding: 0;
+      border: none;
+    }
+
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(21, 29, 48, 0.8);
+      border: 1px solid var(--border-color);
+      border-bottom: none;
+      padding: 0.5rem 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      border-top-left-radius: var(--radius-sm);
+      border-top-right-radius: var(--radius-sm);
+      margin-top: 1.5rem;
+      margin-bottom: -1.5rem;
+    }
+
+    .copy-btn {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      transition: var(--transition-smooth);
+    }
+
+    .copy-btn:hover {
+      color: var(--text-main);
+      background: rgba(255,255,255,0.05);
+      border-color: var(--secondary);
+    }
+
+    /* Callout Alert style */
+    .callout {
+      border-left: 4px solid var(--primary);
+      background: rgba(99, 102, 241, 0.05);
+      padding: 1.25rem 1.5rem;
+      border-radius: var(--radius-sm);
+      margin: 1.5rem 0;
+    }
+
+    .callout-success {
+      border-left-color: var(--success);
+      background: rgba(52, 211, 153, 0.05);
+    }
+
+    .callout-warning {
+      border-left-color: var(--warning);
+      background: rgba(251, 191, 36, 0.05);
+    }
+
+    .callout h4 {
+      font-family: var(--font-outfit);
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      font-size: 1.05rem;
+      color: var(--text-main);
+    }
+
+    .callout p {
+      margin-bottom: 0;
+      font-size: 0.95rem;
+    }
+
+    /* Comparison Table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 2rem 0;
+      font-size: 0.95rem;
+    }
+
+    th {
+      font-family: var(--font-outfit);
+      font-weight: 600;
+      text-align: left;
+      background: rgba(21, 29, 48, 0.8);
+      border-bottom: 2px solid var(--border-color);
+      padding: 1rem;
+      color: var(--text-main);
+    }
+
+    td {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-muted);
+    }
+
+    tr:hover td {
+      background: rgba(255,255,255,0.01);
+      color: var(--text-main);
+    }
+
+    /* Schema Visualizer simple representation */
+    .schema-visualizer {
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 2.5rem;
+      background: radial-gradient(100% 100% at 0% 0%, rgba(21, 29, 48, 0.8) 0%, rgba(11, 15, 25, 0.8) 100%);
+      box-shadow: inset 0 0 20px rgba(99, 102, 241, 0.05);
+      margin: 2.5rem 0;
+    }
+
+    .schema-db {
+      border: 2px dashed var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.5rem;
+      position: relative;
+      margin-bottom: 2rem;
+    }
+
+    .schema-db-title {
+      position: absolute;
+      top: -12px;
+      left: 20px;
+      background: var(--bg-main);
+      padding: 0 0.75rem;
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+      color: var(--text-dark);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .schema-nodes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .schema-node {
+      border: 1px solid var(--border-color);
+      background: var(--bg-card);
+      border-radius: var(--radius-sm);
+      padding: 0.5rem 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .schema-node.node-shared { border-color: rgba(167, 139, 250, 0.4); background: rgba(167, 139, 250, 0.05); }
+    .schema-node.node-tenant { border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.05); }
+    .schema-node.node-feature { border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.05); }
+
+    .node-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .node-shared .node-dot { background: var(--accent); }
+    .node-tenant .node-dot { background: var(--secondary); }
+    .node-feature .node-dot { background: var(--success); }
+
+    /* Footer styles */
+    footer {
+      border-top: 1px solid var(--border-color);
+      padding: 3rem 2rem;
+      text-align: center;
+      color: var(--text-dark);
+      font-size: 0.9rem;
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 968px) {
+      .main-container {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+      }
+      aside {
+        display: none; /* Hide sidebar nav on mobile and use inline flow */
+      }
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: 'dark',
+        themeVariables: {
+          primaryColor: '#6366F1',
+          primaryTextColor: '#F3F4F6',
+          primaryBorderColor: '#263554',
+          lineColor: '#38BDF8',
+          secondaryColor: '#151D30',
+          tertiaryColor: '#0B0F19'
+        }
+      });
+    });
+  </script>
+</head>
+<body>
+
+  <header>
+    <div class="badge badge-primary">APC Central CMS Architecture</div>
+    <h1 id="top">Thiết Kế Cơ Sở Dữ Liệu &amp; Multi-Tenancy</h1>
+    <p class="lead">Tài liệu chi tiết về phân loại schema dữ liệu, cơ chế phân tách tenant, và chiến lược mở rộng cấu trúc cơ sở dữ liệu khi phát triển thêm website mới trong hệ thống CMS.</p>
+  </header>
+
+  <div class="main-container">
+    <aside>
+      <nav>
+        <ul class="nav-list">
+          <li class="nav-item active"><a href="#general">Tổng quan</a></li>
+          <li class="nav-item"><a href="#classification">Phân loại Schemas</a></li>
+          <li class="nav-item"><a href="#schema-details">Chi tiết 22 Schemas</a></li>
+          <li class="nav-item"><a href="#relationships">Sơ đồ Mối quan hệ (ERD)</a></li>
+          <li class="nav-item"><a href="#isolation">Chiến lược cô lập dữ liệu</a></li>
+          <li class="nav-item"><a href="#extension-strategy">Chiến lược thêm Web &amp; Bảng riêng</a></li>
+          <li class="nav-item"><a href="#implementation">Quy trình triển khai</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main>
+      <section id="general">
+        <h2>Tổng quan Kiến trúc</h2>
+        <p>Hệ thống APC Central CMS vận hành theo mô hình <strong>Multi-Tenant (Đa khách thuê)</strong> sử dụng Payload CMS (v3) làm lõi quản trị dữ liệu cấu hình chung. Tất cả các website tin tức thành viên (ví dụ: <code>brief-asia</code>, <code>dtw-web</code>, v.v.) đều kết nối chung vào <strong>một cơ sở dữ liệu Postgres duy nhất</strong>.</p>
+        
+        <div class="callout">
+          <h4>Nguyên tắc cốt lõi:</h4>
+          <p>Mô hình chia sẻ chung Database schema thay vì tách riêng DB vật lý cho mỗi website giúp tối ưu hóa tài nguyên máy chủ, đồng bộ mã nguồn thống nhất và giảm thiểu chi phí quản lý vận hành khi quy mô số lượng website tăng lên hàng chục hoặc hàng trăm.</p>
+        </div>
+
+        <div class="schema-visualizer">
+          <div class="schema-db">
+            <span class="schema-db-title">Shared Postgres Database</span>
+            <div style="margin-bottom: 1rem; font-size: 0.9rem; color: var(--text-muted);">Các bảng chia sẻ chung một Database vật lý và phân biệt phạm vi bằng các cột chỉ mục.</div>
+            <div class="schema-nodes">
+              <div class="schema-node node-shared"><span class="node-dot"></span>users</div>
+              <div class="schema-node node-shared"><span class="node-dot"></span>countries</div>
+              <div class="schema-node node-shared"><span class="node-dot"></span>content-engines</div>
+              <div class="schema-node node-shared"><span class="node-dot"></span>activityLog</div>
+              <div class="schema-node node-tenant"><span class="node-dot"></span>tenants</div>
+              <div class="schema-node node-tenant"><span class="node-dot"></span>articles</div>
+              <div class="schema-node node-tenant"><span class="node-dot"></span>authors</div>
+              <div class="schema-node node-tenant"><span class="node-dot"></span>media</div>
+              <div class="schema-node node-tenant"><span class="node-dot"></span>tags</div>
+              <div class="schema-node node-tenant"><span class="node-dot"></span>menus</div>
+              <div class="schema-node node-feature"><span class="node-dot"></span>podcasts</div>
+              <div class="schema-node node-feature"><span class="node-dot"></span>newsletters</div>
+              <div class="schema-node node-feature"><span class="node-dot"></span>marketSnapshots</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="classification">
+        <h2>Phân loại Schemas &amp; Bảng</h2>
+        <p>Để đảm bảo hiệu năng và tính cô lập dữ liệu, các bảng trong cơ sở dữ liệu được chia làm 3 nhóm chính dưới đây:</p>
+
+        <div class="tabs-wrapper">
+          <div class="tabs-buttons">
+            <button class="tab-btn active" onclick="switchTab(event, 'tab-global')">1. Hệ thống &amp; Toàn cục (Global)</button>
+            <button class="tab-btn" onclick="switchTab(event, 'tab-tenant-config')">2. Cấu hình Website (Tenant Config)</button>
+            <button class="tab-btn" onclick="switchTab(event, 'tab-tenant-data')">3. Dữ liệu Phân mảnh (Scoped Content)</button>
+          </div>
+
+          <!-- Tab Global -->
+          <div id="tab-global" class="tab-content active">
+            <p>Nhóm các bảng lưu trữ thông tin hệ thống chung, không trực thuộc bất kỳ một website đơn lẻ nào. Không có trường liên kết <code>tenant</code> trong dữ liệu.</p>
+            <div class="grid-cards">
+              <div class="card">
+                <div class="card-icon icon-global">👤</div>
+                <div class="card-title">users</div>
+                <div class="card-meta">Global Identity</div>
+                <div class="card-description">Thông tin định danh quản trị viên toàn hệ thống và ánh xạ quyền (roles) tương ứng trên từng website/tenant riêng biệt.</div>
+              </div>
+              <div class="card">
+                <div class="card-icon icon-global">🌐</div>
+                <div class="card-title">countries</div>
+                <div class="card-meta">Global ISO Reference</div>
+                <div class="card-description">Bảng tham chiếu quốc gia (ISO reference data), chia sẻ chung danh sách mã quốc gia thống nhất toàn cầu cho tất cả các bài viết.</div>
+              </div>
+              <div class="card">
+                <div class="card-icon icon-global">⚙️</div>
+                <div class="card-title">content-engines</div>
+                <div class="card-meta">Engine Registry</div>
+                <div class="card-description">Danh sách các "động cơ" tạo bài viết tự động (Content Engine) được phép đẩy nội dung thô (intake drafts) kèm theo các token định danh đã băm.</div>
+              </div>
+              <div class="card">
+                <div class="card-icon icon-global">📜</div>
+                <div class="card-title">activityLog</div>
+                <div class="card-meta">System Logs</div>
+                <div class="card-description">Nhật ký hoạt động chung lưu trữ các sự kiện chỉnh sửa, đăng bài và thao tác quan trọng hỗ trợ điều tra lỗi (audit trail).</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab Tenant Config -->
+          <div id="tab-tenant-config" class="tab-content">
+            <p>Nhóm các bảng chứa thông tin nhận diện và tùy biến nghiệp vụ cho từng website. Đây là cầu nối trung gian xác định đặc tính hoạt động của từng tenant.</p>
+            <div class="grid-cards">
+              <div class="card">
+                <div class="card-icon icon-tenant">🏢</div>
+                <div class="card-title">tenants</div>
+                <div class="card-meta">Tenant Registry</div>
+                <div class="card-description">Mỗi bản ghi tương ứng với một website (ví dụ: brief-asia). Lưu tên, slug, tên miền (domain), các ngôn ngữ kích hoạt và mảng bật/tắt tính năng (features).</div>
+              </div>
+              <div class="card">
+                <div class="card-icon icon-tenant">🗺️</div>
+                <div class="card-title">menus</div>
+                <div class="card-meta">Navigation Config</div>
+                <div class="card-description">Lưu cấu hình menu Header và Footer độc lập cho mỗi trang web. Bản ghi được liên kết trực tiếp với một <code>tenant_id</code>.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab Tenant Data -->
+          <div id="tab-tenant-data" class="tab-content">
+            <p>Nhóm các bảng chứa nội dung biên tập chính của từng trang web. Các bảng này có trường khóa ngoại <code>tenant</code> để tự động phân tách và cô lập dữ liệu.</p>
+            <div class="grid-cards">
+              <div class="card">
+                <div class="card-icon icon-tenant">📄</div>
+                <div class="card-title">articles</div>
+                <div class="card-meta">Tenant Scoped</div>
+                <div class="card-description">Nội dung bài viết, trạng thái xuất bản, lịch đăng, nội dung đã dịch và lịch sử phiên bản của riêng từng website.</div>
+              </div>
+              <div class="card">
+                <div class="card-icon icon-tenant">✍️</div>
+                <div class="card-title">authors</div>
+                <div class="card-meta">Tenant Scoped</div>
+                <div class="card-description">Thông tin hồ sơ của các tác giả/biên tập viên trực thuộc trang web thành viên đó.</div>
+              </div>
+              <div class="card">
+                <div class="card-icon icon-tenant">🖼️</div>
+                <div class="card-title">media</div>
+                <div class="card-meta">Tenant Scoped</div>
+                <div class="card-description">Hình ảnh/video được tải lên thuộc sở hữu của website đó. Tệp tin được upload lên thư mục riêng trong Cloudflare R2 bucket.</div>
+              </div>
+              <div class="card">
+                <div class="card-icon icon-tenant">🏷️</div>
+                <div class="card-title">pillars / sectors / tags</div>
+                <div class="card-meta">Tenant Scoped</div>
+                <div class="card-description">Hệ thống chuyên mục chính (pillars), lĩnh vực (sectors) và thẻ từ khóa phân loại tin tức hoàn toàn khác biệt giữa các trang web.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="schema-details">
+        <h2>Chi tiết 22 Schemas hệ thống</h2>
+        <p>Hệ thống APC Central CMS hiện đang có <strong>22 schemas (collections)</strong> được cấu hình. Mỗi schema chịu trách nhiệm lưu trữ các phần dữ liệu chuyên biệt sau:</p>
+
+        <div class="accordion">
+          <!-- Nhóm 1: Hệ thống & Toàn cục (Global) -->
+          <div class="accordion-item active">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>I. Nhóm Hệ thống &amp; Toàn cục (5 Schemas)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Schema (Slug)</th>
+                      <th>Thông tin lưu trữ chính</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>users</strong></td>
+                      <td>
+                        <ul>
+                          <li>Định danh người dùng: <code>email</code>, <code>password</code> (đã mã hóa).</li>
+                          <li>Quyền hệ thống cao nhất: <code>role</code> (Standard hoặc Admin).</li>
+                          <li>Phân quyền theo tenant: danh sách <code>tenants</code> (liên kết đến tenant, roles như <code>websiteAdmin</code>, <code>editor</code>, <code>contributor</code>, và cờ <code>canPublish</code>).</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>countries</strong></td>
+                      <td>
+                        <ul>
+                          <li>Dữ liệu ISO của các quốc gia: <code>code</code> (Mã quốc gia, ví dụ: VN, SG), <code>name</code> (Tên quốc gia).</li>
+                          <li>Sử dụng như danh mục tham chiếu toàn cầu cho các bài viết.</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>content-engines</strong></td>
+                      <td>
+                        <ul>
+                          <li>Danh sách Content Engine được tích hợp: <code>name</code>, <code>tokenHash</code> (mã token băm để xác thực intake).</li>
+                          <li>Quyền hạn: danh sách <code>allowedTenants</code> (danh sách các web engine được quyền đẩy bài viết sang), <code>allowedActions</code> (các hành động được phép như create, update).</li>
+                          <li>Giám sát: <code>status</code> (active, suspended), <code>rateLimit</code>, và <code>lastSeen</code>.</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>activityLog</strong></td>
+                      <td>
+                        <ul>
+                          <li>Nhật ký thao tác append-only: <code>user</code> (thực hiện), <code>tenant</code> (nếu thuộc phạm vi tenant cụ thể), <code>action</code> (create, update, delete, publish).</li>
+                          <li>Chi tiết: <code>collectionName</code>, <code>documentId</code>, <code>changes</code> (dữ liệu trước/sau khi thay đổi).</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>media</strong></td>
+                      <td>
+                        <ul>
+                          <li>Quản lý tập tin đa phương tiện: <code>filename</code>, <code>mimeType</code>, <code>filesize</code>.</li>
+                          <li>Dữ liệu ảnh: metadata kích thước (thumbnail, card, hero, v.v.), URL trỏ đến Cloudflare R2 bucket.</li>
+                          <li>Dữ liệu SEO/Bản dịch: <code>alt</code>, <code>caption</code> (được cấu hình bản dịch đa ngôn ngữ).</li>
+                        </ul>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Nhóm 2: Cấu hình Website (Tenant Config) -->
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>II. Nhóm Cấu hình Website (2 Schemas)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Schema (Slug)</th>
+                      <th>Thông tin lưu trữ chính</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>tenants</strong></td>
+                      <td>
+                        <ul>
+                          <li>Định danh thương hiệu website: <code>name</code>, <code>slug</code> (ví dụ: brief-asia), <code>domain</code>, <code>additionalDomains</code> (bí danh tên miền), <code>frontendUrl</code> (để nhận webhook revalidate).</li>
+                          <li>Bản dịch & Múi giờ: <code>defaultLanguage</code>, <code>supportedLanguages</code> (danh sách ngôn ngữ kích hoạt), <code>timezone</code>.</li>
+                          <li>Module kích hoạt: danh sách cờ bật/tắt <code>features</code> (newsletters, podcasts, marketData, v.v.).</li>
+                          <li>Bảo mật: <code>readTokens</code> (lưu hash của token phía frontend dùng để đọc API public).</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>menus</strong></td>
+                      <td>
+                        <ul>
+                          <li>Khóa ngoại liên kết: <code>tenant</code>.</li>
+                          <li>Bố cục định hướng: <code>location</code> (Header, Footer).</li>
+                          <li>Cấu trúc liên kết: danh sách các phần tử menu gồm <code>label</code> (tiêu đề hiển thị), <code>url</code> (đường dẫn), và thứ tự hiển thị <code>order</code>.</li>
+                        </ul>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Nhóm 3: Dữ liệu Tin bài & Phân loại Scoped (5 Schemas) -->
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>III. Nhóm Nội dung Tin bài &amp; Phân loại (5 Schemas)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Schema (Slug)</th>
+                      <th>Thông tin lưu trữ chính</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>articles</strong></td>
+                      <td>
+                        <ul>
+                          <li>Khóa ngoại liên kết: <code>tenant</code> (Bắt buộc).</li>
+                          <li>Thông tin cốt lõi: <code>title</code>, <code>slug</code>, <code>body</code> (nội dung dạng rich text/lexical), <code>summary</code> (dek).</li>
+                          <li>Trạng thái & Lịch trình: <code>workflowStatus</code> (draft, pending_review, approved, scheduled, published, archived), <code>publishedAt</code>.</li>
+                          <li>Quan hệ phân loại: <code>pillar</code>, <code>sectors</code>, <code>tags</code>, <code>author</code>, <code>coAuthors</code>, <code>country</code>, <code>countries</code>, <code>heroImage</code>.</li>
+                          <li>Theo dõi nguồn & Đồng bộ: <code>origin</code> (engine/manual), <code>lockedFields</code> (các trường không cho phép Content Engine ghi đè), <code>engineDraftId</code>.</li>
+                          <li>Bản dịch: <code>sourceLanguage</code>, <code>translationStatus</code> (trạng thái dịch của từng ngôn ngữ con).</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>authors</strong></td>
+                      <td>
+                        <ul>
+                          <li>Khóa ngoại liên kết: <code>tenant</code>.</li>
+                          <li>Thông tin tác giả: <code>name</code>, <code>slug</code>, <code>bio</code> (tiểu sử), <code>profileImage</code> (ảnh chân dung liên kết đến <code>media</code>).</li>
+                          <li>Liên kết MXH: <code>twitter</code>, <code>linkedin</code>, <code>email</code>.</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>pillars</strong></td>
+                      <td>
+                        <ul>
+                          <li>Khóa ngoại liên kết: <code>tenant</code>.</li>
+                          <li>Danh mục lớn của website: <code>name</code>, <code>slug</code> (ví dụ: Business, Politics), <code>description</code>, <code>order</code> (thứ tự sắp xếp).</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>sectors</strong></td>
+                      <td>
+                        <ul>
+                          <li>Khóa ngoại liên kết: <code>tenant</code>.</li>
+                          <li>Danh mục ngành/lĩnh vực: <code>name</code>, <code>slug</code> (ví dụ: Technology, Energy), <code>description</code>.</li>
+                        </ul>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>tags</strong></td>
+                      <td>
+                        <ul>
+                          <li>Khóa ngoại liên kết: <code>tenant</code>.</li>
+                          <li>Thẻ gắn bài viết: <code>name</code>, <code>slug</code>. Được tự động tạo hoặc gán bởi biên tập viên.</li>
+                        </ul>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Nhóm 4: Module Tính năng Gated (10 Schemas) -->
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>IV. Nhóm Module Tính năng Gated (10 Schemas)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Đây là các bảng được kích hoạt tùy biến dựa theo cấu hình tính năng (Features) của mỗi website. Mọi bảng đều chứa cột liên kết <code>tenant</code>.</p>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Schema (Slug)</th>
+                      <th>Thông tin lưu trữ chính</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>newsletters</strong></td>
+                      <td>Lưu bản tin điện tử: <code>subject</code> (tiêu đề mail), <code>body</code> (nội dung mail HTML), <code>scheduledAt</code> (lịch gửi), <code>status</code> (draft, sent, failed). Kích hoạt bằng cờ <code>newsletters</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>podcasts</strong></td>
+                      <td>Lưu trữ dữ liệu âm thanh: <code>title</code>, <code>description</code>, <code>audioUrl</code> (link file mp3), <code>duration</code> (thời lượng giây), <code>publishDate</code>, và các tập tin phụ đề đi kèm. Kích hoạt bằng cờ <code>podcasts</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>marketSnapshots</strong></td>
+                      <td>Dữ liệu thị trường tài chính nhanh hiển thị lên widget: <code>symbol</code> (mã cổ phiếu/tài sản), <code>price</code>, <code>changePercentage</code> (tỷ lệ tăng giảm), <code>lastUpdated</code>. Kích hoạt bằng cờ <code>marketData</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>fxRates</strong></td>
+                      <td>Tỷ giá ngoại tệ trực tiếp: <code>baseCurrency</code> (ví dụ: USD), <code>targetCurrency</code> (ví dụ: VND), <code>rate</code> (tỷ giá thực tế), <code>timestamp</code>. Kích hoạt bằng cờ <code>marketData</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>trendingBlocks</strong></td>
+                      <td>Khối chứa danh sách mã/tài sản đang thịnh hành được ghim trên trang chủ. Kích hoạt bằng cờ <code>marketData</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>sponsorSlots</strong></td>
+                      <td>Quản lý vị trí quảng cáo tài trợ: <code>sponsorName</code>, <code>imageUrl</code>, <code>clickUrl</code>, <code>placement</code> (ví dụ: sidebar, top_banner), <code>startDate</code>, <code>endDate</code> để tự động hạ banner khi hết hạn quảng cáo. Kích hoạt bằng cờ <code>sponsorSlots</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>wireDrops</strong></td>
+                      <td>Nguồn cấp tin nhanh/tin vắn (wire news): <code>title</code>, <code>content</code> (tin ngắn gọn), <code>source</code>, <code>publishedAt</code>. Kích hoạt bằng cờ <code>wireDrops</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>corrections</strong></td>
+                      <td>Ghi nhận đính chính sửa lỗi sai bài viết: liên kết <code>article</code> bị sửa đổi, <code>originalText</code> (văn bản gốc bị sai), <code>correctedText</code> (văn bản sửa lại), <code>reason</code>, <code>correctedAt</code>. Kích hoạt bằng cờ <code>corrections</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>translationJobs</strong></td>
+                      <td>Hàng đợi dịch thuật tự động: liên kết <code>article</code> cần dịch, <code>targetLanguage</code>, <code>status</code> (pending, processing, completed, failed), <code>engineUsed</code> (ví dụ: Google Translate, DeepL), <code>rawResponse</code>. Kích hoạt bằng cờ <code>translations</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><strong>engineConflictLog</strong></td>
+                      <td>Nhật ký xử lý xung đột nội dung: ghi lại vết khi Content Engine đẩy bài viết mới nhưng bị hệ thống CMS từ chối ghi đè do biên tập viên con người đã khóa trường (lock fields) hoặc tự chỉnh sửa trước đó. Lưu <code>article</code>, <code>fieldName</code>, <code>deniedValue</code>, và <code>reason</code>.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="relationships">
+        <h2>Sơ đồ &amp; Chi tiết Mối quan hệ (ERD)</h2>
+        <p>Kiến trúc dữ liệu của APC Central CMS được xây dựng xung quanh thực thể trung tâm là <strong>Tenants</strong>. Dưới đây là sơ đồ Quan hệ thực thể (ERD) biểu diễn sự kết nối giữa các bảng:</p>
+        
+        <div style="background: rgba(11, 15, 25, 0.6); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1.5rem; display: flex; justify-content: center; margin-bottom: 2rem; overflow-x: auto;">
+          <div class="mermaid" style="width: 100%; min-width: 600px;">
+            erDiagram
+                TENANTS {
+                    string id PK
+                    string name
+                    string slug UK "publicationId"
+                    string domain
+                    string defaultLanguage
+                    string_array supportedLanguages
+                    string_array features
+                    string status
+                }
+                USERS {
+                    string id PK
+                    string email UK
+                    string password
+                    string role "admin | standard"
+                }
+                USER_TENANT_RELATION {
+                    string tenant_id FK
+                    string user_id FK
+                    string_array roles "websiteAdmin | editor | contributor"
+                    boolean canPublish
+                }
+                CONTENT-ENGINES {
+                    string id PK
+                    string tokenHash
+                    string_array allowedTenants FK
+                    string status
+                }
+                ARTICLES {
+                    string id PK
+                    string tenant_id FK
+                    string title
+                    string slug
+                    string pillar_id FK
+                    string author_id FK
+                    string heroImage_id FK
+                    string country_id FK
+                    string workflowStatus
+                }
+                AUTHORS {
+                    string id PK
+                    string tenant_id FK
+                    string name
+                }
+                TAGS {
+                    string id PK
+                    string tenant_id FK
+                    string name
+                    string slug
+                }
+                PILLARS {
+                    string id PK
+                    string tenant_id FK
+                    string name
+                    string slug
+                }
+                SECTORS {
+                    string id PK
+                    string tenant_id FK
+                    string name
+                    string slug
+                }
+                MEDIA {
+                    string id PK
+                    string tenant_id FK
+                    string filename
+                }
+                MENUS {
+                    string id PK
+                    string tenant_id FK
+                    string label
+                }
+                PODCASTS {
+                    string id PK
+                    string tenant_id FK
+                    string title
+                    string audioUrl
+                }
+                COUNTRIES {
+                    string id PK
+                    string code UK
+                    string name
+                }
+
+                TENANTS ||--o{ ARTICLES : "owns"
+                TENANTS ||--o{ AUTHORS : "owns"
+                TENANTS ||--o{ TAGS : "owns"
+                TENANTS ||--o{ PILLARS : "owns"
+                TENANTS ||--o{ SECTORS : "owns"
+                TENANTS ||--o{ MEDIA : "owns"
+                TENANTS ||--o{ PODCASTS : "gated"
+                TENANTS ||--o{ MENUS : "has"
+                
+                USERS ||--o{ USER_TENANT_RELATION : "has_roles"
+                TENANTS ||--o{ USER_TENANT_RELATION : "has_users"
+                
+                CONTENT-ENGINES }o--o{ TENANTS : "allowed_for"
+                
+                ARTICLES }o--|| TENANTS : "belongs_to"
+                ARTICLES }o--|| PILLARS : "categorized_by"
+                ARTICLES }o--|| AUTHORS : "written_by"
+                ARTICLES }o--o{ TAGS : "tagged_with"
+                ARTICLES }o--o{ SECTORS : "sectorized_with"
+                ARTICLES }o--|| COUNTRIES : "primary_country"
+                ARTICLES }o--|| MEDIA : "hero_image"
+          </div>
+        </div>
+
+        <p>Chi tiết các loại mối quan hệ nghiệp vụ chính:</p>
+        
+        <div class="accordion">
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>Mối quan hệ 1-N giữa Tenant và Dữ liệu biên tập (Scoped Content)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Một Tenant (Website tin tức) sở hữu nhiều bài viết, tác giả, hình ảnh, chuyên mục và cấu hình điều hướng:</p>
+                <ul>
+                  <li><strong>Foreign Key:</strong> Tất cả bảng dữ liệu biên tập đều bắt buộc có cột <code>tenant</code> (kiểu liên kết <code>relationship</code> trỏ đến bảng <code>tenants</code>).</li>
+                  <li><strong>Cách hoạt động:</strong> Khi một truy vấn lấy danh sách bài viết từ phía Web, hệ thống luôn thêm điều kiện <code>where tenant = [tenant_id]</code> để phân mảnh dữ liệu.</li>
+                  <li><strong>Các thực thể áp dụng:</strong> <code>articles</code>, <code>authors</code>, <code>media</code>, <code>tags</code>, <code>pillars</code>, <code>sectors</code>, <code>menus</code>, <code>podcasts</code>, <code>newsletters</code>.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>Mối quan hệ N-N giữa User và Tenant (Phân quyền chi tiết)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Một tài khoản người dùng quản trị có thể có các vai trò quản lý khác nhau trên nhiều website khác nhau:</p>
+                <ul>
+                  <li><strong>Cơ chế lưu trữ:</strong> Trong Payload CMS, mối quan hệ này được chuẩn hóa dưới dạng một mảng các đối tượng (Array field) <code>tenants</code> nằm ngay trong bảng <code>users</code>.</li>
+                  <li><strong>Cấu trúc bản ghi:</strong> Mỗi dòng trong mảng chứa <code>{ tenant: TenantID, roles: ['websiteAdmin', 'editor'], canPublish: true }</code>.</li>
+                  <li><strong>Cách hoạt động:</strong> Khi User truy cập giao diện quản trị, Payload plugin sẽ đọc mảng này để lọc danh sách các Tenant mà User có quyền chuyển đổi qua lại, đồng thời khóa quyền chỉnh sửa các bài viết thuộc Tenant mà User không có quyền truy cập.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>Mối quan hệ giữa Bài viết (Articles) và các thực thể khác</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Bảng <code>articles</code> là bảng trung tâm về mặt nội dung và có các quan hệ liên kết phức tạp:</p>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Trường (Field)</th>
+                      <th>Kiểu liên kết</th>
+                      <th>Bảng đích</th>
+                      <th>Ý nghĩa</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>tenant</code></td>
+                      <td>1 - 1 (Bắt buộc)</td>
+                      <td><code>tenants</code></td>
+                      <td>Xác định bài viết thuộc trang web nào.</td>
+                    </tr>
+                    <tr>
+                      <td><code>pillar</code></td>
+                      <td>Many-to-One (Bắt buộc)</td>
+                      <td><code>pillars</code></td>
+                      <td>Chuyên mục chính của bài viết (ví dụ: Economy, Tech).</td>
+                    </tr>
+                    <tr>
+                      <td><code>author</code></td>
+                      <td>Many-to-One (Bắt buộc)</td>
+                      <td><code>authors</code></td>
+                      <td>Tác giả biên tập chính.</td>
+                    </tr>
+                    <tr>
+                      <td><code>coAuthors</code></td>
+                      <td>Many-to-Many (Tùy chọn)</td>
+                      <td><code>authors</code></td>
+                      <td>Các đồng tác giả cùng tham gia viết bài.</td>
+                    </tr>
+                    <tr>
+                      <td><code>tags</code></td>
+                      <td>Many-to-Many</td>
+                      <td><code>tags</code></td>
+                      <td>Danh sách các từ khóa phân loại bài viết.</td>
+                    </tr>
+                    <tr>
+                      <td><code>sectors</code></td>
+                      <td>Many-to-Many</td>
+                      <td><code>sectors</code></td>
+                      <td>Các lĩnh vực kinh tế/công nghiệp liên quan đến bài viết.</td>
+                    </tr>
+                    <tr>
+                      <td><code>country</code></td>
+                      <td>Many-to-One (Tùy chọn)</td>
+                      <td><code>countries</code></td>
+                      <td>Quốc gia trọng tâm của bài viết (tham chiếu toàn cục).</td>
+                    </tr>
+                    <tr>
+                      <td><code>heroImage</code></td>
+                      <td>Many-to-One</td>
+                      <td><code>media</code></td>
+                      <td>Hình ảnh bìa của bài viết, lưu trữ tập tin trong R2.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="isolation">
+        <h2>Chiến Lược Cô Lập Dữ Liệu</h2>
+        <p>Bảo mật dữ liệu chéo giữa các website thành viên là yêu cầu sống còn. APC Central CMS thực thi nguyên tắc bảo mật thông qua 3 lớp phòng vệ:</p>
+        
+        <div class="accordion">
+          <div class="accordion-item active">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>1. Lớp Ứng Dụng: Payload Multi-Tenant Plugin &amp; Access Controls</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Payload CMS tự động tiêm giá trị <code>tenant</code> vào mọi bộ lọc truy vấn đối với người dùng đang đăng nhập trong trang quản trị Admin. Người dùng của website A không thể xem, sửa hoặc xóa dữ liệu của website B vì hook phân quyền luôn chèn điều kiện:</p>
+                <pre><code>// access/helpers.ts - Chỉ cho phép đọc tài liệu thuộc tenant của user
+export const isAdminOrHasTenantAccess = (collectionName: string) => {
+  return ({ req: { user } }) => {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    
+    // Tạo filter truy vấn ép buộc lấy đúng tenant của user
+    const tenantIds = user.tenants?.map(t => t.tenant.id) || [];
+    return {
+      tenant: {
+        in: tenantIds
+      }
+    };
+  };
+};</code></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>2. Lớp API: Scoped Database Helper (Trực quan &amp; Bắt buộc)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Do luồng API máy đọc (Engine Intake, Public API) không qua cơ chế xác thực User của Payload, để tránh rò rỉ dữ liệu, lập trình viên <strong>không được dùng trực tiếp</strong> <code>payload.find()</code> mà phải dùng helper <code>scopedFind()</code>:</p>
+                <pre><code>// src/lib/scoped.ts - Đảm bảo luôn lọc theo tenant_id của request
+export async function scopedFind(payload, collection, tenantId, query = {}) {
+  return await payload.find({
+    collection,
+    where: {
+      and: [
+        { tenant: { equals: tenantId } },
+        query
+      ]
+    }
+  });
+}</code></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>3. Lớp Database: Composite Unique Indexes (Chỉ mục hỗn hợp)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Để cho phép các website khác nhau có thể sử dụng trùng đường dẫn (ví dụ: cả <code>brief-asia</code> và <code>dtw-web</code> đều có chuyên mục <code>/tag/technology</code>), trường <code>slug</code> không thể cấu hình là UNIQUE toàn cầu.</p>
+                <p>Hệ thống định nghĩa ràng buộc duy nhất phức hợp trên cơ sở dữ liệu:</p>
+                <pre><code>CREATE UNIQUE INDEX articles_tenant_slug_idx ON articles (tenant_id, slug);</code></pre>
+                <p>Điều này cho phép cùng một slug tồn tại trên các website khác nhau, nhưng trên một website thì slug bắt buộc phải là duy nhất.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="extension-strategy">
+        <h2>Chiến lược khi thêm Web &amp; Bảng riêng biệt</h2>
+        <p>Khi có website mới được onboard vào hệ thống và yêu cầu những nghiệp vụ đặc thù (Ví dụ: Web A cần tính năng <strong>Podcast</strong> để lưu trữ tệp âm thanh và danh sách tập, trong khi Web B không cần), chúng ta áp dụng các chiến lược sau:</p>
+
+        <div class="callout callout-warning">
+          <h4>Không thiết kế Schema cô lập dạng "Tách Bảng Vật Lý Bừa Bãi":</h4>
+          <p>Tránh việc tạo ra bảng <code>brief_asia_podcasts</code> hay <code>dtw_podcasts</code>. Việc tạo bảng riêng theo tên website dẫn đến phân mảnh mã nguồn, không thể tái sử dụng tính năng và làm phức tạp hóa quá trình nâng cấp cơ sở dữ liệu.</p>
+        </div>
+
+        <div class="accordion">
+          <div class="accordion-item active">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>Phương án 1: Chia sẻ Bảng (Shared Table) + Feature Flag (Khuyên dùng)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Tạo một bảng chung duy nhất tên là <code>podcasts</code> trong cơ sở dữ liệu và liên kết với trường <code>tenant</code>. Tính năng này sẽ được quản lý bằng bộ cờ <strong>Features</strong> cấu hình trong bản ghi <code>tenants</code>.</p>
+                
+                <div class="step-flow">
+                  <div class="step-item">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                      <div class="step-title">Thêm trường Feature Flag vào Tenants Collection</div>
+                      <div class="step-desc">Định nghĩa trường checkbox <code>podcasts</code> bên trong danh sách <code>features</code> trong cấu hình tenant.</div>
+                    </div>
+                  </div>
+                  <div class="step-item">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                      <div class="step-title">Áp dụng Access Control ẩn/hiện ở Admin UI</div>
+                      <div class="step-desc">Viết hook kiểm tra quyền truy cập cho Collection <code>Podcasts</code>. Nếu tenant hiện tại không kích hoạt tính năng này, bộ sưu tập sẽ ẩn khỏi thanh điều hướng Admin của người dùng đó.</div>
+                    </div>
+                  </div>
+                  <div class="step-item">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                      <div class="step-title">Chặn kiểm soát ở mức API</div>
+                      <div class="step-desc">Khi client gọi API đọc/ghi podcasts, route handler kiểm tra xem tenant của client đó có bật feature <code>podcasts</code> hay không. Nếu không, trả về lỗi <code>404 Not Found</code> hoặc <code>422 Unprocessable Entity</code>.</div>
+                    </div>
+                  </div>
+                </div>
+
+                <p><strong>Ưu điểm:</strong> Database sạch sẽ, dễ bảo trì. Nếu trong tương lai Web B muốn dùng lại tính năng Podcast, admin chỉ cần tích chọn bật tính năng trên giao diện Tenants mà không cần thay đổi bất cứ dòng code hay chạy Migration DB nào.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>Phương án 2: Tạo Table riêng chỉ dành cho một Web cụ thể (Bespoke Table)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Nếu tính năng là cực kỳ cá biệt, chỉ phục vụ duy nhất một website A và không thể dùng chung cho bất kỳ trang nào khác, ta thiết lập một Collection mới nhưng giới hạn cứng quyền truy cập ở mức ứng dụng.</p>
+                <pre><code>// collections/BespokeFeature.ts
+export const BespokeFeature = {
+  slug: 'bespoke-feature',
+  access: {
+    // Chỉ cho phép đọc/ghi nếu tenant ID khớp với ID của Website A cụ thể
+    read: ({ req }) => req.user?.tenants?.some(t => t.tenant.slug === 'brief-asia'),
+    create: ({ req }) => req.user?.tenants?.some(t => t.tenant.slug === 'brief-asia'),
+  },
+  fields: [
+    {
+      name: 'tenant',
+      type: 'relationship',
+      relationTo: 'tenants',
+      required: true,
+      // Ẩn trường này hoặc khóa mặc định theo tenant của user
+    }
+  ]
+}</code></pre>
+                <p><strong>Lưu ý:</strong> Vẫn bắt buộc phải duy trì cột <code>tenant</code> trên bảng này để giữ tính nhất quán về cơ cấu dữ liệu phân quyền và chỉ mục đa khách thuê.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item">
+            <div class="accordion-header" onclick="toggleAccordion(this)">
+              <span>Phương án 3: Lưu trữ Cơ sở dữ liệu độc lập bên ngoài (External Service)</span>
+              <span class="accordion-toggle-icon">+</span>
+            </div>
+            <div class="accordion-content">
+              <div class="accordion-inner">
+                <p>Với các dữ liệu phát sinh từ phía người đọc cuối (Reader / End-user) của từng website cụ thể như: tài khoản người đọc, lịch sử thanh toán, lượt thích bài viết, bình luận, v.v.</p>
+                <p><strong>Cách xử lý:</strong> Không đưa các dữ liệu này vào trong hệ thống Central CMS. Hãy triển khai cơ sở dữ liệu riêng tại mã nguồn frontend của website thành viên đó (hoặc một cụm Backend nhỏ chuyên biệt của web đó). Các dữ liệu này chỉ cần tham chiếu đến Central CMS bằng các khóa liên kết có định danh duy nhất không đổi như <code>articleId</code> hoặc <code>articleSlug</code>.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="implementation">
+        <h2>Hướng dẫn triển khai tạo Bảng mới (Podcast Example)</h2>
+        <p>Để thêm bảng <code>podcasts</code> sử dụng <strong>Phương án 1 (Khuyên dùng)</strong>, hãy làm theo quy trình 4 bước:</p>
+
+        <div class="code-header">
+          <span>Bước 1: Khai báo collection trong Payload CMS</span>
+          <button class="copy-btn" onclick="copyCode('code-podcast')">Copy</button>
+        </div>
+        <pre><code id="code-podcast">// src/collections/Podcasts.ts
+import { CollectionConfig } from 'payload';
+import { isAdminOrHasTenantAccess } from '../access/helpers';
+
+export const Podcasts: CollectionConfig = {
+  slug: 'podcasts',
+  admin: {
+    useAsTitle: 'title',
+    // Ẩn collection nếu tenant hiện tại của user không bật feature này
+    hidden: ({ user, locale }) => {
+      // Logic kiểm tra xem tenant của user có bật podcasts hay không
+      return !user?.tenants?.some(t => t.tenant.features?.includes('podcasts'));
+    }
+  },
+  access: {
+    read: isAdminOrHasTenantAccess('podcasts'),
+    create: isAdminOrHasTenantAccess('podcasts'),
+    update: isAdminOrHasTenantAccess('podcasts'),
+    delete: isAdminOrHasTenantAccess('podcasts'),
+  },
+  fields: [
+    {
+      name: 'title',
+      type: 'text',
+      required: true,
+    },
+    {
+      name: 'audioUrl',
+      type: 'text',
+      required: true,
+    },
+    {
+      name: 'tenant',
+      type: 'relationship',
+      relationTo: 'tenants',
+      required: true,
+      admin: {
+        position: 'sidebar',
+      }
+    }
+  ]
+};</code></pre>
+
+        <div class="code-header">
+          <span>Bước 2: Cập nhật file cấu hình chính</span>
+        </div>
+        <pre><code>// payload.config.ts
+import { buildConfig } from 'payload/config';
+import { Podcasts } from './src/collections/Podcasts';
+
+export default buildConfig({
+  collections: [
+    // các collections khác...
+    Podcasts
+  ],
+  // ...
+});</code></pre>
+
+        <div class="code-header">
+          <span>Bước 3: Chạy CLI tạo file Migration</span>
+        </div>
+        <pre><code># Chạy lệnh để sinh file migration sql mới dựa trên thay đổi code
+npx payload migrate:create</code></pre>
+
+        <div class="callout callout-success">
+          <h4>Kiểm tra file SQL sinh ra:</h4>
+          <p>File SQL tự động sinh ra trong thư mục <code>migrations/</code> sẽ bao gồm câu lệnh tạo bảng <code>podcasts</code> mới. Hãy thêm chỉ mục phức hợp để tối ưu hóa truy vấn tìm kiếm theo tenant tại file migration nếu cần thiết.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <p>Tài liệu Kiến trúc APC Central CMS &bull; Thiết kế hệ thống dữ liệu Đa website</p>
+    <p style="margin-top: 0.5rem; font-size: 0.8rem;">Cập nhật lần cuối: Tháng 6, 2026</p>
+  </footer>
+
+  <script>
+    // Tab switching logic
+    function switchTab(evt, tabId) {
+      const tabContents = document.getElementsByClassName('tab-content');
+      for (let i = 0; i < tabContents.length; i++) {
+        tabContents[i].classList.remove('active');
+      }
+
+      const tabBtns = document.getElementsByClassName('tab-btn');
+      for (let i = 0; i < tabBtns.length; i++) {
+        tabBtns[i].classList.remove('active');
+      }
+
+      document.getElementById(tabId).classList.add('active');
+      evt.currentTarget.classList.add('active');
+    }
+
+    // Accordion toggle logic
+    function toggleAccordion(header) {
+      const item = header.parentElement;
+      const isActive = item.classList.contains('active');
+      
+      // Close all accordions in the same section
+      const siblingItems = item.parentElement.getElementsByClassName('accordion-item');
+      for (let i = 0; i < siblingItems.length; i++) {
+        siblingItems[i].classList.remove('active');
+      }
+      
+      if (!isActive) {
+        item.classList.add('active');
+      }
+    }
+
+    // Copy code logic
+    function copyCode(elementId) {
+      const codeElement = document.getElementById(elementId);
+      const textToCopy = codeElement.innerText;
+      
+      navigator.clipboard.writeText(textToCopy).then(() => {
+        const copyBtn = codeElement.parentElement.previousElementSibling.querySelector('.copy-btn');
+        const originalText = copyBtn.innerText;
+        copyBtn.innerText = 'Copied!';
+        copyBtn.style.borderColor = 'var(--success)';
+        copyBtn.style.color = 'var(--success)';
+        
+        setTimeout(() => {
+          copyBtn.innerText = originalText;
+          copyBtn.style.borderColor = 'var(--border-color)';
+          copyBtn.style.color = 'var(--text-muted)';
+        }, 2000);
+      });
+    }
+
+    // Scroll active navigation highlight
+    window.addEventListener('DOMContentLoaded', () => {
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          const id = entry.target.getAttribute('id');
+          if (entry.intersectionRatio > 0.3) {
+            document.querySelectorAll('aside nav ul li').forEach(li => {
+              li.classList.remove('active');
+            });
+            const activeLink = document.querySelector(`aside nav ul li a[href="#${id}"]`);
+            if (activeLink) {
+              activeLink.parentElement.classList.add('active');
+            }
+          }
+        });
+      }, { threshold: [0.1, 0.3, 0.5, 0.7] });
+
+      // Track all sections
+      document.querySelectorAll('section').forEach(section => {
+        observer.observe(section);
+      });
+    });
+  </script>
+</body>
+</html>
