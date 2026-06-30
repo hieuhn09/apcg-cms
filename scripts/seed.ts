@@ -134,9 +134,11 @@ async function main() {
   }
 
   // ── Sample content engine (allowed on both tenants) ──
+  // SEED_ENGINE_TOKEN pins a deterministic token for local dev (docker DB +
+  // engine-intake-tester loop). Falls back to a random token otherwise.
   const existingEngine = await payload.find({ collection: "content-engines", where: { name: { equals: "content-engine" } }, limit: 1, overrideAccess: true });
   if (!existingEngine.docs.length) {
-    const rawEngineToken = randomBytes(24).toString("hex");
+    const rawEngineToken = process.env.SEED_ENGINE_TOKEN?.trim() || randomBytes(24).toString("hex");
     await payload.create({
       collection: "content-engines",
       overrideAccess: true,
@@ -149,7 +151,8 @@ async function main() {
         allowedActions: ["create_article", "update_article", "create_translation", "update_translation", "upload_media"],
       },
     });
-    console.log(`[seed] created content-engine — ENGINE TOKEN (copy now): ${rawEngineToken}`);
+    const tokenSource = process.env.SEED_ENGINE_TOKEN?.trim() ? "from SEED_ENGINE_TOKEN" : "random — copy now";
+    console.log(`[seed] created content-engine — ENGINE TOKEN (${tokenSource}): ${rawEngineToken}`);
   } else {
     console.log("[seed] content-engine exists");
   }

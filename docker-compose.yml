@@ -1,0 +1,33 @@
+# Local Postgres for the Central CMS so you can run the whole stack (CMS admin +
+# engine intake + engine-intake-tester) without Supabase.
+#
+#   docker compose up -d                 # start Postgres on localhost:54326
+#   cp .env.docker.example .env.local    # point the app at this DB (+ dev secrets)
+#   npm install && npm run db:seed && npm run dev
+#   docker compose down                  # stop (keep data)
+#   docker compose down -v               # stop + wipe the volume (fresh seed/schema)
+#
+# The Central CMS app itself runs on the host (`npm run dev`), matching the
+# brief-asia convention. Only the database is containerized.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: central-cms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-central_cms}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    ports:
+      - "${POSTGRES_PORT:-54326}:5432"
+    volumes:
+      - central_cms_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-central_cms}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  central_cms_pgdata:

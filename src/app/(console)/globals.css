@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/* Console design tokens. Loaded ONLY by the (console) root layout, so Tailwind's
+   preflight never leaks into Payload's /admin. */
+@theme {
+  --color-ink: #16161d;
+  --color-paper: #f7f6f3;
+  --color-panel: #ffffff;
+  --color-line: #e4e1da;
+  --color-muted: #6b6b76;
+  --color-accent: #2e2147;
+  --color-accent-2: #a60f2d;
+  --color-good: #127c4a;
+  --color-warn: #b06a00;
+  --color-bad: #b42318;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}

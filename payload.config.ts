@@ -107,7 +107,10 @@ export default buildConfig({
   },
   db: postgresAdapter({
     pool: { connectionString: databaseUrl },
-    push: false,
+    // Schema is managed by migrations in deployed environments (push stays off).
+    // For local dev against the docker Postgres (no committed migrations yet),
+    // set PAYLOAD_DB_PUSH=true to let Payload sync the schema on boot.
+    push: process.env.PAYLOAD_DB_PUSH === "true",
     migrationDir: path.resolve(dirname, "src/migrations"),
   }),
   sharp,

@@ -22,9 +22,14 @@ npm-debug.log*
 # typescript / payload generated
 *.tsbuildinfo
 next-env.d.ts
+# Payload-generated types. Dev regenerates this; the repo builds with loose types.
+# Keep it untracked until the pre-existing strict-type casts (seed/intake/
+# translation/scoped/activity/hooks) are fixed, then it can be committed.
+src/payload-types.ts
 
 # migration working files (NDJSON exports, never commit live content)
 /migration-data/
 
 # media (local dev fallback when R2 is not configured)
 /media/
+.vibecode-backup*/

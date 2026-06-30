@@ -31,7 +31,7 @@ documentation.
 Next.js 15 (App Router) · Payload 3.85 · Postgres (Supabase) ·
 `@payloadcms/plugin-multi-tenant` · Cloudflare R2 (S3) · Lexical.
 
-## Quickstart (local)
+## Quickstart (local, Supabase)
 
 ```bash
 cp .env.example .env.local        # fill DATABASE_URL, PAYLOAD_SECRET, CENTRAL_SIGNING_SECRET
@@ -41,8 +41,25 @@ npm run db:seed                   # system admin + brief-asia & dtw tenants + ta
 npm run dev                       # admin at http://localhost:3000/admin
 ```
 
+## Quickstart (local, Docker Postgres — no Supabase)
+
+A `docker-compose.yml` provides a local Postgres so you can run the whole stack
+(admin + engine intake + `../engine-intake-tester`) offline. The app runs on the
+host; only the database is containerized.
+
+```bash
+docker compose up -d              # local Postgres on localhost:54326
+cp .env.docker.example .env.local # local DB URL + dev secrets + PAYLOAD_DB_PUSH + SEED_ENGINE_TOKEN
+npm install
+npm run db:seed                   # PAYLOAD_DB_PUSH=true syncs the schema, then seeds
+npm run dev                       # admin at http://localhost:3000/admin
+# docker compose down -v          # wipe the DB volume for a fresh seed/schema
+```
+
 The seed prints the **read tokens** (per tenant) and the **engine token** once —
-copy them. Re-mint anytime with `tsx scripts/mint-token.ts`.
+copy them. Re-mint anytime with `tsx scripts/mint-token.ts`. For the docker flow,
+`SEED_ENGINE_TOKEN` pins a known engine token so the intake tester works without
+copy-paste.
 
 ## Project layout
 
