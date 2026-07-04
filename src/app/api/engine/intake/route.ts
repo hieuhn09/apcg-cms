@@ -52,9 +52,11 @@ interface IntakeBody {
   tags?: unknown;
   takeaways?: unknown;
   heroImageUrl?: unknown;
+  imageCredit?: unknown;
   byline?: unknown;
   slug?: unknown;
   sections?: unknown;
+  subSectionSlug?: unknown;
   countries?: unknown;
   sourceProvenance?: SourceProvenance;
   publishedAt?: unknown;
@@ -116,6 +118,7 @@ export async function POST(request: Request): Promise<Response> {
     ? body.takeaways.filter(isNonEmptyString).map((t) => t.trim()).join("\n") || undefined
     : undefined;
   const heroImageUrl = isNonEmptyString(body.heroImageUrl) ? body.heroImageUrl : null;
+  const imageCredit = isNonEmptyString(body.imageCredit) ? body.imageCredit.trim() : null;
   const provenance = body.sourceProvenance ?? {};
   const sourceUrl = isNonEmptyString(provenance.url) ? provenance.url : null;
   const sourceName = isNonEmptyString(provenance.name) ? provenance.name : null;
@@ -144,14 +147,15 @@ export async function POST(request: Request): Promise<Response> {
     if (pillarId == null) return json({ ok: false, status: "unprocessable", reason: `unknown pillar: ${pillarSlugStr}` }, 422);
 
     const tagIds = await resolveOrCreateTags(payload, tenant.id, tags);
-    const sectionIds = await resolveSections(payload, tenant.id, body.sections, pillarId);
+    const subSectionId = await resolveSubSection(payload, tenant.id, body.subSectionSlug, pillarId);
+    const secondarySections = await resolveSecondarySections(payload, tenant.id, body.sections, pillarId);
     const countryIds = await resolveCountries(payload, body.countries);
 
     if (!byline) return json({ ok: false, status: "bad_request", reason: "missing byline (required author)" }, 400);
     const authorId = await resolveOrCreateAuthor(payload, tenant.id, byline, tenant.timezone as string | undefined);
 
     let heroImageId: number | string | undefined;
-    if (heroImageUrl) heroImageId = await uploadHero(payload, tenant.id, heroImageUrl, titleStr, slug, sourceName);
+    if (heroImageUrl) heroImageId = await uploadHero(payload, tenant.id, heroImageUrl, titleStr, slug, imageCredit ?? sourceName);
 
     const lexicalBody = await markdownToLexical(payload, bodyMarkdownStr);
 
@@ -173,7 +177,8 @@ export async function POST(request: Request): Promise<Response> {
         takeaways,
         body: lexicalBody,
         pillar: pillarId,
-        sections: sectionIds,
+        subSection: subSectionId,
+        secondarySections,
         country: countryIds[0],
         countries: countryIds,
         tags: tagIds,
@@ -234,7 +239,7 @@ async function refreshExisting(args: {
     await payload.create({
       collection: "engineConflictLog",
       overrideAccess: true,
-      data: { tenant: tenant.id, article: articleId, engine: engine.id, field: "version", engineValue: expectedVersion, currentValue: currentVersion, reason: "version_mismatch" },
+      data: { tenant: tenant.id, article: articleId, engine: engine.id, field: "version", engineValue: expectedVersion, currentValue: currentVersion, reason: "version_mismatch" } as never,
     });
     return json({ ok: false, status: "conflict", reason: "version_mismatch", articleId, currentVersion }, 409);
   }
@@ -259,7 +264,7 @@ async function refreshExisting(args: {
       await payload.create({
         collection: "engineConflictLog",
         overrideAccess: true,
-        data: { tenant: tenant.id, article: articleId, engine: engine.id, field, engineValue: typeof value === "string" ? value : "[richtext]", currentValue: existing[field] ?? null, reason: "locked" },
+        data: { tenant: tenant.id, article: articleId, engine: engine.id, field, engineValue: typeof value === "string" ? value : "[richtext]", currentValue: existing[field] ?? null, reason: "locked" } as never,
       });
       continue;
     }
@@ -309,19 +314,57 @@ async function resolveOrCreateTags(
   return ids;
 }
 
-async function resolveSections(
+/** Resolve a sub-section slug scoped to tenant + pillar. A stray hint never fails the publish. */
+async function resolveSubSection(
   payload: Awaited<ReturnType<typeof getPayload>>,
   tenantId: number | string,
   raw: unknown,
   pillarId: number | string,
-): Promise<(number | string)[]> {
-  const set = new Set<number | string>([pillarId]);
-  const slugs = Array.isArray(raw) ? raw.filter(isNonEmptyString).map((s) => s.trim()) : [];
-  for (const s of slugs) {
-    const r = await scopedFind({ payload, collection: "pillars", tenantId, where: { slug: { equals: s } }, limit: 1, depth: 0 });
-    if (r.docs.length) set.add((r.docs[0] as { id: number | string }).id);
+): Promise<number | string | undefined> {
+  if (!isNonEmptyString(raw)) return undefined;
+  const r = await scopedFind({
+    payload,
+    collection: "subsections",
+    tenantId,
+    where: { and: [{ slug: { equals: raw.trim() } }, { pillar: { equals: pillarId } }] },
+    limit: 1,
+    depth: 0,
+  });
+  return (r.docs[0] as { id: number | string } | undefined)?.id;
+}
+
+/**
+ * Cross-posts. `sections[]` items are pillar slugs (the live engine contract) or
+ * `{ pillar, subSection }` objects. The PRIMARY pillar is excluded (it is not a
+ * cross-post — mirrors the source sites); unknown slugs are skipped.
+ */
+async function resolveSecondarySections(
+  payload: Awaited<ReturnType<typeof getPayload>>,
+  tenantId: number | string,
+  raw: unknown,
+  primaryPillarId: number | string,
+): Promise<{ pillar: number | string; subSection: number | string | null }[]> {
+  if (!Array.isArray(raw)) return [];
+  const rows: { pillar: number | string; subSection: number | string | null }[] = [];
+  const seen = new Set<number | string>([primaryPillarId]);
+  for (const item of raw) {
+    const pillarSlug = isNonEmptyString(item)
+      ? item.trim()
+      : isNonEmptyString((item as { pillar?: unknown })?.pillar)
+        ? ((item as { pillar: string }).pillar).trim()
+        : null;
+    if (!pillarSlug) continue;
+    const r = await scopedFind({ payload, collection: "pillars", tenantId, where: { slug: { equals: pillarSlug } }, limit: 1, depth: 0 });
+    const pillarId = (r.docs[0] as { id: number | string } | undefined)?.id;
+    if (pillarId == null || seen.has(pillarId)) continue;
+    seen.add(pillarId);
+    const subSectionHint = isNonEmptyString((item as { subSection?: unknown })?.subSection)
+      ? (item as { subSection: string }).subSection
+      : undefined;
+    const subSectionId = await resolveSubSection(payload, tenantId, subSectionHint, pillarId);
+    rows.push({ pillar: pillarId, subSection: subSectionId ?? null });
   }
-  return [...set];
+  return rows;
 }
 
 async function resolveCountries(

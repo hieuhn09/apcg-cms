@@ -42,10 +42,23 @@ User + membership management is a System Admin function (MVP).
 
 ## Enable / disable a feature
 
-Edit the tenant's **features** group. Turning a feature off immediately hides its
-collection from admin nav (for users of that tenant), makes its public endpoint
-return 404, and makes engine intake for that type return 422. Turning it on
-reveals it again; existing data is preserved.
+Edit the tenant's **features** group. Turning a feature off immediately (next
+request) hides its collection(s) from the admin nav, dashboard, direct URLs, and
+the authenticated REST API **whenever that tenant is selected in the admin
+tenant selector** — including for System Admins. It also makes the feature's
+public endpoint return 404 and engine intake for that type return 422. Turning
+it on reveals everything again; existing data is preserved.
+
+Visibility rules when **no tenant is selected** in the selector:
+
+- A System Admin sees every collection (global view).
+- A Standard user sees the union of enabled features across their member
+  tenants; list views are constrained to rows of tenants that have the feature
+  enabled.
+
+The gate implementation is `src/access/features.ts` (applied per collection);
+the feature → collection map is documented in `FEATURE_COLLECTIONS`
+(`src/lib/constants.ts`).
 
 ## Mint / rotate tokens
 

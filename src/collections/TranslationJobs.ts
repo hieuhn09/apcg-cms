@@ -2,6 +2,7 @@ import type { CollectionConfig } from "payload";
 import { readOwnTenants } from "@/access/helpers";
 import { isSystemAdmin } from "@/access/helpers";
 import { tenantIdsWithRole } from "@/access/helpers";
+import { withFeature } from "@/access/features";
 import { LOCALE_CODES, LOCALE_LABELS } from "@/lib/locales";
 import { TRANSLATION_JOB_STATUSES } from "@/lib/constants";
 
@@ -23,14 +24,14 @@ export const TranslationJobs: CollectionConfig = {
     description: "Per-language translation queue.",
   },
   access: {
-    read: ({ req }) => readOwnTenants(req),
-    create: ({ req }) => isSystemAdmin(req),
-    update: ({ req }) => {
+    read: withFeature("translations", ({ req }) => readOwnTenants(req)),
+    create: withFeature("translations", ({ req }) => isSystemAdmin(req)),
+    update: withFeature("translations", ({ req }) => {
       if (isSystemAdmin(req)) return true;
       const ids = tenantIdsWithRole(req, ["websiteAdmin", "editor"]);
       return ids.length ? { tenant: { in: ids } } : false;
-    },
-    delete: ({ req }) => isSystemAdmin(req),
+    }),
+    delete: withFeature("translations", ({ req }) => isSystemAdmin(req)),
   },
   fields: [
     { name: "article", type: "relationship", relationTo: "articles", required: true, index: true },

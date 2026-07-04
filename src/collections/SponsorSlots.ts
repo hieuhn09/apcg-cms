@@ -1,11 +1,12 @@
 import type { CollectionConfig } from "payload";
 import { tenantManagedAccess } from "@/access/collections";
+import { featureGatedAccess } from "@/access/features";
 
 /** SponsorSlots — per-tenant, feature-gated (`sponsorSlots`). */
 export const SponsorSlots: CollectionConfig = {
   slug: "sponsorSlots",
   admin: { useAsTitle: "slot", defaultColumns: ["slot", "article", "startsAt", "endsAt"], group: "Commercial" },
-  access: tenantManagedAccess,
+  access: featureGatedAccess("sponsorSlots", tenantManagedAccess),
   fields: [
     {
       name: "slot",

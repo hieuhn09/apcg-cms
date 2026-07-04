@@ -38,7 +38,7 @@ export async function createItemAction(_prev: FormState, formData: FormData): Pr
       const raw = s(formData, f.name);
       if (f.required && !raw) return { ok: false, error: `${f.label} is required.` };
       if (!raw) continue;
-      data[f.name] = f.type === "number" ? Number(raw) : raw;
+      data[f.name] = f.type === "number" || f.type === "relation" ? Number(raw) : raw;
     }
     // Auto-slug from the title field when a `slug` field exists but was left blank.
     if (def.fields.some((f) => f.name === "slug") && !data.slug) {

@@ -26,6 +26,7 @@ export default async function SiteLayout({
     { href: `${base}/media`, label: "Media", show: true },
     { href: `${base}/newsletters`, label: "Newsletters", show: site.features.newsletters },
     { href: `${base}/podcasts`, label: "Podcasts", show: site.features.podcasts },
+    { href: `${base}/dashboards`, label: "Dashboards", show: site.features.dashboards },
     { href: `${base}/corrections`, label: "Corrections", show: site.features.corrections },
     { href: `${base}/menus`, label: "Menus", show: true },
     { href: `${base}/settings`, label: "Settings", show: canManage },

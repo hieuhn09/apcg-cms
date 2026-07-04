@@ -1,11 +1,12 @@
 import type { CollectionConfig } from "payload";
 import { tenantManagedAccess } from "@/access/collections";
+import { featureGatedAccess } from "@/access/features";
 
 /** Corrections — per-tenant, feature-gated (`corrections`). Public trust log. */
 export const Corrections: CollectionConfig = {
   slug: "corrections",
   admin: { useAsTitle: "summary", defaultColumns: ["article", "summary", "correctionDate"], group: "Editorial" },
-  access: tenantManagedAccess,
+  access: featureGatedAccess("corrections", tenantManagedAccess),
   fields: [
     { name: "article", type: "relationship", relationTo: "articles", required: true },
     { name: "correctionDate", type: "date", defaultValue: () => new Date().toISOString() },

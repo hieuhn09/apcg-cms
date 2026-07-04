@@ -1,6 +1,6 @@
 "use client";
 import { useActionState } from "react";
-import { Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Textarea } from "@/console/ui/primitives";
+import { Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Textarea } from "@/console/ui/primitives";
 import type { CollectionDef } from "@/console/data/collection-config";
 import { createItemAction, deleteItemAction, type FormState } from "./collection-actions";
 
@@ -60,6 +60,15 @@ export function CollectionManager({
                 <Field label={f.label + (f.required ? " *" : "")}>
                   {f.type === "textarea" ? (
                     <Textarea name={f.name} rows={2} placeholder={f.placeholder} />
+                  ) : f.type === "select" || f.type === "relation" ? (
+                    <Select name={f.name} defaultValue="">
+                      <option value="">— select —</option>
+                      {(f.options ?? []).map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </Select>
                   ) : (
                     <Input name={f.name} type={f.type === "number" ? "number" : "text"} placeholder={f.placeholder} />
                   )}

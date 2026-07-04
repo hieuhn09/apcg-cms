@@ -38,6 +38,18 @@ function read(coll: string): Doc[] {
 
 /** Pull a localized field's value for a given locale (handles {en,vi,...} or plain). */
 function localeValue(v: unknown, locale: string): unknown {
+  // Legacy brief-asia rows sometimes store a localized value as a JSON-string
+  // blob ('{"en":"Asia","vi":...}') — parse it before the locale-object check.
+  if (typeof v === "string" && v.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(v) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && LOCALE_CODES.some((c) => c in (parsed as Record<string, unknown>))) {
+        return (parsed as Record<string, unknown>)[locale];
+      }
+    } catch {
+      // not JSON — fall through and treat as a plain string
+    }
+  }
   if (v && typeof v === "object" && !Array.isArray(v)) {
     const obj = v as Record<string, unknown>;
     if (LOCALE_CODES.some((c) => c in obj)) return obj[locale];
@@ -64,13 +76,24 @@ interface Plan {
   localized: string[];
   upload?: boolean;
   remap?: Record<string, string>; // field -> target collection in idMaps
+  drop?: string[]; // source fields never copied (dangling rels, superseded shapes)
+  keyFields?: string[]; // compound natural key (rel members resolved via remap first)
+  transform?: (source: Doc, base: Doc) => void; // final fix-up before create
 }
 
 const PLAN: Plan[] = [
   { coll: "pillars", key: "slug", localized: ["title", "heading", "description"] },
+  {
+    coll: "subsections",
+    key: "slug",
+    keyFields: ["slug", "pillar"], // slug is unique within tenant + pillar
+    localized: ["title"],
+    remap: { pillar: "pillars" },
+  },
   { coll: "sectors", key: "slug", localized: ["title", "description"] },
   { coll: "tags", key: "slug", localized: ["title"] },
-  { coll: "authors", key: "name", localized: ["bio"] },
+  // `user` links point at source-site user ids — dropped; migrate:users re-links by email.
+  { coll: "authors", key: "name", localized: ["bio"], drop: ["user"] },
   { coll: "media", key: "filename", localized: ["alt", "caption"], upload: true },
   {
     coll: "articles",
@@ -78,7 +101,7 @@ const PLAN: Plan[] = [
     localized: ["title", "slug", "dek", "body", "imageLabel"],
     remap: {
       pillar: "pillars",
-      sections: "pillars",
+      subSection: "subsections",
       author: "authors",
       coAuthors: "authors",
       tags: "tags",
@@ -87,29 +110,67 @@ const PLAN: Plan[] = [
       countries: "countries",
       heroImage: "media",
     },
+    // `sections` is the retired cross-post shape (rels → pillars); replaced by
+    // secondarySections below. secondarySections is rebuilt by the transform
+    // (rows carry Payload row ids + source rel ids that must not be copied raw).
+    drop: ["sections", "secondarySections"],
+    transform: (source, base) => {
+      const rows = Array.isArray(source.secondarySections) ? source.secondarySections : [];
+      const rebuilt = rows
+        .map((r) => {
+          const row = r as { pillar?: unknown; subSection?: unknown };
+          const pillar = remapRel("pillars", row.pillar);
+          if (pillar == null) return null;
+          return { pillar, subSection: remapRel("subsections", row.subSection) ?? null };
+        })
+        .filter(Boolean);
+      if (rebuilt.length) base.secondarySections = rebuilt;
+    },
   },
   { coll: "newsletters", key: "slug", localized: ["name", "description"], remap: { vertical: "pillars" } },
   { coll: "podcasts", key: "slug", localized: ["title", "description"] },
-  { coll: "corrections", key: "summary", localized: ["summary", "wasText", "nowText"], remap: { article: "articles" } },
+  // `editor` points at a source-site user id — dropped (correction text carries the signoff).
+  { coll: "corrections", key: "summary", localized: ["summary", "wasText", "nowText"], remap: { article: "articles" }, drop: ["editor"] },
   { coll: "wireDrops", key: "text", localized: ["text"] },
+  { coll: "marketSnapshots", key: "market", localized: [] },
+  { coll: "fxRates", key: "pair", localized: [] },
+  { coll: "trendingBlocks", key: "term", localized: [] },
+  // NOTE: `slot` is a weak natural key (one row per slot assumed) — fine for the
+  // current 3-slot model; re-runs keep the first-imported row per slot.
+  { coll: "sponsorSlots", key: "slot", localized: [], remap: { article: "articles" } },
 ];
 
 async function ensureTenant(payload: Awaited<ReturnType<typeof getPayload>>): Promise<number | string> {
   const res = await pFind(payload, "tenants", { where: { slug: { equals: TENANT_SLUG } }, limit: 1 });
-  const t = (res as { docs: Doc[] }).docs[0];
+  const t = (res as unknown as { docs: Doc[] }).docs[0];
   if (!t) throw new Error(`Tenant ${TENANT_SLUG} not found — run seed first.`);
   return t.id as number | string;
 }
 
-/** Map global Countries by ISO code (create missing). */
+/** Map global Countries by ISO code (create missing, incl. localized name/description). */
 async function importCountries(payload: Awaited<ReturnType<typeof getPayload>>) {
   idMaps.countries = new Map();
   for (const c of read("countries")) {
     const code = String(c.code ?? "").toLowerCase();
     if (!code) continue;
-    let central = ((await pFind(payload, "countries", { where: { code: { equals: code } }, limit: 1 })) as { docs: Doc[] }).docs[0];
+    let central = ((await pFind(payload, "countries", { where: { code: { equals: code } }, limit: 1 })) as unknown as { docs: Doc[] }).docs[0];
     if (!central && !DRY_RUN) {
-      central = (await pCreate(payload, "countries", { code, name: localeValue(c.name, "en") ?? code, slug: c.slug ?? code, region: c.region }, { context: ctx })) as Doc;
+      central = (await pCreate(payload, "countries", { code, name: localeValue(c.name, "en") ?? code, slug: c.slug ?? code, region: c.region, description: localeValue(c.description, "en"), order: c.order }, { context: ctx })) as unknown as Doc;
+      for (const locale of LOCALE_CODES) {
+        if (locale === "en") continue;
+        const patch: Doc = {};
+        const name = localeValue(c.name, locale);
+        const description = localeValue(c.description, locale);
+        if (name != null) patch.name = name;
+        if (description != null) patch.description = description;
+        if (Object.keys(patch).length) {
+          try {
+            await pUpdate(payload, "countries", central.id as number | string, patch, { locale, context: ctx });
+          } catch (err) {
+            console.warn(`[import] country ${code} locale ${locale} failed: ${(err as Error).message}`);
+          }
+        }
+      }
     }
     if (central) idMaps.countries.set(c.id, central.id as number | string);
   }
@@ -131,7 +192,7 @@ async function uploadMedia(payload: Awaited<ReturnType<typeof getPayload>>, tena
       { tenant: tenantId, alt: localeValue(d.alt, "en") ?? (d.filename as string) ?? "image", credit: d.credit },
       { file: { data: buffer, mimetype, name: (d.filename as string) || `media-${d.id}.jpg`, size: buffer.length }, context: ctx },
     );
-    return (created as Doc).id as number | string;
+    return (created as unknown as Doc).id as number | string;
   } catch (err) {
     console.warn(`[import] media ${d.id} skipped: ${(err as Error).message}`);
     return undefined;
@@ -144,8 +205,28 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
   let created = 0;
   for (const d of docs) {
     // Skip if a doc with the same natural key already exists for the tenant.
+    // keyFields (compound keys) resolve rel members through the id maps first.
     const keyVal = localeValue(d[plan.key], "en") ?? d[plan.key];
-    const existing = ((await pFind(payload, plan.coll, { where: { and: [{ tenant: { equals: tenantId } }, { [plan.key]: { equals: keyVal } }] }, limit: 1 })) as { docs: Doc[] }).docs[0];
+    const keyClauses: Record<string, unknown>[] = [];
+    let keyResolvable = true;
+    for (const kf of plan.keyFields ?? [plan.key]) {
+      let kv: unknown;
+      if (plan.remap && kf in plan.remap) {
+        kv = remapRel(plan.remap[kf] as string, d[kf]);
+        if (kv == null) {
+          keyResolvable = false;
+          break;
+        }
+      } else {
+        kv = localeValue(d[kf], "en") ?? d[kf];
+      }
+      keyClauses.push({ [kf]: { equals: kv } });
+    }
+    if (!keyResolvable) {
+      console.warn(`[import] ${plan.coll} "${String(keyVal)}" skipped: unresolved key rel`);
+      continue;
+    }
+    const existing = ((await pFind(payload, plan.coll, { where: { and: [{ tenant: { equals: tenantId } }, ...keyClauses] }, limit: 1 })) as unknown as { docs: Doc[] }).docs[0];
     if (existing) {
       map.set(d.id, existing.id as number | string);
       continue;
@@ -161,10 +242,17 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
       continue;
     }
 
+    // Publish state: sources use only Payload's native `_status`. Central keys
+    // public visibility on `workflowStatus`, so derive it — otherwise every
+    // migrated article lands as an invisible draft.
+    const published = plan.coll === "articles" && d._status === "published";
+    const asDraft = plan.coll === "articles" ? !published : undefined;
+
     // Base (en) data: non-localized fields verbatim + remapped rels + en localized values.
     const base: Doc = { tenant: tenantId };
     for (const [k, v] of Object.entries(d)) {
-      if (["id", "createdAt", "updatedAt", "sizes", "url", "thumbnailURL"].includes(k)) continue;
+      if (["id", "createdAt", "updatedAt", "sizes", "url", "thumbnailURL", "_status"].includes(k)) continue;
+      if (plan.drop?.includes(k)) continue;
       if (plan.remap && k in plan.remap) {
         const mapped = remapRel(plan.remap[k] as string, v);
         if (mapped !== undefined) base[k] = mapped;
@@ -176,10 +264,15 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
       }
       base[k] = v;
     }
+    if (plan.coll === "articles") {
+      base.workflowStatus = published ? "published" : "draft";
+      base.origin = base.origin ?? "import";
+    }
+    plan.transform?.(d, base);
 
     let newDoc: Doc;
     try {
-      newDoc = (await pCreate(payload, plan.coll, base, { context: ctx, draft: plan.coll === "articles" })) as Doc;
+      newDoc = (await pCreate(payload, plan.coll, base, { context: ctx, draft: asDraft })) as unknown as Doc;
     } catch (err) {
       console.warn(`[import] ${plan.coll} "${String(keyVal)}" failed: ${(err as Error).message}`);
       continue;
@@ -187,7 +280,9 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
     map.set(d.id, newDoc.id as number | string);
     created += 1;
 
-    // Write each non-en locale present.
+    // Write each non-en locale present. Published articles are re-published per
+    // locale write (draft:false) so the localized values live on the published
+    // version, not a trailing draft.
     for (const locale of LOCALE_CODES) {
       if (locale === "en") continue;
       const patch: Doc = {};
@@ -197,7 +292,7 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
       }
       if (Object.keys(patch).length) {
         try {
-          await pUpdate(payload, plan.coll, newDoc.id as number | string, patch, { locale, context: ctx, draft: plan.coll === "articles" });
+          await pUpdate(payload, plan.coll, newDoc.id as number | string, patch, { locale, context: ctx, draft: asDraft });
         } catch (err) {
           console.warn(`[import] ${plan.coll} ${String(keyVal)} locale ${locale} failed: ${(err as Error).message}`);
         }

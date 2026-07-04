@@ -24,9 +24,10 @@ export async function GET(request: Request): Promise<Response> {
 
   // Re-fetch with depth so logo/og images resolve, in the requested locale.
   const full = await payload.findByID({ collection: "tenants", id: tenant.id, depth: 1, locale, overrideAccess: true });
-  const t = full as Record<string, unknown>;
+  const t = full as unknown as Record<string, unknown>;
 
   const pillars = await scopedFind({ payload, collection: "pillars", tenantId: tenant.id, locale, sort: "order", limit: 100, depth: 0 });
+  const subsections = await scopedFind({ payload, collection: "subsections", tenantId: tenant.id, locale, sort: "order", limit: 200, depth: 0 });
 
   return jsonPublic(
     request,
@@ -46,6 +47,7 @@ export async function GET(request: Request): Promise<Response> {
         features: t.features,
       },
       pillars: pillars.docs,
+      subsections: subsections.docs,
     },
     200,
   );

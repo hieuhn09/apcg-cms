@@ -4,7 +4,7 @@
  * never an empty 200. Static sibling routes (articles, menus, site, preview)
  * take precedence over this dynamic one.
  *
- *   podcasts | newsletters | corrections | wire | market
+ *   podcasts | newsletters | corrections | wire | market | dashboards
  */
 import { getPayload } from "payload";
 import config from "@payload-config";
@@ -13,22 +13,41 @@ import { scopedFind } from "@/lib/scoped";
 import { featureEnabled, supportedLanguages } from "@/lib/tenant";
 import { clampLocale } from "@/lib/locales";
 import type { FeatureKey } from "@/lib/constants";
+import type { Where } from "payload";
 
 type CollSlug = Parameters<typeof scopedFind>[0]["collection"];
 
 const MODULES: Record<
   string,
-  { feature: FeatureKey; collections: { slug: CollSlug; sort: string; key: string }[] }
+  { feature: FeatureKey; collections: { slug: CollSlug; sort: string; key: string; where?: () => Where }[] }
 > = {
   podcasts: { feature: "podcasts", collections: [{ slug: "podcasts", sort: "-publishedAt", key: "podcasts" }] },
   newsletters: { feature: "newsletters", collections: [{ slug: "newsletters", sort: "order", key: "newsletters" }] },
   corrections: { feature: "corrections", collections: [{ slug: "corrections", sort: "-correctionDate", key: "corrections" }] },
-  wire: { feature: "wireDrops", collections: [{ slug: "wireDrops", sort: "-publishedAt", key: "wireDrops" }] },
+  wire: {
+    feature: "wireDrops",
+    collections: [
+      {
+        slug: "wireDrops",
+        sort: "-publishedAt",
+        key: "wireDrops",
+        // Expired drops auto-hide from the public wire.
+        where: () => ({ or: [{ expiresAt: { exists: false } }, { expiresAt: { greater_than: new Date().toISOString() } }] }),
+      },
+    ],
+  },
   market: {
     feature: "marketData",
     collections: [
       { slug: "marketSnapshots", sort: "order", key: "marketSnapshots" },
       { slug: "fxRates", sort: "order", key: "fxRates" },
+    ],
+  },
+  dashboards: {
+    feature: "dashboards",
+    collections: [
+      { slug: "fundingRows", sort: "order", key: "fundingRows" },
+      { slug: "aiLeaderboardRows", sort: "rank", key: "aiLeaderboardRows" },
     ],
   },
 };
@@ -55,7 +74,7 @@ export async function GET(
 
   const data: Record<string, unknown> = {};
   for (const c of def.collections) {
-    const res = await scopedFind({ payload, collection: c.slug, tenantId: tenant.id, locale, sort: c.sort, limit: 100, depth: 1 });
+    const res = await scopedFind({ payload, collection: c.slug, tenantId: tenant.id, locale, sort: c.sort, limit: 100, depth: 1, where: c.where?.() });
     data[c.key] = res.docs;
   }
   return jsonPublic(request, { data }, 200);

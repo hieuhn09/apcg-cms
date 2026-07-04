@@ -41,18 +41,32 @@ export async function GET(request: Request): Promise<Response> {
   const q = url.searchParams.get("q");
   if (q && q.trim()) and.push({ or: [{ title: { like: q.trim() } }, { dek: { like: q.trim() } }] });
 
-  // One-flag feeds (deep dive / sponsored / pinned to latest).
+  // One-flag feeds (deep dive / sponsored / pinned to latest / breaking).
   const flag = url.searchParams.get("flag");
   if (flag === "deepDive") and.push({ deepDive: { equals: true } });
   if (flag === "sponsored") and.push({ sponsored: { equals: true } });
   if (flag === "pinnedToLatest") and.push({ pinnedToLatest: { equals: true } });
+  if (flag === "breaking") and.push({ breaking: { equals: true } });
 
   const pillarSlug = url.searchParams.get("pillar");
+  let pillarId: number | string | undefined;
   if (pillarSlug) {
     const p = await scopedFind({ payload, collection: "pillars", tenantId: tenant.id, where: { slug: { equals: pillarSlug } }, limit: 1, depth: 0 });
-    const id = (p.docs[0] as { id?: number | string } | undefined)?.id;
+    pillarId = (p.docs[0] as { id?: number | string } | undefined)?.id;
+    if (pillarId == null) return jsonPublic(request, { docs: [], totalDocs: 0, page: 1, totalPages: 0, hasNextPage: false }, 200);
+    and.push({ or: [{ pillar: { equals: pillarId } }, { "secondarySections.pillar": { in: [pillarId] } }] });
+  }
+
+  // Sub-section filter (slug; pillar-scoped when ?pillar= is also given).
+  const subSectionSlug = url.searchParams.get("subsection");
+  if (subSectionSlug) {
+    const subWhere: Where = pillarId != null
+      ? { and: [{ slug: { equals: subSectionSlug } }, { pillar: { equals: pillarId } }] }
+      : { slug: { equals: subSectionSlug } };
+    const s = await scopedFind({ payload, collection: "subsections", tenantId: tenant.id, where: subWhere, limit: 1, depth: 0 });
+    const id = (s.docs[0] as { id?: number | string } | undefined)?.id;
     if (id == null) return jsonPublic(request, { docs: [], totalDocs: 0, page: 1, totalPages: 0, hasNextPage: false }, 200);
-    and.push({ or: [{ pillar: { equals: id } }, { sections: { in: [id] } }] });
+    and.push({ or: [{ subSection: { equals: id } }, { "secondarySections.subSection": { in: [id] } }] });
   }
 
   const tagSlug = url.searchParams.get("tag");

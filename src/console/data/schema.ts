@@ -27,6 +27,7 @@ export const tenants = pgTable("tenants", {
   featuresWireDrops: boolean("features_wire_drops"),
   featuresCorrections: boolean("features_corrections"),
   featuresTranslations: boolean("features_translations"),
+  featuresDashboards: boolean("features_dashboards"),
   createdAt: timestamp("created_at", { withTimezone: true }),
 });
 

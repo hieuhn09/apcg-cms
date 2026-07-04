@@ -27,8 +27,11 @@ const VERSIONED = new Set(["articles"]);
 
 const DEFAULT_COLLECTIONS = [
   "pillars",
+  "subsections",
   "sectors",
   "tags",
+  "countries", // global reference in central — needed to remap article country rels by code
+  "users", // editorial CMS users (REST returns no password hashes) — consumed by migrate:users
   "authors",
   "media",
   "articles",

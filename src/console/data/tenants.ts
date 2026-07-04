@@ -62,6 +62,7 @@ export async function getSiteConfig(user: CmsUser | null, slug: string): Promise
       wireDrops: Boolean(r.featuresWireDrops),
       corrections: Boolean(r.featuresCorrections),
       translations: Boolean(r.featuresTranslations),
+      dashboards: Boolean(r.featuresDashboards),
     },
   };
 }

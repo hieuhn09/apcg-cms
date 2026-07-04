@@ -13,11 +13,20 @@
 
 import type { FieldHook } from "payload";
 
-export function uniqueWithinTenant(fieldName: string): FieldHook {
+export function uniqueWithinTenant(fieldName: string, scopeFields: string[] = []): FieldHook {
   return async ({ value, data, originalDoc, req, collection }) => {
     if (value == null || value === "") return value;
     const tenant = data?.tenant ?? originalDoc?.tenant;
     if (tenant == null || !collection) return value;
+
+    // Extra scoping (e.g. subsections are unique per tenant AND pillar). A
+    // missing scope value skips the check rather than matching everything.
+    const scopeClauses = [];
+    for (const scopeField of scopeFields) {
+      const scopeValue = data?.[scopeField] ?? originalDoc?.[scopeField];
+      if (scopeValue == null || scopeValue === "") return value;
+      scopeClauses.push({ [scopeField]: { equals: scopeValue } });
+    }
 
     const existing = await req.payload.find({
       collection: collection.slug as Parameters<typeof req.payload.find>[0]["collection"],
@@ -25,6 +34,7 @@ export function uniqueWithinTenant(fieldName: string): FieldHook {
         and: [
           { tenant: { equals: tenant } },
           { [fieldName]: { equals: value } },
+          ...scopeClauses,
         ],
       },
       limit: 1,

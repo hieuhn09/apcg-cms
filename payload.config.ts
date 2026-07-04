@@ -21,6 +21,7 @@ import { ActivityLog } from "@/collections/ActivityLog";
 import { Media } from "@/collections/Media";
 import { Authors } from "@/collections/Authors";
 import { Pillars } from "@/collections/Pillars";
+import { SubSections } from "@/collections/SubSections";
 import { Sectors } from "@/collections/Sectors";
 import { Tags } from "@/collections/Tags";
 import { Articles } from "@/collections/Articles";
@@ -30,6 +31,8 @@ import { Corrections } from "@/collections/Corrections";
 import { SponsorSlots } from "@/collections/SponsorSlots";
 import { MarketSnapshots } from "@/collections/MarketSnapshots";
 import { FxRates } from "@/collections/FxRates";
+import { FundingRows } from "@/collections/FundingRows";
+import { AiLeaderboardRows } from "@/collections/AiLeaderboardRows";
 import { TrendingBlocks } from "@/collections/TrendingBlocks";
 import { WireDrops } from "@/collections/WireDrops";
 import { Menus } from "@/collections/Menus";
@@ -85,6 +88,7 @@ export default buildConfig({
     Media,
     Authors,
     Pillars,
+    SubSections,
     Sectors,
     Tags,
     Articles,
@@ -94,6 +98,8 @@ export default buildConfig({
     SponsorSlots,
     MarketSnapshots,
     FxRates,
+    FundingRows,
+    AiLeaderboardRows,
     TrendingBlocks,
     WireDrops,
     Menus,
@@ -143,6 +149,7 @@ export default buildConfig({
         media: {},
         authors: {},
         pillars: {},
+        subsections: {},
         sectors: {},
         tags: {},
         articles: {},
@@ -152,6 +159,8 @@ export default buildConfig({
         sponsorSlots: {},
         marketSnapshots: {},
         fxRates: {},
+        fundingRows: {},
+        aiLeaderboardRows: {},
         trendingBlocks: {},
         wireDrops: {},
         menus: {},

@@ -72,7 +72,7 @@ export const enqueueTranslations: CollectionAfterChangeHook = async ({ doc, req 
           status: "queued",
           sourceVersion: version,
           attempts: 0,
-        },
+        } as never,
       });
       await logActivity({
         payload: req.payload,
@@ -97,7 +97,7 @@ export const enqueueTranslations: CollectionAfterChangeHook = async ({ doc, req 
     await req.payload.update({
       collection: "articles",
       id: doc.id,
-      data: { translationStatus: rows },
+      data: { translationStatus: rows } as never,
       context: { skipTranslationEnqueue: true },
       overrideAccess: true,
     });

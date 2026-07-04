@@ -1,12 +1,13 @@
 import type { CollectionConfig } from "payload";
 import { tenantManagedAccess } from "@/access/collections";
+import { featureGatedAccess } from "@/access/features";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
 
 /** Podcasts — per-tenant, feature-gated (`podcasts`). */
 export const Podcasts: CollectionConfig = {
   slug: "podcasts",
   admin: { useAsTitle: "title", defaultColumns: ["title", "show", "episode", "publishedAt"], group: "Editorial" },
-  access: tenantManagedAccess,
+  access: featureGatedAccess("podcasts", tenantManagedAccess),
   fields: [
     { name: "show", type: "text" },
     { name: "episode", type: "text" },

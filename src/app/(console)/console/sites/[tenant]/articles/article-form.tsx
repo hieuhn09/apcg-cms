@@ -21,6 +21,7 @@ export interface ArticleInitial {
   pillar?: number;
   author?: number;
   workflowStatus?: string;
+  breaking?: boolean;
 }
 
 export function ArticleForm({
@@ -98,6 +99,11 @@ export function ArticleForm({
       <Field label="Takeaways" hint="One per line">
         <Textarea name="takeaways" defaultValue={initial?.takeaways ?? ""} rows={3} />
       </Field>
+
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="breaking" defaultChecked={initial?.breaking ?? false} />
+        <span>Breaking news</span>
+      </label>
 
       <Field
         label="Body (Markdown)"

@@ -51,7 +51,8 @@ export async function logActivity(input: ActivityInput): Promise<void> {
         fromStatus: fromStatus ?? undefined,
         toStatus: toStatus ?? undefined,
         detail: detail ?? undefined,
-      },
+        // ids arrive as number|string from route handlers; Payload validates at runtime
+      } as never,
     });
   } catch (err) {
     payload.logger.error(

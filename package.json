@@ -19,6 +19,7 @@
     "db:seed": "tsx scripts/seed.ts",
     "migrate:export": "tsx scripts/migrate/export-source.ts",
     "migrate:import": "tsx scripts/migrate/import-central.ts",
+    "migrate:users": "tsx scripts/migrate/import-users.ts",
     "migrate:media": "tsx scripts/migrate/copy-media.ts",
     "migrate:reader-backfill": "tsx scripts/migrate/reader-id-backfill.ts"
   },

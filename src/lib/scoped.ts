@@ -41,11 +41,12 @@ function withTenant(
 }
 
 export async function scopedFind(args: ScopedFindArgs) {
-  const { payload, collection, tenantId, where, publishedOnly, ...rest } = args;
+  const { payload, collection, tenantId, where, publishedOnly, locale, ...rest } = args;
   return payload.find({
     collection,
     where: withTenant(tenantId, where, publishedOnly),
     overrideAccess: true, // trust boundary is the token check in the route handler
+    locale: locale as never, // clamped to LOCALE_CODES upstream (clampLocale)
     ...rest,
   });
 }
@@ -61,11 +62,12 @@ export interface ScopedCreateArgs {
 }
 
 export async function scopedCreate(args: ScopedCreateArgs) {
-  const { payload, collection, tenantId, data, ...rest } = args;
+  const { payload, collection, tenantId, data, locale, ...rest } = args;
   return payload.create({
     collection,
-    data: { ...data, tenant: tenantId },
+    data: { ...data, tenant: tenantId } as never,
     overrideAccess: true,
+    locale: locale as never,
     ...rest,
   });
 }
@@ -88,12 +90,13 @@ export interface ScopedUpdateArgs {
  * calling this.
  */
 export async function scopedUpdate(args: ScopedUpdateArgs) {
-  const { payload, collection, tenantId, id, data, ...rest } = args;
+  const { payload, collection, tenantId, id, data, locale, ...rest } = args;
   return payload.update({
     collection,
     id,
-    data: { ...data, tenant: tenantId },
+    data: { ...data, tenant: tenantId } as never,
     overrideAccess: true,
+    locale: locale as never,
     ...rest,
   });
 }

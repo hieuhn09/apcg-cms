@@ -1,5 +1,6 @@
 import type { CollectionConfig } from "payload";
 import { editorialContentAccess } from "@/access/collections";
+import { featureGatedAccess, featureGatedReadVersions } from "@/access/features";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
 import { revalidateHooks } from "@/hooks/revalidate";
 import {
@@ -43,7 +44,10 @@ export const Articles: CollectionConfig = {
       typeof doc?.slug === "string" ? `/api/preview/mint?slug=${doc.slug}` : null,
   },
   versions: { drafts: true },
-  access: editorialContentAccess,
+  access: {
+    ...featureGatedAccess("articles", editorialContentAccess),
+    readVersions: featureGatedReadVersions("articles"),
+  },
   hooks: {
     beforeValidate: [enforceStatusAuthority],
     beforeChange: [articleBookkeeping],
@@ -69,6 +73,14 @@ export const Articles: CollectionConfig = {
             },
             { name: "dek", type: "textarea", required: true, localized: true, label: "Standfirst (dek)" },
             { name: "body", type: "richText", localized: true },
+            {
+              name: "section",
+              type: "text",
+              admin: {
+                hidden: true,
+                description: "Deprecated free-text kicker — replaced by the Sub-section dropdown (Taxonomy tab). Kept for legacy import fidelity.",
+              },
+            },
             {
               name: "takeaways",
               type: "textarea",
@@ -122,7 +134,53 @@ export const Articles: CollectionConfig = {
           label: "Taxonomy",
           fields: [
             { name: "pillar", type: "relationship", relationTo: "pillars", required: true },
-            { name: "sections", type: "relationship", relationTo: "pillars", hasMany: true },
+            {
+              name: "subSection",
+              type: "relationship",
+              relationTo: "subsections",
+              filterOptions: ({ data }) => {
+                const p = (data as { pillar?: unknown })?.pillar;
+                if (p == null || p === "") return false;
+                return { pillar: { equals: p } };
+              },
+              admin: { description: "Sub-section of the PRIMARY pillar (e.g. Finance → Markets). Pick the Pillar first." },
+            },
+            {
+              name: "secondarySections",
+              type: "array",
+              label: "Also appears in (secondary sections)",
+              labels: { singular: "Secondary section", plural: "Secondary sections" },
+              admin: {
+                initCollapsed: true,
+                description:
+                  "Cross-posts. Each row = one EXTRA pillar this story also appears on, optionally filed under one of that pillar's sub-sections. Do NOT re-add the primary Pillar here.",
+              },
+              fields: [
+                {
+                  type: "row",
+                  fields: [
+                    {
+                      name: "pillar",
+                      type: "relationship",
+                      relationTo: "pillars",
+                      required: true,
+                      admin: { width: "50%", description: "Extra pillar (hub) this story appears on." },
+                    },
+                    {
+                      name: "subSection",
+                      type: "relationship",
+                      relationTo: "subsections",
+                      filterOptions: ({ siblingData }) => {
+                        const p = (siblingData as { pillar?: unknown })?.pillar;
+                        if (p == null || p === "") return false;
+                        return { pillar: { equals: p } };
+                      },
+                      admin: { width: "50%", description: "Optional sub-tab within this row's pillar. Pick the pillar first." },
+                    },
+                  ],
+                },
+              ],
+            },
             { name: "country", type: "relationship", relationTo: "countries", admin: { description: "Primary country (global reference data)." } },
             { name: "countries", type: "relationship", relationTo: "countries", hasMany: true },
             { name: "tags", type: "relationship", relationTo: "tags", hasMany: true },
@@ -146,6 +204,7 @@ export const Articles: CollectionConfig = {
             { name: "affiliate", type: "checkbox", defaultValue: false },
             { name: "deepDive", type: "checkbox", defaultValue: false },
             { name: "pinnedToLatest", type: "checkbox", defaultValue: false, label: "Pin to top of Latest" },
+            { name: "breaking", type: "checkbox", defaultValue: false, admin: { description: "Marks the story for the breaking-news treatment on the frontend." } },
             { name: "translationAssisted", type: "checkbox", defaultValue: false },
           ],
         },

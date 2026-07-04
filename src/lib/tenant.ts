@@ -43,7 +43,7 @@ export async function findTenantById(
       depth: 0,
       overrideAccess: true,
     });
-    return (doc as TenantDoc) ?? null;
+    return (doc as unknown as TenantDoc) ?? null;
   } catch {
     return null;
   }

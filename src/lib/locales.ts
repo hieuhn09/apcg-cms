@@ -10,19 +10,32 @@
  *   - the public API clamps `?locale=` to the supported subset (falling back to
  *     the tenant's defaultLanguage).
  *
- * This mirrors brief-asia's 8 active locales. Adding a locale here makes it
- * available platform-wide; tenants opt in via `supportedLanguages`.
+ * This mirrors brief-asia's 20 site locales (the widest tenant). Adding a
+ * locale here makes it available platform-wide; tenants opt in via
+ * `supportedLanguages`.
  */
 
 export const LOCALE_CODES = [
   "en",
   "vi",
+  "ko",
+  "ja",
+  "zh-hans",
+  "zh-hant",
   "th",
   "id",
-  "ja",
-  "ko",
-  "zh-hant",
-  "zh-hans",
+  "ms",
+  "tl",
+  "hi",
+  "bn",
+  "ta",
+  "si",
+  "km",
+  "my",
+  "ar",
+  "fr",
+  "es",
+  "de",
 ] as const;
 
 export type LocaleCode = (typeof LOCALE_CODES)[number];
@@ -32,12 +45,24 @@ export const DEFAULT_LOCALE: LocaleCode = "en";
 export const LOCALE_LABELS: Record<LocaleCode, string> = {
   en: "English",
   vi: "Tiếng Việt",
+  ko: "한국어",
+  ja: "日本語",
+  "zh-hans": "简体中文",
+  "zh-hant": "繁體中文",
   th: "ไทย",
   id: "Bahasa Indonesia",
-  ja: "日本語",
-  ko: "한국어",
-  "zh-hant": "繁體中文",
-  "zh-hans": "简体中文",
+  ms: "Bahasa Melayu",
+  tl: "Filipino",
+  hi: "हिन्दी",
+  bn: "বাংলা",
+  ta: "தமிழ்",
+  si: "සිංහල",
+  km: "ខ្មែរ",
+  my: "မြန်မာ",
+  ar: "العربية",
+  fr: "Français",
+  es: "Español",
+  de: "Deutsch",
 };
 
 /** Payload `localization.locales` entry shape. */

@@ -121,8 +121,8 @@ export async function POST(request: Request): Promise<Response> {
       await payload.update({
         collection: "articles",
         id: articleId as number | string,
-        locale,
-        data: localized,
+        locale: locale as never,
+        data: localized as never,
         context: { translationWrite: true, skipTranslationEnqueue: true },
         overrideAccess: true,
       });
@@ -131,7 +131,7 @@ export async function POST(request: Request): Promise<Response> {
     await payload.update({
       collection: "articles",
       id: articleId as number | string,
-      data: { translationStatus: nextRows },
+      data: { translationStatus: nextRows } as never,
       context: { translationWrite: true, skipTranslationEnqueue: true },
       overrideAccess: true,
     });
@@ -142,7 +142,7 @@ export async function POST(request: Request): Promise<Response> {
       : { and: [{ article: { equals: articleId } }, { targetLocale: { equals: locale } }, { status: { in: ["queued", "claimed", "in_progress"] } }] };
     const jobs = await payload.find({ collection: "translationJobs", where: jobWhere as never, limit: 5, depth: 0, overrideAccess: true });
     for (const j of jobs.docs) {
-      await payload.update({ collection: "translationJobs", id: (j as { id: number | string }).id, data: { status: "completed", engine: engine.id }, overrideAccess: true });
+      await payload.update({ collection: "translationJobs", id: (j as { id: number | string }).id, data: { status: "completed", engine: engine.id } as never, overrideAccess: true });
     }
 
     await logActivity({ payload, eventType: "translation_completed", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, targetCollection: "articles", targetId: articleId as number | string, detail: { locale } });

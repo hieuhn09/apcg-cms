@@ -174,6 +174,7 @@ export const Tenants: CollectionConfig = {
         { name: "wireDrops", type: "checkbox", defaultValue: false },
         { name: "corrections", type: "checkbox", defaultValue: true },
         { name: "translations", type: "checkbox", defaultValue: true },
+        { name: "dashboards", type: "checkbox", defaultValue: false },
       ],
     },
 

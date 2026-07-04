@@ -16,6 +16,7 @@ export const FEATURE_KEYS = [
   "wireDrops",
   "corrections",
   "translations",
+  "dashboards", // FundingRows / AiLeaderboardRows (DTW dashboards)
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -130,10 +131,13 @@ export const ACTIVITY_EVENTS = [
 export type ActivityEvent = (typeof ACTIVITY_EVENTS)[number];
 
 // ── Collections gated by a feature flag ─────────────────────────────────────
-// Maps a feature key to the collection slugs it controls. Used to hide nav +
-// block API for tenants that disabled the feature.
+// Maps a feature key to the collection slugs it controls. Reference map: the
+// admin gate lives in src/access/features.ts and each gated collection applies
+// its key in its own file (featureGatedAccess/withFeature); the public API and
+// engine intake check featureEnabled in their route handlers. Keep this map in
+// sync when adding or re-keying a gated collection.
 export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
-  articles: ["articles"],
+  articles: ["articles", "subsections"],
   newsletters: ["newsletters"],
   podcasts: ["podcasts"],
   marketData: ["marketSnapshots", "fxRates", "trendingBlocks"],
@@ -141,4 +145,5 @@ export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   wireDrops: ["wireDrops"],
   corrections: ["corrections"],
   translations: ["translationJobs"],
+  dashboards: ["fundingRows", "aiLeaderboardRows"],
 };

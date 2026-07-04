@@ -102,6 +102,7 @@ export default async function EditArticlePage({
               pillar: relId(doc.pillar),
               author: relId(doc.author),
               workflowStatus: current,
+              breaking: doc.breaking === true,
             }}
             submitLabel="Save changes"
           />
