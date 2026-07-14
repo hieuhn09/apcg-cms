@@ -87,6 +87,29 @@ export const Articles: CollectionConfig = {
               admin: { description: "Key takeaways — one bullet per line. Source language; empty hides the box." },
             },
             { name: "readMin", type: "number", required: true, defaultValue: 5, min: 1, label: "Read time (minutes)" },
+            { name: "metric", type: "text", admin: { description: "Card kicker figure, e.g. +18%, 2026 (WTB)." } },
+            {
+              name: "tone",
+              type: "select",
+              options: [
+                { label: "Up", value: "up" },
+                { label: "Down", value: "dn" },
+                { label: "Delay", value: "dl" },
+                { label: "Flat", value: "flat" },
+              ],
+              admin: { description: "Colour of the metric kicker (WTB)." },
+            },
+            {
+              name: "briefs",
+              type: "array",
+              maxRows: 4,
+              admin: { initCollapsed: true, description: "Structured stat block: label + value + source (WTB \"The Briefs\")." },
+              fields: [
+                { name: "label", type: "text", required: true },
+                { name: "value", type: "text", required: true },
+                { name: "source", type: "text", required: true },
+              ],
+            },
           ],
         },
         {
@@ -187,6 +210,13 @@ export const Articles: CollectionConfig = {
             { name: "sectors", type: "relationship", relationTo: "sectors", hasMany: true },
             { name: "author", type: "relationship", relationTo: "authors", required: true },
             { name: "coAuthors", type: "relationship", relationTo: "authors", hasMany: true },
+            {
+              name: "cities",
+              type: "relationship",
+              relationTo: "cities",
+              hasMany: true,
+              admin: { description: "Destination cities; each may drop a map pin (WTB)." },
+            },
           ],
         },
         {
@@ -206,6 +236,7 @@ export const Articles: CollectionConfig = {
             { name: "pinnedToLatest", type: "checkbox", defaultValue: false, label: "Pin to top of Latest" },
             { name: "breaking", type: "checkbox", defaultValue: false, admin: { description: "Marks the story for the breaking-news treatment on the frontend." } },
             { name: "translationAssisted", type: "checkbox", defaultValue: false },
+            { name: "longHaul", type: "checkbox", defaultValue: false, admin: { description: "\"The Long Haul\" weekly franchise flag (WTB)." } },
           ],
         },
         {
@@ -238,6 +269,7 @@ export const Articles: CollectionConfig = {
             { name: "engineSourceContext", type: "textarea", admin: { readOnly: true, position: "sidebar" } },
             { name: "lastEngine", type: "relationship", relationTo: "content-engines", admin: { readOnly: true, description: "Which engine last wrote this." } },
             { name: "processingVersion", type: "text", admin: { readOnly: true, description: "Engine pipeline/model version that produced this." } },
+            { name: "views", type: "number", defaultValue: 0, admin: { readOnly: true, description: "Cumulative view counter (Most-Read). Non-localized." } },
           ],
         },
         {
@@ -269,6 +301,7 @@ export const Articles: CollectionConfig = {
           fields: [
             { name: "heroImage", type: "upload", relationTo: "media" },
             { name: "imageLabel", type: "text", localized: true, admin: { description: "Label for generative cover art when no hero image." } },
+            { name: "leadImageCaption", type: "text", localized: true, admin: { description: "Caption shown under the lead image (WTB)." } },
             { name: "imageUrl", type: "text", admin: { description: "Deprecated external-URL fallback." } },
           ],
         },

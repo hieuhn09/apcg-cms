@@ -20,6 +20,9 @@ import { pFind, pCreate, pUpdate } from "../lib/payload-loose";
 import { LOCALE_CODES } from "../../src/lib/locales";
 
 const TENANT_SLUG = requireEnv("IMPORT_TENANT_SLUG");
+// WTB models sponsor slots as free-text promo cards (slot=promo_card, keyed by
+// `name`); BA/DTW use article-linked enum slots (keyed by `slot`).
+const IS_WTB = TENANT_SLUG === "world-travel-brief";
 const IMPORT_DIR = process.env.IMPORT_DIR || path.resolve(process.cwd(), "migration-data", TENANT_SLUG);
 const SOURCE_MEDIA_BASE = (process.env.SOURCE_MEDIA_BASE || process.env.SOURCE_URL || "").replace(/\/$/, "");
 
@@ -71,34 +74,50 @@ function idOf(v: unknown): unknown {
 }
 
 interface Plan {
-  coll: string;
-  key: string; // natural key field for idempotency/skip
-  localized: string[];
+  coll: string; // central collection slug
+  key: string; // natural key field for idempotency/skip (CENTRAL field name)
+  localized: string[]; // CENTRAL localized field names
   upload?: boolean;
-  remap?: Record<string, string>; // field -> target collection in idMaps
+  remap?: Record<string, string>; // SOURCE field -> target collection in idMaps
   drop?: string[]; // source fields never copied (dangling rels, superseded shapes)
   keyFields?: string[]; // compound natural key (rel members resolved via remap first)
   transform?: (source: Doc, base: Doc) => void; // final fix-up before create
+  // When the source NDJSON filename differs from the central slug (e.g. WTB's
+  // `sub-sections`/`sponsor-slots` collections), read this file if `coll` is empty.
+  sourceColl?: string;
+  // SOURCE field -> CENTRAL field. Applied in the base copy AND (reversed) in the
+  // per-locale + natural-key reads. Only fires when the source field is present,
+  // so it is a no-op for tenants whose schema already uses the central names.
+  rename?: Record<string, string>;
 }
 
 const PLAN: Plan[] = [
-  { coll: "pillars", key: "slug", localized: ["title", "heading", "description"] },
+  // WTB source uses `name`/`nav`/`dek`; central uses `title`/`navLabel`/`description`.
+  // Renames are no-ops for BA/DTW (their pillars already use the central names) and
+  // rarely fire at all here because taxonomy is seeded first (rows skip-and-map).
+  { coll: "pillars", key: "slug", localized: ["title", "navLabel", "heading", "description"], rename: { name: "title", nav: "navLabel", dek: "description" } },
   {
     coll: "subsections",
     key: "slug",
     keyFields: ["slug", "pillar"], // slug is unique within tenant + pillar
     localized: ["title"],
     remap: { pillar: "pillars" },
+    sourceColl: "sub-sections", // WTB's collection slug
+    rename: { name: "title" },
   },
   { coll: "sectors", key: "slug", localized: ["title", "description"] },
-  { coll: "tags", key: "slug", localized: ["title"] },
-  // `user` links point at source-site user ids — dropped; migrate:users re-links by email.
-  { coll: "authors", key: "name", localized: ["bio"], drop: ["user"] },
+  { coll: "tags", key: "slug", localized: ["title"], rename: { name: "title" } },
+  // Media before authors: WTB author avatars remap to media, so the media id map
+  // must exist first. Media has no rel dependencies of its own.
   { coll: "media", key: "filename", localized: ["alt", "caption"], upload: true },
+  // `user` links point at source-site user ids — dropped; migrate:users re-links by email.
+  { coll: "authors", key: "name", localized: ["bio"], remap: { avatar: "media" }, drop: ["user"] },
+  // Cities (WTB) before articles: articles reference cities.
+  { coll: "cities", key: "slug", localized: ["name", "country", "blurb"] },
   {
     coll: "articles",
     key: "slug",
-    localized: ["title", "slug", "dek", "body", "imageLabel"],
+    localized: ["title", "slug", "dek", "body", "imageLabel", "leadImageCaption"],
     remap: {
       pillar: "pillars",
       subSection: "subsections",
@@ -109,35 +128,65 @@ const PLAN: Plan[] = [
       country: "countries",
       countries: "countries",
       heroImage: "media",
+      cities: "cities", // WTB; absent on BA/DTW source (no-op)
     },
-    // `sections` is the retired cross-post shape (rels → pillars); replaced by
-    // secondarySections below. secondarySections is rebuilt by the transform
-    // (rows carry Payload row ids + source rel ids that must not be copied raw).
-    drop: ["sections", "secondarySections"],
+    // `sections` = retired cross-post shape; `secondarySections` carries row ids +
+    // source rel ids and is rebuilt in the transform. WTB's hasMany
+    // `pillars`/`subSections`/`authors` and its `leadImage` are collapsed there too.
+    drop: ["sections", "secondarySections", "pillars", "subSections", "authors", "leadImage"],
     transform: (source, base) => {
+      const rebuilt: { pillar: unknown; subSection: unknown }[] = [];
+      // BA/DTW: rebuild secondarySections rows from the source array.
       const rows = Array.isArray(source.secondarySections) ? source.secondarySections : [];
-      const rebuilt = rows
-        .map((r) => {
-          const row = r as { pillar?: unknown; subSection?: unknown };
-          const pillar = remapRel("pillars", row.pillar);
-          if (pillar == null) return null;
-          return { pillar, subSection: remapRel("subsections", row.subSection) ?? null };
-        })
-        .filter(Boolean);
+      for (const r of rows) {
+        const row = r as { pillar?: unknown; subSection?: unknown };
+        const pillar = remapRel("pillars", row.pillar);
+        if (pillar == null) continue;
+        rebuilt.push({ pillar, subSection: remapRel("subsections", row.subSection) ?? null });
+      }
+      // WTB: collapse hasMany pillars[]/subSections[]/authors[] into central's
+      // required singular + secondarySections[]/coAuthors[]. leadImage → heroImage.
+      // origin editorial → manual (central has no `editorial` origin).
+      if (Array.isArray(source.pillars)) {
+        const pillarIds = (remapRel("pillars", source.pillars) as unknown[]) ?? [];
+        const subIds = (remapRel("subsections", source.subSections) as unknown[]) ?? [];
+        const authorIds = (remapRel("authors", source.authors) as unknown[]) ?? [];
+        if (pillarIds[0] != null) base.pillar = pillarIds[0];
+        if (subIds[0] != null) base.subSection = subIds[0];
+        if (authorIds[0] != null) base.author = authorIds[0];
+        if (authorIds.length > 1) base.coAuthors = authorIds.slice(1);
+        for (const p of pillarIds.slice(1)) rebuilt.push({ pillar: p, subSection: null });
+        const hero = remapRel("media", source.leadImage);
+        if (hero != null) base.heroImage = hero;
+        base.origin = source.origin === "engine" ? "engine" : "manual";
+        if (base.dek == null || base.dek === "") base.dek = typeof base.title === "string" ? base.title : "—";
+      }
       if (rebuilt.length) base.secondarySections = rebuilt;
     },
   },
   { coll: "newsletters", key: "slug", localized: ["name", "description"], remap: { vertical: "pillars" } },
-  { coll: "podcasts", key: "slug", localized: ["title", "description"] },
+  { coll: "podcasts", key: "slug", localized: ["title", "description", "tag"], remap: { poster: "media" }, rename: { guest: "host", length: "duration", dek: "description", mediaUrl: "audioUrl" } },
   // `editor` points at a source-site user id — dropped (correction text carries the signoff).
-  { coll: "corrections", key: "summary", localized: ["summary", "wasText", "nowText"], remap: { article: "articles" }, drop: ["editor"] },
+  // WTB uses `note`/`correctedAt`; central uses `summary`/`correctionDate`.
+  { coll: "corrections", key: "summary", localized: ["summary", "wasText", "nowText"], remap: { article: "articles" }, drop: ["editor"], rename: { note: "summary", correctedAt: "correctionDate" } },
   { coll: "wireDrops", key: "text", localized: ["text"] },
   { coll: "marketSnapshots", key: "market", localized: [] },
   { coll: "fxRates", key: "pair", localized: [] },
   { coll: "trendingBlocks", key: "term", localized: [] },
-  // NOTE: `slot` is a weak natural key (one row per slot assumed) — fine for the
-  // current 3-slot model; re-runs keep the first-imported row per slot.
-  { coll: "sponsorSlots", key: "slot", localized: [], remap: { article: "articles" } },
+  // BA/DTW: article-linked enum slot (weak key `slot` — one row per slot).
+  // WTB: free-text promo cards from `sponsor-slots.ndjson`, keyed by `name`, every
+  // row forced to slot=promo_card (localized headline/body/ctaLabel).
+  IS_WTB
+    ? {
+        coll: "sponsorSlots",
+        key: "name",
+        sourceColl: "sponsor-slots",
+        localized: ["headline", "body", "ctaLabel"],
+        transform: (_source, base) => {
+          base.slot = "promo_card";
+        },
+      }
+    : { coll: "sponsorSlots", key: "slot", localized: [], remap: { article: "articles" } },
 ];
 
 async function ensureTenant(payload: Awaited<ReturnType<typeof getPayload>>): Promise<number | string> {
@@ -200,13 +249,19 @@ async function uploadMedia(payload: Awaited<ReturnType<typeof getPayload>>, tena
 }
 
 async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenantId: number | string, plan: Plan) {
-  const docs = read(plan.coll);
+  let docs = read(plan.coll);
+  if (docs.length === 0 && plan.sourceColl) docs = read(plan.sourceColl);
   const map = idMaps[plan.coll] ?? (idMaps[plan.coll] = new Map());
+  // CENTRAL field name -> SOURCE field name (reverse of plan.rename); used to read
+  // localized values + natural keys off the source doc.
+  const reverseRename: Record<string, string> = {};
+  for (const [src, cen] of Object.entries(plan.rename ?? {})) reverseRename[cen] = src;
+  const srcField = (centralName: string) => reverseRename[centralName] ?? centralName;
   let created = 0;
   for (const d of docs) {
     // Skip if a doc with the same natural key already exists for the tenant.
     // keyFields (compound keys) resolve rel members through the id maps first.
-    const keyVal = localeValue(d[plan.key], "en") ?? d[plan.key];
+    const keyVal = localeValue(d[srcField(plan.key)], "en") ?? d[srcField(plan.key)];
     const keyClauses: Record<string, unknown>[] = [];
     let keyResolvable = true;
     for (const kf of plan.keyFields ?? [plan.key]) {
@@ -218,7 +273,7 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
           break;
         }
       } else {
-        kv = localeValue(d[kf], "en") ?? d[kf];
+        kv = localeValue(d[srcField(kf)], "en") ?? d[srcField(kf)];
       }
       keyClauses.push({ [kf]: { equals: kv } });
     }
@@ -253,16 +308,16 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
     for (const [k, v] of Object.entries(d)) {
       if (["id", "createdAt", "updatedAt", "sizes", "url", "thumbnailURL", "_status"].includes(k)) continue;
       if (plan.drop?.includes(k)) continue;
+      const target = plan.rename?.[k] ?? k;
       if (plan.remap && k in plan.remap) {
         const mapped = remapRel(plan.remap[k] as string, v);
-        if (mapped !== undefined) base[k] = mapped;
+        if (mapped !== undefined) base[target] = mapped;
         continue;
       }
-      if (plan.localized.includes(k)) {
-        base[k] = localeValue(v, "en");
-        continue;
-      }
-      base[k] = v;
+      // Non-localized scalars/arrays pass through unchanged; a source-localized
+      // value (a {en,vi,...} object or a legacy JSON-string blob) is flattened to
+      // `en` — correct whether the CENTRAL target is localized or plain.
+      base[target] = localeValue(v, "en");
     }
     if (plan.coll === "articles") {
       base.workflowStatus = published ? "published" : "draft";
@@ -287,7 +342,7 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
       if (locale === "en") continue;
       const patch: Doc = {};
       for (const f of plan.localized) {
-        const val = localeValue(d[f], locale);
+        const val = localeValue(d[srcField(f)], locale);
         if (val !== undefined && val !== null) patch[f] = val;
       }
       if (Object.keys(patch).length) {

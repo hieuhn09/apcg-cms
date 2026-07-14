@@ -175,6 +175,7 @@ export const Tenants: CollectionConfig = {
         { name: "corrections", type: "checkbox", defaultValue: true },
         { name: "translations", type: "checkbox", defaultValue: true },
         { name: "dashboards", type: "checkbox", defaultValue: false },
+        { name: "citiesMap", type: "checkbox", defaultValue: false },
       ],
     },
 

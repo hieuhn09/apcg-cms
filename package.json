@@ -17,6 +17,7 @@
     "payload:migrate": "payload migrate",
     "payload:migrate:create": "payload migrate:create",
     "db:seed": "tsx scripts/seed.ts",
+    "db:status": "tsx scripts/db-status.ts",
     "migrate:export": "tsx scripts/migrate/export-source.ts",
     "migrate:import": "tsx scripts/migrate/import-central.ts",
     "migrate:users": "tsx scripts/migrate/import-users.ts",

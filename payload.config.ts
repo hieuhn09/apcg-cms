@@ -22,6 +22,7 @@ import { Media } from "@/collections/Media";
 import { Authors } from "@/collections/Authors";
 import { Pillars } from "@/collections/Pillars";
 import { SubSections } from "@/collections/SubSections";
+import { Cities } from "@/collections/Cities";
 import { Sectors } from "@/collections/Sectors";
 import { Tags } from "@/collections/Tags";
 import { Articles } from "@/collections/Articles";
@@ -89,6 +90,7 @@ export default buildConfig({
     Authors,
     Pillars,
     SubSections,
+    Cities,
     Sectors,
     Tags,
     Articles,
@@ -150,6 +152,7 @@ export default buildConfig({
         authors: {},
         pillars: {},
         subsections: {},
+        cities: {},
         sectors: {},
         tags: {},
         articles: {},

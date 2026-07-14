@@ -28,6 +28,7 @@ export const tenants = pgTable("tenants", {
   featuresCorrections: boolean("features_corrections"),
   featuresTranslations: boolean("features_translations"),
   featuresDashboards: boolean("features_dashboards"),
+  featuresCitiesMap: boolean("features_cities_map"),
   createdAt: timestamp("created_at", { withTimezone: true }),
 });
 

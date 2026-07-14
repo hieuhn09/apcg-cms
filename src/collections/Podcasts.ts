@@ -16,6 +16,8 @@ export const Podcasts: CollectionConfig = {
     { name: "description", type: "textarea", localized: true },
     { name: "duration", type: "text" },
     { name: "host", type: "text" },
+    { name: "tag", type: "text", localized: true, admin: { description: "e.g. On location · Tokyo (WTB)." } },
+    { name: "poster", type: "upload", relationTo: "media", admin: { description: "Episode poster image (WTB)." } },
     { name: "audioUrl", type: "text", admin: { description: "Audio file URL (object storage)." } },
     { name: "publishedAt", type: "date", admin: { date: { pickerAppearance: "dayAndTime" } } },
   ],

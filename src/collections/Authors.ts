@@ -1,5 +1,6 @@
 import type { CollectionConfig } from "payload";
 import { tenantManagedAccess } from "@/access/collections";
+import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
 
 /**
  * Authors — per-tenant bylines. Separate from Users so published bylines can
@@ -17,8 +18,18 @@ export const Authors: CollectionConfig = {
   access: tenantManagedAccess,
   fields: [
     { name: "name", type: "text", required: true },
+    // Optional — BA/DTW authors were imported by `name` (no slug); WTB carries a
+    // slug. The uniqueWithinTenant hook short-circuits on null.
+    {
+      name: "slug",
+      type: "text",
+      index: true,
+      hooks: { beforeValidate: [uniqueWithinTenant("slug")] },
+      admin: { description: "URL slug. Unique within this tenant (optional)." },
+    },
     { name: "role", type: "text", admin: { description: "e.g. Asia Bureau Chief, Staff Writer." } },
     { name: "city", type: "text" },
+    { name: "avatar", type: "upload", relationTo: "media", admin: { description: "Byline headshot (WTB)." } },
     { name: "bio", type: "textarea", localized: true },
     {
       name: "user",

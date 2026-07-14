@@ -17,6 +17,7 @@ export const FEATURE_KEYS = [
   "corrections",
   "translations",
   "dashboards", // FundingRows / AiLeaderboardRows (DTW dashboards)
+  "citiesMap", // Cities (WTB "The Map" / /place directory)
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -146,4 +147,5 @@ export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   corrections: ["corrections"],
   translations: ["translationJobs"],
   dashboards: ["fundingRows", "aiLeaderboardRows"],
+  citiesMap: ["cities"],
 };

@@ -191,6 +191,22 @@ const TENANTS: TenantFixture[] = [
       { slug: "policy", title: "Policy", order: 6 },
     ],
   },
+  {
+    slug: "world-travel-brief",
+    name: "WorldTravelBrief",
+    defaultLanguage: "en",
+    supportedLanguages: [...LOCALE_CODES],
+    // Taxonomy (pillars + sub-sections), cities, authors, articles, podcasts and
+    // corrections are DATA-MIGRATED from the WTB production DB (migrate:import), so
+    // they are deliberately NOT seeded here — the importer creates them from source
+    // with the correct slugs, which avoids hardcoding a taxonomy that must
+    // byte-match the source. Only newsletters are seeded (WTB defines its 5 in code,
+    // not data — see WTB_NEWSLETTERS below). `sponsorSlots` is ON — WTB has
+    // editor-created promo cards, migrated as slot=promo_card.
+    features: { articles: true, newsletters: true, podcasts: true, marketData: false, sponsorSlots: true, wireDrops: false, corrections: true, translations: true, dashboards: false, citiesMap: true },
+    pillars: [],
+    sectors: [],
+  },
 ];
 
 // DTW modules — ported from dtw-web/apps/web/src/lib/data.ts (static fixtures
@@ -236,6 +252,17 @@ const DTW_AI_LEADERBOARD = [
   { rank: 6, model: "Llama 4 405B", maker: "Meta", reasoning: 80, coding: 78, speed: 74, price: 0.0, ctx: "128k" },
   { rank: 7, model: "Mistral Large 3", maker: "Mistral", reasoning: 78, coding: 77, speed: 86, price: 3.0, ctx: "128k" },
   { rank: 8, model: "DeepSeek-V4", maker: "DeepSeek", reasoning: 82, coding: 83, speed: 81, price: 0.6, ctx: "128k" },
+] as const;
+
+// WTB newsletters — the 5 hardcoded in world-travel-brief/scripts/seed.ts (DESIGN
+// §6.6). Slugs are slugify(name). Seeded (not imported) so they exist even though
+// the WTB export excludes `newsletters`.
+const WTB_NEWSLETTERS = [
+  { slug: "the-daily-brief", name: "The Daily Brief", cadence: "Every weekday · 07:00 SGT", description: "What moved in world travel overnight, read in five minutes. Fares, openings, disruptions and where demand is heading." },
+  { slug: "the-long-haul", name: "The Long Haul", cadence: "Weekly · Sunday", description: "One big travel question, audited with the reporting and the numbers behind it. The franchise that proves the name." },
+  { slug: "access-alert", name: "Access Alert", cadence: "As it happens (Live)", description: "Visa changes, entry rules and disruption, sent the moment they move. For the traveller who books on the news." },
+  { slug: "where-next", name: "Where Next", cadence: "Monthly", description: "The rising map. The places the world is heading before the crowd arrives, with the reporting on why." },
+  { slug: "the-table", name: "The Table", cadence: "Fortnightly · Thursday", description: "Where the world is eating now — new tables, chef moves and the reservations worth planning a whole trip around." },
 ] as const;
 
 type P = Awaited<ReturnType<typeof getPayload>>;
@@ -385,6 +412,19 @@ async function main() {
         );
       }
       console.log(`[seed] dtw modules ready (${DTW_NEWSLETTERS.length} newsletters, ${DTW_PODCASTS.length} podcasts, ${DTW_FUNDING_ROWS.length} funding rows, ${DTW_AI_LEADERBOARD.length} leaderboard rows)`);
+    }
+
+    // ── WTB newsletters (5, hardcoded; the rest of WTB is data-migrated) ──
+    if (t.slug === "world-travel-brief") {
+      for (const [i, n] of WTB_NEWSLETTERS.entries()) {
+        await upsert(
+          payload,
+          "newsletters",
+          { and: [{ tenant: { equals: tenant.id } }, { slug: { equals: n.slug } }] },
+          { tenant: tenant.id, slug: n.slug, name: n.name, cadence: n.cadence, description: n.description, active: true, order: i + 1 },
+        );
+      }
+      console.log(`[seed] wtb newsletters ready (${WTB_NEWSLETTERS.length})`);
     }
   }
 

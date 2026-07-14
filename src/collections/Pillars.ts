@@ -32,6 +32,7 @@ export const Pillars: CollectionConfig = {
       admin: { description: "URL slug. Unique within this tenant." },
     },
     { name: "title", type: "text", required: true, localized: true },
+    { name: "navLabel", type: "text", localized: true, admin: { description: "Short nav label; falls back to title (WTB)." } },
     { name: "heading", type: "text", localized: true, admin: { description: "Long H1; falls back to title." } },
     { name: "color", type: "text", admin: { description: "CSS color reference used in nav + cover tints." } },
     { name: "icon", type: "text", admin: { description: "Icon name from the frontend icon set." } },
