@@ -69,6 +69,26 @@ export async function GET(request: Request): Promise<Response> {
     and.push({ or: [{ subSection: { equals: id } }, { "secondarySections.subSection": { in: [id] } }] });
   }
 
+  // Keyset ("load more") pagination: return only rows strictly older than the
+  // caller's last row, ordered by (publishedAt, id) — the same compound key the
+  // sort uses, so the tie-break is stable when several articles share a timestamp.
+  //
+  // Offset paging cannot serve an infinite-scroll list: anything published while
+  // the reader is scrolling shifts every later page by one and silently
+  // duplicates or skips an article. DTW's pillar feed reads from here, so the
+  // cursor lives in the API rather than being emulated client-side (which would
+  // break as soon as the cursor moves past the first `limit` rows).
+  const afterPublishedAt = url.searchParams.get("after_published_at");
+  const afterId = url.searchParams.get("after_id");
+  if (afterPublishedAt && afterId) {
+    and.push({
+      or: [
+        { publishedAt: { less_than: afterPublishedAt } },
+        { and: [{ publishedAt: { equals: afterPublishedAt } }, { id: { less_than: afterId } }] },
+      ],
+    });
+  }
+
   const tagSlug = url.searchParams.get("tag");
   if (tagSlug) {
     const t = await scopedFind({ payload, collection: "tags", tenantId: tenant.id, where: { slug: { equals: tagSlug } }, limit: 1, depth: 0 });
