@@ -1,14 +1,34 @@
 /**
  * Import a source site's exported NDJSON into the Central CMS as one tenant.
  * Dependency-ordered; remaps relationships by natural key; preserves slugs,
- * provenance, and every exported locale; re-uploads hero media from the source
- * URL. Idempotent-ish (skips taxonomy/articles whose slug already exists for the
- * tenant). Bulk writes set disableRevalidate.
+ * provenance, and every exported locale. Idempotent-ish (skips taxonomy/articles
+ * whose slug already exists for the tenant). Bulk writes set disableRevalidate.
  *
  *   IMPORT_TENANT_SLUG=brief-asia IMPORT_DIR=migration-data/brief-asia \
  *   npm run migrate:import -- [--dry-run]
  *
  * Run after the tenant exists (seed) and export-source.ts has produced NDJSON.
+ *
+ * MEDIA_MODE picks how images get into the central bucket:
+ *
+ *   reupload (default) — fetch each image from SOURCE_MEDIA_BASE and let Payload
+ *     re-derive the thumbnails. Simple, needs nothing but a live source site, but
+ *     it is one HTTP round-trip plus three sharp passes per image: budget hours
+ *     for a few thousand files, and the editorial freeze lasts that whole time.
+ *
+ *   copy — pair with `npm run migrate:media`, which copies the objects R2-to-R2
+ *     server-side under `<tenant>/<key>`. This import then ADOPTS them: it writes
+ *     the media rows pointing at those keys without moving a byte, preserving the
+ *     original derivatives. Much faster and it does not need the old site to be
+ *     up, but it DOES need read credentials on the old bucket.
+ *
+ *     Order does not affect correctness, but run migrate:media FIRST — otherwise
+ *     articles reference images whose bytes have not landed yet and the site shows
+ *     broken images until the copy finishes.
+ *
+ *     The prefix written here and the prefix copy-media writes MUST match (both
+ *     are the tenant slug). They are the same string in two scripts; changing one
+ *     without the other 404s every image.
  */
 import "../lib/env";
 import { DRY_RUN, requireEnv } from "../lib/env";
@@ -25,6 +45,15 @@ const TENANT_SLUG = requireEnv("IMPORT_TENANT_SLUG");
 const IS_WTB = TENANT_SLUG === "world-travel-brief";
 const IMPORT_DIR = process.env.IMPORT_DIR || path.resolve(process.cwd(), "migration-data", TENANT_SLUG);
 const SOURCE_MEDIA_BASE = (process.env.SOURCE_MEDIA_BASE || process.env.SOURCE_URL || "").replace(/\/$/, "");
+
+const MEDIA_MODE = (process.env.MEDIA_MODE || "reupload").trim().toLowerCase();
+if (MEDIA_MODE !== "reupload" && MEDIA_MODE !== "copy") {
+  throw new Error(`MEDIA_MODE must be "reupload" or "copy" (got "${MEDIA_MODE}")`);
+}
+// Fail fast rather than silently importing every article with no hero image.
+if (MEDIA_MODE === "reupload" && !SOURCE_MEDIA_BASE) {
+  throw new Error("MEDIA_MODE=reupload needs SOURCE_MEDIA_BASE (the old site's origin) to fetch images from.");
+}
 
 type Doc = Record<string, unknown>;
 const idMaps: Record<string, Map<unknown, number | string>> = {};
@@ -247,6 +276,96 @@ async function importCountries(payload: Awaited<ReturnType<typeof getPayload>>) 
   console.log(`[import] countries mapped: ${idMaps.countries.size}`);
 }
 
+/**
+ * ADOPT an object that `scripts/migrate/copy-media.ts` has already copied into the
+ * central bucket, instead of re-downloading and re-deriving it.
+ *
+ * Why `payload.db.create` and not `payload.create`: an upload collection rejects a
+ * create with no file ("No files were uploaded."). We deliberately have no bytes —
+ * copy-media moved them server-side, R2 to R2 — so we write the row directly. The
+ * adapter still maps localized fields and the `sizes` group correctly, and reading
+ * the doc back regenerates `url` / `sizes.*.url` from `filename` + `prefix`.
+ *
+ * `prefix` MUST equal the key prefix copy-media wrote under (the tenant slug), or
+ * Payload will look for the object at the wrong key and every image 404s.
+ *
+ * Trade-off of bypassing the document layer: collection hooks do not run. That is
+ * intended for a bulk import (no revalidate storms), and uniqueness is still
+ * enforced — the (tenant_id, filename) unique index rejects a genuine duplicate.
+ */
+async function adoptMedia(
+  payload: Awaited<ReturnType<typeof getPayload>>,
+  tenantId: number | string,
+  d: Doc,
+): Promise<number | string | undefined> {
+  const filename = d.filename as string | undefined;
+  if (!filename) {
+    console.warn(`[import] media ${d.id} skipped: source row has no filename`);
+    return undefined;
+  }
+
+  // Carry the derivative metadata across so `sizes.*.url` resolves. Entries whose
+  // filename is null (a size the source never generated) are dropped rather than
+  // written as a half-null row pointing at nothing.
+  const srcSizes = (d.sizes ?? {}) as Record<string, Record<string, unknown> | null>;
+  const sizes: Record<string, Record<string, unknown>> = {};
+  for (const [name, size] of Object.entries(srcSizes)) {
+    if (!size || typeof size !== "object" || !size.filename) continue;
+    sizes[name] = {
+      filename: size.filename,
+      mimeType: size.mimeType ?? null,
+      filesize: size.filesize ?? null,
+      width: size.width ?? null,
+      height: size.height ?? null,
+    };
+  }
+
+  try {
+    const created = (await payload.db.create({
+      collection: "media",
+      data: {
+        tenant: tenantId,
+        credit: d.credit ?? undefined,
+        prefix: TENANT_SLUG,
+        filename,
+        mimeType: d.mimeType ?? "image/jpeg",
+        filesize: d.filesize ?? undefined,
+        width: d.width ?? undefined,
+        height: d.height ?? undefined,
+        focalX: d.focalX ?? undefined,
+        focalY: d.focalY ?? undefined,
+        sizes,
+      } as never,
+      req: undefined as never,
+    })) as unknown as Doc;
+    const id = created.id as number | string;
+
+    // `alt` and `caption` are LOCALIZED, and db.create writes only the base table —
+    // it leaves media_locales empty, so every adopted image would end up with no
+    // alt text (an accessibility regression, and alt is a required field).
+    // Setting them through the document API writes the locale rows properly.
+    // Safe on an upload collection: an update with no new file keeps the object.
+    for (const locale of LOCALE_CODES) {
+      const alt = localeValue(d.alt, locale);
+      const caption = localeValue(d.caption, locale);
+      const patch: Doc = {};
+      if (locale === "en") patch.alt = alt ?? filename; // required — never leave it empty
+      else if (alt != null) patch.alt = alt;
+      if (caption != null) patch.caption = caption;
+      if (!Object.keys(patch).length) continue;
+      try {
+        await pUpdate(payload, "media", id, patch, { locale, context: ctx });
+      } catch (err) {
+        console.warn(`[import] media ${filename} locale ${locale} alt/caption failed: ${(err as Error).message}`);
+      }
+    }
+    return id;
+  } catch (err) {
+    console.warn(`[import] media ${d.id} (${filename}) skipped: ${(err as Error).message}`);
+    return undefined;
+  }
+}
+
 async function uploadMedia(payload: Awaited<ReturnType<typeof getPayload>>, tenantId: number | string, d: Doc): Promise<number | string | undefined> {
   const rawUrl = (d.url as string) || "";
   const url = rawUrl.startsWith("http") ? rawUrl : `${SOURCE_MEDIA_BASE}${rawUrl}`;
@@ -313,8 +432,17 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
     }
 
     if (plan.upload) {
-      const newId = await uploadMedia(payload, tenantId, d);
-      if (newId != null) map.set(d.id, newId);
+      const newId =
+        MEDIA_MODE === "copy"
+          ? await adoptMedia(payload, tenantId, d)
+          : await uploadMedia(payload, tenantId, d);
+      if (newId != null) {
+        map.set(d.id, newId);
+        // Counted like every other collection. It previously fell through without
+        // incrementing, so media always reported "0 created" no matter how many
+        // rows landed — which silently defeats the runbook's count-comparison step.
+        created += 1;
+      }
       continue;
     }
 
@@ -382,6 +510,11 @@ async function main() {
   const payload = await getPayload({ config });
   const tenantId = await ensureTenant(payload);
   console.log(`[import] tenant ${TENANT_SLUG} (id ${tenantId}); dir ${IMPORT_DIR}; dry-run=${DRY_RUN}`);
+  console.log(
+    MEDIA_MODE === "copy"
+      ? `[import] media mode: COPY — adopting objects already at "${TENANT_SLUG}/" in the central bucket (run migrate:media first)`
+      : `[import] media mode: REUPLOAD — fetching images from ${SOURCE_MEDIA_BASE}`,
+  );
 
   await importCountries(payload);
   for (const plan of PLAN) await importPlan(payload, tenantId, plan);
