@@ -29,6 +29,7 @@ import { Articles } from "@/collections/Articles";
 import { Newsletters } from "@/collections/Newsletters";
 import { Podcasts } from "@/collections/Podcasts";
 import { Corrections } from "@/collections/Corrections";
+import { Subscribers } from "@/collections/Subscribers";
 import { SponsorSlots } from "@/collections/SponsorSlots";
 import { MarketSnapshots } from "@/collections/MarketSnapshots";
 import { FxRates } from "@/collections/FxRates";
@@ -97,6 +98,7 @@ export default buildConfig({
     Newsletters,
     Podcasts,
     Corrections,
+    Subscribers,
     SponsorSlots,
     MarketSnapshots,
     FxRates,
@@ -159,6 +161,7 @@ export default buildConfig({
         newsletters: {},
         podcasts: {},
         corrections: {},
+        subscribers: {},
         sponsorSlots: {},
         marketSnapshots: {},
         fxRates: {},
@@ -174,7 +177,14 @@ export default buildConfig({
     ...(r2Configured
       ? [
           s3Storage({
+            // Per-tenant key prefixes come from the `prefix` field on each media
+            // doc (set from the tenant slug in collections/Media.ts), NOT from a
+            // collection-level prefix — that option is a static string and cannot
+            // vary per tenant. Keys land as `<tenant>/<filename>`, matching
+            // scripts/migrate/copy-media.ts. Leave useCompositePrefixes off: the
+            // doc prefix must win outright.
             collections: { media: true },
+            alwaysInsertFields: true,
             clientUploads: true,
             bucket: process.env.R2_BUCKET as string,
             config: {

@@ -75,6 +75,12 @@ interface TenantFixture {
   defaultLanguage: LocaleCode;
   supportedLanguages: LocaleCode[];
   features: Record<string, boolean>;
+  /**
+   * All three source sites auto-publish engine drafts today. Seeding this ON
+   * keeps the cutover a data move rather than also an editorial process change;
+   * flip it OFF per tenant once a daily review rota exists.
+   */
+  autoPublishEngineDrafts: boolean;
   pillars: PillarFixture[];
   sectors: SectorFixture[];
   subsections?: SubSectionFixture[];
@@ -89,6 +95,7 @@ const TENANTS: TenantFixture[] = [
     defaultLanguage: "en",
     supportedLanguages: [...LOCALE_CODES],
     features: { articles: true, newsletters: true, podcasts: true, marketData: true, sponsorSlots: true, wireDrops: true, corrections: true, translations: true, dashboards: false },
+    autoPublishEngineDrafts: true,
     pillars: [
       { slug: "asia", title: "Asia", titleVi: "Châu Á", titleId: "Asia", heading: "Asia", color: "var(--asia)", icon: "asia", order: 1, description: "Regional front page for markets, policy, trade, companies, infrastructure, and environment across Asia." },
       { slug: "finance", title: "Finance", titleVi: "Tài chính", titleId: "Keuangan", heading: "Finance", color: "var(--finance)", icon: "dollar", order: 2, description: "Banking, fintech, markets, listings, funds, payments, crypto, and consequential regional deals." },
@@ -174,6 +181,7 @@ const TENANTS: TenantFixture[] = [
     defaultLanguage: "en",
     supportedLanguages: ["en", "vi", "id"],
     features: { articles: true, newsletters: true, podcasts: true, marketData: false, sponsorSlots: true, wireDrops: true, corrections: true, translations: true, dashboards: true },
+    autoPublishEngineDrafts: true,
     pillars: [
       { slug: "ai", title: "AI", titleVi: "AI", titleId: "AI", heading: "Artificial Intelligence", color: "var(--ai)", icon: "spark", order: 1, description: "Frontier models, infrastructure, and the policy that shapes them. Reported across Seoul, Singapore, Bengaluru, and Hangzhou." },
       { slug: "startups", title: "Startups", titleVi: "Khởi nghiệp", titleId: "Startup", heading: "Startups & Capital", color: "var(--startups)", icon: "trend-up", order: 2, description: "Term sheets, IPOs, layoffs, and the operators building the next wave across ASEAN, India, and Greater China." },
@@ -204,6 +212,7 @@ const TENANTS: TenantFixture[] = [
     // not data — see WTB_NEWSLETTERS below). `sponsorSlots` is ON — WTB has
     // editor-created promo cards, migrated as slot=promo_card.
     features: { articles: true, newsletters: true, podcasts: true, marketData: false, sponsorSlots: true, wireDrops: false, corrections: true, translations: true, dashboards: false, citiesMap: true },
+    autoPublishEngineDrafts: true,
     pillars: [],
     sectors: [],
   },
@@ -324,12 +333,16 @@ async function main() {
           defaultLanguage: t.defaultLanguage,
           supportedLanguages: t.supportedLanguages,
           features: t.features,
+          autoPublishEngineDrafts: t.autoPublishEngineDrafts,
           readTokens: [{ label: "frontend", tokenHash: hash, tokenPrefix: prefix, status: "active" }],
         },
       })) as { id: number | string };
       console.log(`[seed] created tenant ${t.slug} — READ TOKEN (copy now): ${rawReadToken}`);
     } else {
       // Provisioning fields are system-managed — keep them at fixture values.
+      // `autoPublishEngineDrafts` is deliberately NOT re-synced: it is an
+      // operational toggle an admin may flip in the UI, and a re-seed must not
+      // silently switch a site back to auto-publishing.
       await payload.update({
         collection: "tenants",
         id: tenant.id,

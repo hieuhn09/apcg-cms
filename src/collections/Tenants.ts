@@ -188,6 +188,16 @@ export const Tenants: CollectionConfig = {
       access: { update: ({ req }) => isSystemAdmin(req) },
       admin: { description: "Convenience list. Source of truth is ContentEngines.allowedTenants." },
     },
+    {
+      name: "autoPublishEngineDrafts",
+      type: "checkbox",
+      defaultValue: false,
+      access: { update: ({ req }) => isSystemAdmin(req) },
+      admin: {
+        description:
+          "ON: engine intake lands articles as published (matches how the standalone sites behaved before migrating). OFF: they land in pending review and an editor publishes. Turn ON during cutover for a site that auto-publishes today, so the migration does not silently become an editorial process change.",
+      },
+    },
 
     // ── Public read tokens (system-managed, hashed) ──
     {

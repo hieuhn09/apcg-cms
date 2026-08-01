@@ -36,6 +36,7 @@ const DEFAULT_COLLECTIONS = [
   "media",
   "articles",
   "newsletters",
+  "subscribers", // newsletter opt-ins (WTB); sites without the collection just export nothing
   "podcasts",
   "corrections",
   "sponsorSlots",

@@ -133,7 +133,7 @@ const PLAN: Plan[] = [
     // `sections` = retired cross-post shape; `secondarySections` carries row ids +
     // source rel ids and is rebuilt in the transform. WTB's hasMany
     // `pillars`/`subSections`/`authors` and its `leadImage` are collapsed there too.
-    drop: ["sections", "secondarySections", "pillars", "subSections", "authors", "leadImage"],
+    drop: ["sections", "secondarySections", "pillars", "subSections", "authors", "leadImage", "primaryPillar", "subPillar"],
     transform: (source, base) => {
       const rebuilt: { pillar: unknown; subSection: unknown }[] = [];
       // BA/DTW: rebuild secondarySections rows from the source array.
@@ -147,15 +147,32 @@ const PLAN: Plan[] = [
       // WTB: collapse hasMany pillars[]/subSections[]/authors[] into central's
       // required singular + secondarySections[]/coAuthors[]. leadImage → heroImage.
       // origin editorial → manual (central has no `editorial` origin).
-      if (Array.isArray(source.pillars)) {
+      if (Array.isArray(source.pillars) || source.primaryPillar != null) {
         const pillarIds = (remapRel("pillars", source.pillars) as unknown[]) ?? [];
         const subIds = (remapRel("subsections", source.subSections) as unknown[]) ?? [];
         const authorIds = (remapRel("authors", source.authors) as unknown[]) ?? [];
-        if (pillarIds[0] != null) base.pillar = pillarIds[0];
-        if (subIds[0] != null) base.subSection = subIds[0];
+        // Prefer WTB's post-round-2 scalars. `pillars[]`/`subSections[]` are only
+        // mirrors, maintained by a hook that runs "khi write có chạm taxonomy" —
+        // a partial write (e.g. the scheduled-publish cron) leaves them stale. If
+        // the mirror were empty we would drop `pillar`, and Central requires it,
+        // so the row would fail to create.
+        const primary = remapRel("pillars", source.primaryPillar);
+        const sub = remapRel("subsections", source.subPillar);
+        if (primary != null) base.pillar = primary;
+        else if (pillarIds[0] != null) base.pillar = pillarIds[0];
+        if (sub != null) base.subSection = sub;
+        else if (subIds[0] != null) base.subSection = subIds[0];
         if (authorIds[0] != null) base.author = authorIds[0];
         if (authorIds.length > 1) base.coAuthors = authorIds.slice(1);
-        for (const p of pillarIds.slice(1)) rebuilt.push({ pillar: p, subSection: null });
+        // NOT rebuilding cross-posts from the pillars[] tail. WTB settled in
+        // feedback round 2 (m01) that an article has exactly one pillar; legacy
+        // rows written before that still carry several in the mirror array, and
+        // turning them into secondarySections would resurrect the very
+        // "one article in two pillars" bug the site just fixed. Same rule the
+        // engine intake applies to `secondaryPillarSlugs`.
+        if (pillarIds.length > 1) {
+          console.warn(`[import] article "${String(base.slug)}": ignoring ${pillarIds.length - 1} legacy secondary pillar(s) — one pillar per article`);
+        }
         const hero = remapRel("media", source.leadImage);
         if (hero != null) base.heroImage = hero;
         base.origin = source.origin === "engine" ? "engine" : "manual";
@@ -169,6 +186,10 @@ const PLAN: Plan[] = [
   // `editor` points at a source-site user id — dropped (correction text carries the signoff).
   // WTB uses `note`/`correctedAt`; central uses `summary`/`correctionDate`.
   { coll: "corrections", key: "summary", localized: ["summary", "wasText", "nowText"], remap: { article: "articles" }, drop: ["editor"], rename: { note: "summary", correctedAt: "correctionDate" } },
+  // Newsletter opt-ins (WTB today; harmless no-op for a tenant that exports none).
+  // Keyed by email — unique within the tenant. `token` is carried over verbatim so
+  // unsubscribe links already sitting in people's inboxes keep resolving.
+  { coll: "subscribers", key: "email", localized: [], remap: { newsletters: "newsletters" } },
   { coll: "wireDrops", key: "text", localized: ["text"] },
   { coll: "marketSnapshots", key: "market", localized: [] },
   { coll: "fxRates", key: "pair", localized: [] },

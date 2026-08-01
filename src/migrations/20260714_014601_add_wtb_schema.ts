@@ -105,6 +105,14 @@ export async function up({ db, payload, req }: MigrateUpArgs): Promise<void> {
   CREATE INDEX "payload_locked_documents_rels_cities_id_idx" ON "payload_locked_documents_rels" USING btree ("cities_id");`)
 }
 
+/**
+ * `IF EXISTS` was added by hand to every DROP CONSTRAINT / DROP INDEX below.
+ *
+ * Payload's generator emits `DROP TABLE … CASCADE` and then separately drops
+ * constraints and indexes that the CASCADE has already removed, so the rollback
+ * aborted on the first of them ("constraint … does not exist"). Verified by
+ * running the full up→down chain against a scratch database. `up` is untouched.
+ */
 export async function down({ db, payload, req }: MigrateDownArgs): Promise<void> {
   await db.execute(sql`
    ALTER TABLE "cities" DISABLE ROW LEVEL SECURITY;
@@ -117,26 +125,26 @@ export async function down({ db, payload, req }: MigrateDownArgs): Promise<void>
   DROP TABLE "articles_briefs" CASCADE;
   DROP TABLE "_articles_v_version_briefs" CASCADE;
   DROP TABLE "sponsor_slots_locales" CASCADE;
-  ALTER TABLE "authors" DROP CONSTRAINT "authors_avatar_id_media_id_fk";
+  ALTER TABLE "authors" DROP CONSTRAINT IF EXISTS "authors_avatar_id_media_id_fk";
   
-  ALTER TABLE "articles_rels" DROP CONSTRAINT "articles_rels_cities_fk";
+  ALTER TABLE "articles_rels" DROP CONSTRAINT IF EXISTS "articles_rels_cities_fk";
   
-  ALTER TABLE "_articles_v_rels" DROP CONSTRAINT "_articles_v_rels_cities_fk";
+  ALTER TABLE "_articles_v_rels" DROP CONSTRAINT IF EXISTS "_articles_v_rels_cities_fk";
   
-  ALTER TABLE "podcasts" DROP CONSTRAINT "podcasts_poster_id_media_id_fk";
+  ALTER TABLE "podcasts" DROP CONSTRAINT IF EXISTS "podcasts_poster_id_media_id_fk";
   
-  ALTER TABLE "payload_locked_documents_rels" DROP CONSTRAINT "payload_locked_documents_rels_cities_fk";
+  ALTER TABLE "payload_locked_documents_rels" DROP CONSTRAINT IF EXISTS "payload_locked_documents_rels_cities_fk";
   
   ALTER TABLE "sponsor_slots" ALTER COLUMN "slot" SET DATA TYPE text;
   DROP TYPE "public"."enum_sponsor_slots_slot";
   CREATE TYPE "public"."enum_sponsor_slots_slot" AS ENUM('homepage_strip', 'dashboard_funding', 'dashboard_ai');
   ALTER TABLE "sponsor_slots" ALTER COLUMN "slot" SET DATA TYPE "public"."enum_sponsor_slots_slot" USING "slot"::"public"."enum_sponsor_slots_slot";
-  DROP INDEX "authors_slug_idx";
-  DROP INDEX "authors_avatar_idx";
-  DROP INDEX "articles_rels_cities_id_idx";
-  DROP INDEX "_articles_v_rels_cities_id_idx";
-  DROP INDEX "podcasts_poster_idx";
-  DROP INDEX "payload_locked_documents_rels_cities_id_idx";
+  DROP INDEX IF EXISTS "authors_slug_idx";
+  DROP INDEX IF EXISTS "authors_avatar_idx";
+  DROP INDEX IF EXISTS "articles_rels_cities_id_idx";
+  DROP INDEX IF EXISTS "_articles_v_rels_cities_id_idx";
+  DROP INDEX IF EXISTS "podcasts_poster_idx";
+  DROP INDEX IF EXISTS "payload_locked_documents_rels_cities_id_idx";
   ALTER TABLE "tenants" DROP COLUMN "features_cities_map";
   ALTER TABLE "authors" DROP COLUMN "slug";
   ALTER TABLE "authors" DROP COLUMN "avatar_id";

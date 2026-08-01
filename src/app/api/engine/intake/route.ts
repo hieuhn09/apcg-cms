@@ -11,6 +11,20 @@
  * allowed on >1 tenant) and `engineDraftId` (idempotency key) and
  * `expectedVersion` (optimistic lock).
  *
+ * Site-specific extensions the live engine already sends (see
+ * content-engine/admin/src/lib/{briefasia,wtb,dtw}-intake-client.ts). Central
+ * MUST accept these or the fields are lost on cutover:
+ *   - `secondarySubSections[{pillarSlug, subSectionSlug}]` (brief-asia) —
+ *     ENRICH-ONLY: annotates a cross-post row that `sections[]` already carries.
+ *   - `subSectionSlugs[]` (WTB) — fallback list for the primary sub-pillar; the
+ *     first entry belonging to the primary pillar wins, the rest are dropped.
+ *   - `citySlugs[]` (WTB) — resolved to the `cities` relationship, lenient.
+ *   - `secondaryPillarSlugs[]` (WTB) — accepted and DELIBERATELY IGNORED. WTB
+ *     feedback round 2 (m01) settled that an article has exactly one pillar;
+ *     honouring these would re-introduce the "one article in two pillars" bug
+ *     the source site already fixed. Logged, never 4xx (the engine still sends
+ *     them and must not break).
+ *
  * Behavior (aligned with the client brief — the engine does NOT publish directly):
  *   - Auth: token → engine → tenant → permission (see engine-auth).
  *   - Feature gate: tenant must have `articles` enabled.
@@ -60,6 +74,11 @@ interface IntakeBody {
   countries?: unknown;
   sourceProvenance?: SourceProvenance;
   publishedAt?: unknown;
+  // Site-specific extensions — see the header note.
+  secondarySubSections?: unknown;
+  subSectionSlugs?: unknown;
+  citySlugs?: unknown;
+  secondaryPillarSlugs?: unknown;
 }
 
 function estimateReadMin(markdown: string): number {
@@ -147,9 +166,17 @@ export async function POST(request: Request): Promise<Response> {
     if (pillarId == null) return json({ ok: false, status: "unprocessable", reason: `unknown pillar: ${pillarSlugStr}` }, 422);
 
     const tagIds = await resolveOrCreateTags(payload, tenant.id, tags);
-    const subSectionId = await resolveSubSection(payload, tenant.id, body.subSectionSlug, pillarId);
-    const secondarySections = await resolveSecondarySections(payload, tenant.id, body.sections, pillarId);
+    // `subSectionSlug` first, then the WTB `subSectionSlugs[]` fallback list.
+    const subSectionId = await resolveSubSection(payload, tenant.id, [body.subSectionSlug, ...toArray(body.subSectionSlugs)], pillarId);
+    const secondarySections = await resolveSecondarySections(payload, tenant.id, body.sections, body.secondarySubSections, pillarId);
     const countryIds = await resolveCountries(payload, body.countries);
+    const cityIds = await resolveCities(payload, tenant.id, body.citySlugs);
+    const ignoredPillars = toArray(body.secondaryPillarSlugs).filter(isNonEmptyString);
+    if (ignoredPillars.length) {
+      // Not an error: WTB settled on one pillar per article (m01). Logged so the
+      // drop is visible rather than silent.
+      payload.logger.info(`[intake] ignoring secondaryPillarSlugs (one pillar per article): ${ignoredPillars.join(", ")}`);
+    }
 
     if (!byline) return json({ ok: false, status: "bad_request", reason: "missing byline (required author)" }, 400);
     const authorId = await resolveOrCreateAuthor(payload, tenant.id, byline, tenant.timezone as string | undefined);
@@ -159,14 +186,21 @@ export async function POST(request: Request): Promise<Response> {
 
     const lexicalBody = await markdownToLexical(payload, bodyMarkdownStr);
 
+    // Per-tenant publish authority. Default OFF (the brief's "human owns
+    // publish"); tenants migrating off a source site that auto-published keep
+    // their cadence by turning this ON, so the cutover is not also an editorial
+    // process change.
+    const autoPublish = tenant.autoPublishEngineDrafts === true;
+    const landedStatus = autoPublish ? "published" : "pending_review";
+
     const created = await scopedCreate({
       payload,
       collection: "articles",
       tenantId: tenant.id,
       context: { engineWrite: true, engineId: engine.id },
       data: {
-        _status: "draft",
-        workflowStatus: "pending_review",
+        _status: autoPublish ? "published" : "draft",
+        workflowStatus: landedStatus,
         origin: "engine",
         editedByHuman: false,
         aiAssisted: true,
@@ -181,6 +215,7 @@ export async function POST(request: Request): Promise<Response> {
         secondarySections,
         country: countryIds[0],
         countries: countryIds,
+        cities: cityIds,
         tags: tagIds,
         author: authorId,
         heroImage: heroImageId,
@@ -194,8 +229,11 @@ export async function POST(request: Request): Promise<Response> {
     });
 
     const id = (created as { id: number | string }).id;
-    await logActivity({ payload, eventType: "engine_write_accepted", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, targetCollection: "articles", targetId: id, toStatus: "pending_review" });
-    return json({ ok: true, articleId: id, status: "pending_review", engineDraftId }, 201);
+    await logActivity({ payload, eventType: "engine_write_accepted", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, targetCollection: "articles", targetId: id, toStatus: landedStatus });
+    // `id` duplicates `articleId`: the live engine clients read `id` (or
+    // `doc.id`) off the response to store cmsPostId. Dropping it would silently
+    // break the engine's article↔CMS link on cutover.
+    return json({ ok: true, id, articleId: id, status: landedStatus, engineDraftId }, 201);
   } catch (err) {
     await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { error: (err as Error).message } });
     // Internal/DB error — transient; engine may retry.
@@ -280,7 +318,8 @@ async function refreshExisting(args: {
     data,
   });
   await logActivity({ payload, eventType: "engine_write_accepted", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, targetCollection: "articles", targetId: articleId, detail: { refreshed: true, skipped: [...locked] } });
-  return json({ ok: true, articleId, status: "refreshed", skippedLockedFields: [...locked] }, 200);
+  // `id` alias — see the note on the create-path response.
+  return json({ ok: true, id: articleId, articleId, status: "refreshed", skippedLockedFields: [...locked] }, 200);
 }
 
 // ── Taxonomy resolution (all tenant-scoped) ─────────────────────────────────
@@ -314,37 +353,70 @@ async function resolveOrCreateTags(
   return ids;
 }
 
-/** Resolve a sub-section slug scoped to tenant + pillar. A stray hint never fails the publish. */
+/** Narrow an unknown wire value to an array without throwing on scalars/null. */
+function toArray(raw: unknown): unknown[] {
+  return Array.isArray(raw) ? raw : [];
+}
+
+/**
+ * Resolve the sub-section from an ordered list of hints, scoped to tenant +
+ * pillar. The FIRST hint that resolves under the primary pillar wins; the rest
+ * are dropped (an article carries at most one sub-pillar). A stray hint never
+ * fails the publish.
+ */
 async function resolveSubSection(
   payload: Awaited<ReturnType<typeof getPayload>>,
   tenantId: number | string,
-  raw: unknown,
+  hints: unknown[],
   pillarId: number | string,
 ): Promise<number | string | undefined> {
-  if (!isNonEmptyString(raw)) return undefined;
-  const r = await scopedFind({
-    payload,
-    collection: "subsections",
-    tenantId,
-    where: { and: [{ slug: { equals: raw.trim() } }, { pillar: { equals: pillarId } }] },
-    limit: 1,
-    depth: 0,
-  });
-  return (r.docs[0] as { id: number | string } | undefined)?.id;
+  const seen = new Set<string>();
+  for (const raw of hints) {
+    if (!isNonEmptyString(raw)) continue;
+    const slug = raw.trim();
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    const r = await scopedFind({
+      payload,
+      collection: "subsections",
+      tenantId,
+      where: { and: [{ slug: { equals: slug } }, { pillar: { equals: pillarId } }] },
+      limit: 1,
+      depth: 0,
+    });
+    const id = (r.docs[0] as { id: number | string } | undefined)?.id;
+    if (id != null) return id;
+  }
+  return undefined;
 }
 
 /**
  * Cross-posts. `sections[]` items are pillar slugs (the live engine contract) or
  * `{ pillar, subSection }` objects. The PRIMARY pillar is excluded (it is not a
  * cross-post — mirrors the source sites); unknown slugs are skipped.
+ *
+ * `enrichment` is brief-asia's `secondarySubSections[{pillarSlug, subSectionSlug}]`:
+ * it never ADDS a cross-post row, it only supplies the sub-section for a pillar
+ * `sections[]` already listed. A pair naming a pillar that is absent from
+ * `sections[]` is ignored, matching the source site.
  */
 async function resolveSecondarySections(
   payload: Awaited<ReturnType<typeof getPayload>>,
   tenantId: number | string,
   raw: unknown,
+  enrichment: unknown,
   primaryPillarId: number | string,
 ): Promise<{ pillar: number | string; subSection: number | string | null }[]> {
   if (!Array.isArray(raw)) return [];
+
+  const subSectionByPillarSlug = new Map<string, string>();
+  for (const pair of toArray(enrichment)) {
+    const p = pair as { pillarSlug?: unknown; subSectionSlug?: unknown };
+    if (!isNonEmptyString(p?.pillarSlug) || !isNonEmptyString(p?.subSectionSlug)) continue;
+    const key = p.pillarSlug.trim();
+    if (!subSectionByPillarSlug.has(key)) subSectionByPillarSlug.set(key, p.subSectionSlug.trim());
+  }
+
   const rows: { pillar: number | string; subSection: number | string | null }[] = [];
   const seen = new Set<number | string>([primaryPillarId]);
   for (const item of raw) {
@@ -360,11 +432,27 @@ async function resolveSecondarySections(
     seen.add(pillarId);
     const subSectionHint = isNonEmptyString((item as { subSection?: unknown })?.subSection)
       ? (item as { subSection: string }).subSection
-      : undefined;
-    const subSectionId = await resolveSubSection(payload, tenantId, subSectionHint, pillarId);
+      : subSectionByPillarSlug.get(pillarSlug);
+    const subSectionId = await resolveSubSection(payload, tenantId, [subSectionHint], pillarId);
     rows.push({ pillar: pillarId, subSection: subSectionId ?? null });
   }
   return rows;
+}
+
+/** WTB destination cities (tenant-scoped, hasMany). Unknown slugs are skipped. */
+async function resolveCities(
+  payload: Awaited<ReturnType<typeof getPayload>>,
+  tenantId: number | string,
+  raw: unknown,
+): Promise<(number | string)[]> {
+  const slugs = [...new Set(toArray(raw).filter(isNonEmptyString).map((c) => c.trim().toLowerCase()))];
+  const ids: (number | string)[] = [];
+  for (const slug of slugs) {
+    const r = await scopedFind({ payload, collection: "cities", tenantId, where: { slug: { equals: slug } }, limit: 1, depth: 0 });
+    const id = (r.docs[0] as { id: number | string } | undefined)?.id;
+    if (id != null) ids.push(id);
+  }
+  return ids;
 }
 
 async function resolveCountries(
