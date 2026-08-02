@@ -50,8 +50,21 @@ export const Media: CollectionConfig = {
   admin: { useAsTitle: "alt", group: "Editorial" },
   access: {
     ...tenantManagedAccess,
-    // Anyone in the tenant may upload; brief-asia parity.
-    read: tenantManagedAccess.read,
+    /**
+     * Image bytes are PUBLIC; write access stays tenant-scoped.
+     *
+     * This is structural, not a convenience. A reader's browser loads images
+     * from `<img src>`, which cannot carry the tenant's Bearer read token — the
+     * token only ever reaches the JSON API. With the tenant-scoped read here,
+     * `/api/media/file/<name>?prefix=<tenant>` answered 403 to every anonymous
+     * request, so the article JSON came back perfect and every image on the page
+     * was broken. Verified against the live deploy before this change.
+     *
+     * Nothing is exposed that was not already public: these are the hero images
+     * of published articles, served openly by each source site today. Upload,
+     * update and delete remain restricted to the owning tenant's editors.
+     */
+    read: () => true,
   },
   upload: {
     mimeTypes: ["image/*"],
