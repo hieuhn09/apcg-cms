@@ -1,8 +1,13 @@
 /**
- * Seed the Central CMS: one System Admin, global Countries, the two MVP tenants
- * (Brief Asia + DTW) with their taxonomy (full fidelity — colors, icons, vi/id
- * titles, sub-sections) and per-tenant modules (DTW newsletters/podcasts/
- * dashboards), and a sample content engine.
+ * Seed the Central CMS: one System Admin, global Countries, all THREE tenants,
+ * and a sample content engine.
+ *
+ * Brief Asia + DTW carry their taxonomy inline at full fidelity (colors, icons,
+ * vi/id titles, sub-sections). WorldTravelBrief deliberately does NOT — its
+ * taxonomy is data-migrated by migrate:import, so seeding it here would hardcode
+ * slugs that must byte-match the source. Only its 5 newsletters are seeded,
+ * because WTB defines those in code rather than data. See the fixture comment on
+ * the world-travel-brief entry for the full reasoning.
  *
  * Idempotent (upsert by slug/email/code). Taxonomy fixtures are treated as the
  * source of truth on re-run (existing rows are updated) — this matters because
