@@ -41,6 +41,12 @@ const MODULES: Record<
     collections: [
       { slug: "marketSnapshots", sort: "order", key: "marketSnapshots" },
       { slug: "fxRates", sort: "order", key: "fxRates" },
+      // FEATURE_COLLECTIONS in lib/constants.ts already counts trendingBlocks as
+      // part of marketData; it was simply missing here, so the collection was
+      // gated behind the feature yet unreachable through the public API.
+      // brief-asia renders it on the homepage, so the omission would have
+      // surfaced as an empty band rather than an error.
+      { slug: "trendingBlocks", sort: "order", key: "trendingBlocks" },
     ],
   },
   dashboards: {

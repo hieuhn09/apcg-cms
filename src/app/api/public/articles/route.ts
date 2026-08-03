@@ -89,6 +89,19 @@ export async function GET(request: Request): Promise<Response> {
     });
   }
 
+  // Author byline page (/author/<slug>). Resolved by slug like every other
+  // taxonomy filter here, so the reader never has to know internal ids.
+  const authorSlug = url.searchParams.get("author");
+  if (authorSlug) {
+    const a = await scopedFind({ payload, collection: "authors", tenantId: tenant.id, where: { slug: { equals: authorSlug } }, limit: 1, depth: 0 });
+    const id = (a.docs[0] as { id?: number | string } | undefined)?.id;
+    if (id == null) return jsonPublic(request, { docs: [], totalDocs: 0, page: 1, totalPages: 0, hasNextPage: false }, 200);
+    // An article carries one primary `author` plus optional `coAuthors`; the
+    // byline page must list both or a co-authored piece vanishes from its own
+    // author's page.
+    and.push({ or: [{ author: { equals: id } }, { coAuthors: { in: [id] } }] });
+  }
+
   const tagSlug = url.searchParams.get("tag");
   if (tagSlug) {
     const t = await scopedFind({ payload, collection: "tags", tenantId: tenant.id, where: { slug: { equals: tagSlug } }, limit: 1, depth: 0 });
