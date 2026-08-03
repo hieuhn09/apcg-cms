@@ -1,4 +1,4 @@
-import type { CollectionConfig } from "payload";
+import type { CollectionConfig, PayloadRequest } from "payload";
 import { editorialContentAccess } from "@/access/collections";
 import { featureGatedAccess, featureGatedReadVersions } from "@/access/features";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
@@ -18,6 +18,10 @@ import { LOCALE_CODES, LOCALE_LABELS } from "@/lib/locales";
 
 const { afterChange: revalidate, afterDelete } = revalidateHooks(["articles:all"]);
 const localeOptions = LOCALE_CODES.map((code) => ({ label: LOCALE_LABELS[code], value: code }));
+
+/** Relationship value → id (Payload hands us either the id or the populated doc). */
+const relId = (v: unknown): unknown =>
+  v != null && typeof v === "object" ? (v as { id?: unknown }).id : v;
 
 /**
  * Articles — the system of record, now tenant-scoped. The `tenant` field is
@@ -166,6 +170,29 @@ export const Articles: CollectionConfig = {
                 if (p == null || p === "") return false;
                 return { pillar: { equals: p } };
               },
+              // filterOptions only narrows the admin dropdown — API writes (engine
+              // intake, scripts) bypass it. Hard-validate so a subSection from a
+              // different pillar can never be saved; readers derive every label from
+              // pillar/subSection, so a mismatch here mislabels the whole site.
+              validate: async (
+                value: unknown,
+                { data, req }: { data?: { pillar?: unknown }; req: PayloadRequest },
+              ) => {
+                const subId = relId(value);
+                if (subId == null) return true; // subSection is optional
+                const primaryId = relId(data?.pillar);
+                if (primaryId == null) return "Pick the Pillar before picking a sub-section.";
+                const sub = await req.payload.findByID({
+                  collection: "subsections",
+                  id: subId as number | string,
+                  depth: 0,
+                  overrideAccess: true,
+                });
+                if (relId(sub?.pillar) !== primaryId) {
+                  return "Sub-section must belong to this article's Pillar. Change the Pillar or pick another sub-section.";
+                }
+                return true;
+              },
               admin: { description: "Sub-section of the PRIMARY pillar (e.g. Finance → Markets). Pick the Pillar first." },
             },
             {
@@ -197,6 +224,27 @@ export const Articles: CollectionConfig = {
                         const p = (siblingData as { pillar?: unknown })?.pillar;
                         if (p == null || p === "") return false;
                         return { pillar: { equals: p } };
+                      },
+                      // Same hard guard as the primary subSection: the row's sub-tab
+                      // must belong to the row's pillar, whatever the write path.
+                      validate: async (
+                        value: unknown,
+                        { siblingData, req }: { siblingData?: { pillar?: unknown }; req: PayloadRequest },
+                      ) => {
+                        const subId = relId(value);
+                        if (subId == null) return true;
+                        const rowPillarId = relId(siblingData?.pillar);
+                        if (rowPillarId == null) return "Pick this row's pillar before picking a sub-tab.";
+                        const sub = await req.payload.findByID({
+                          collection: "subsections",
+                          id: subId as number | string,
+                          depth: 0,
+                          overrideAccess: true,
+                        });
+                        if (relId(sub?.pillar) !== rowPillarId) {
+                          return "Sub-tab must belong to this row's pillar.";
+                        }
+                        return true;
                       },
                       admin: { width: "50%", description: "Optional sub-tab within this row's pillar. Pick the pillar first." },
                     },
