@@ -59,11 +59,21 @@ export const enqueueTranslations: CollectionAfterChangeHook = async ({ doc, req 
       limit: 1,
       depth: 0,
       overrideAccess: true,
+      req,
     });
     if (!existing.docs.length) {
       await req.payload.create({
         collection: "translationJobs",
         overrideAccess: true,
+        // `req` PHẢI được truyền: nó mang transaction đang tạo/cập nhật bài.
+        // Thiếu nó, lệnh này chạy ở giao dịch KHÁC, nơi bài vừa tạo chưa commit —
+        // Payload validate quan hệ `article` không thấy bản ghi và ném
+        // "The following field is invalid: Article", kéo đổ luôn cả lệnh tạo bài.
+        //
+        // Triệu chứng ngoài đời: engine đăng bài, ảnh hero đã lên (commit riêng)
+        // nhưng bài biến mất, engine thử lại vô hạn và để lại media mồ côi. Đã xảy
+        // ra thật với WTB — 28 media mồ côi, 0 bài mới, từ 02/08 tới 03/08.
+        req,
         data: {
           tenant: tenantId,
           article: doc.id,
@@ -100,6 +110,7 @@ export const enqueueTranslations: CollectionAfterChangeHook = async ({ doc, req 
       data: { translationStatus: rows } as never,
       context: { skipTranslationEnqueue: true },
       overrideAccess: true,
+      req,
     });
   }
   return doc;
