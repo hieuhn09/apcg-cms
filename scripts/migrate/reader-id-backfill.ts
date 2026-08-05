@@ -24,8 +24,17 @@
  * the two id spaces overlap. Drop the snapshots by hand after the release is
  * stable; they are deliberately not managed by Drizzle.
  *
- * Re-running is safe: rows already carrying a central id no longer match any
- * `src`, so a second pass reports 0 updates rather than shifting them again.
+ * RE-RUNNING IS NOT SAFE WHEN THE TWO ID SPACES OVERLAP — and they usually do.
+ * A second pass is only a no-op if no destination id is also a source id. On the
+ * brief-asia cutover, 1535 of 1772 destination ids were also source ids, so a
+ * second pass would have moved those rows on to a THIRD article. The
+ * "target id(s) collide with the source id space" line this script prints is
+ * exactly that warning: any non-zero value means run this ONCE.
+ *
+ * To catch rows written after the run (e.g. between the backfill and a cutover),
+ * do NOT re-run — quarantine them instead. They are exactly the rows absent from
+ * the `<table>_pre_central` snapshot, and only while the run is recent enough that
+ * "not in the snapshot" still means "written during the window".
  */
 import "../lib/env";
 import { DRY_RUN, requireEnv } from "../lib/env";

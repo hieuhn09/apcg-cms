@@ -82,9 +82,29 @@ Every script supports `--dry-run`.
    door on the biggest table disappears. Decide per-site before running, and record
    which way you went.
 
-   Whichever way you go: rows written between the backfill and the `CMS_SOURCE`
-   redeploy still carry source ids. Re-run the backfill right after the redeploy —
-   it is idempotent (already-remapped rows match no `src` and report 0 updates).
+   **Do NOT re-run the backfill after the flip.** Rows written between the backfill
+   and the `CMS_SOURCE` redeploy do still carry source ids — but a second pass is
+   only safe when the destination id space is DISJOINT from the source id space,
+   and here it is not: for brief-asia the script itself reported 1535 of 1772
+   destination ids also existing as source ids. A second pass therefore re-remaps
+   rows that were already remapped, moving them to a third article. Measured on the
+   real cutover: 143 rows were written between the backfill and the flip, 81 of
+   which held an id that was still a map key.
+
+   Handle that window by quarantining it instead — the rows are exactly those absent
+   from the `<table>_pre_central` snapshot:
+
+   ```sql
+   CREATE TABLE article_views_flip_window AS
+     SELECT v.* FROM article_views v
+     WHERE NOT EXISTS (SELECT 1 FROM article_views_pre_central s WHERE s.id = v.id);
+   DELETE FROM article_views v
+     WHERE NOT EXISTS (SELECT 1 FROM article_views_pre_central s WHERE s.id = v.id);
+   ```
+
+   Only run this in the minutes right after the flip, while "not in the snapshot"
+   still means "written during the window" — later it also catches legitimate
+   post-flip rows, which already hold correct Central ids.
 8. **Parity verification** (next section) on a staging frontend pointed at Central.
 9. **Engine cutover:** Brief Asia = NEW wiring (register an engine in Central with
    `allowedTenants=[brief-asia]`, mint a token, point the engine at
