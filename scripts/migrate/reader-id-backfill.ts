@@ -87,6 +87,25 @@ async function main() {
           continue;
         }
 
+        // Check the COLUMN too, not just the table. Every table below runs inside
+        // one transaction, so a column that doesn't exist doesn't just fail its own
+        // entry — it throws mid-transaction and rolls back the tables that already
+        // succeeded, including the ones that mattered. That is not hypothetical:
+        // the runbook shipped `follows:article_id` for a year, and brief-asia's
+        // `follows` table tracks pillars and countries by slug and has no
+        // article_id at all. Skipping loudly beats aborting silently-far-away.
+        const columnExists = await tx<{ exists: boolean }[]>`
+          SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = ${table} AND column_name = ${column}
+          ) AS exists`;
+        if (!columnExists[0]?.exists) {
+          console.warn(
+            `[reader-backfill] ${table}.${column}: column not found — SKIPPED (check READER_TABLES; the rest of the run continues)`,
+          );
+          continue;
+        }
+
         const matchedRows = await tx<{ n: number }[]>`
           SELECT count(*)::int AS n FROM ${tx(table)} t
           JOIN _reader_id_map m ON t.${tx(column)} = m.src`;

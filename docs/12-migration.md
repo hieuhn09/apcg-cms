@@ -51,7 +51,40 @@ Every script supports `--dry-run`.
 5. **Media:** either let import re-upload from source URLs (`SOURCE_MEDIA_BASE`), or
    bulk-copy: `SRC_R2_* R2_* COPY_TENANT=brief-asia npm run migrate:media`.
 6. **Import:** `IMPORT_TENANT_SLUG=brief-asia IMPORT_DIR=migration-data/brief-asia SOURCE_MEDIA_BASE=https://briefasia.com npm run migrate:import` (dry-run first).
-7. **Reader backfill:** `READER_DATABASE_URL=… READER_ID_MAP=migration-data/brief-asia/article-id-map.json READER_TABLES=bookmarks:article_id,reading_queue:article_id,reading_history:article_id,follows:article_id npm run migrate:reader-backfill -- --dry-run` then for real.
+7. **Reader backfill:** `READER_DATABASE_URL=… READER_ID_MAP=migration-data/brief-asia/article-id-map.json READER_TABLES=bookmarks:article_id,reading_queue:article_id,reading_history:article_id,article_views:article_id npm run migrate:reader-backfill -- --dry-run` then for real.
+
+   Two corrections to what this line used to say, both verified against brief-asia's schema:
+
+   - **`follows` must NOT be listed.** brief-asia's `follows` table has no
+     `article_id` — it follows pillars and countries (`user_id`, `follow_type`,
+     `pillar_id`, `followed_at`), keyed by slug, so there is nothing to remap.
+     Listing it aborts the ENTIRE backfill: the script checks that each table
+     exists but never that the column does, and it runs every table inside one
+     `sql.begin`, so the bad entry rolls back the tables that had already succeeded.
+   - **`article_views` must BE listed** (or deliberately handled — see below). It
+     is the highest-volume reader table and it feeds the homepage "Most Read" rail.
+     Leaving it out does not empty the rail: source and Central ids are both dense
+     serial integers and overlap by design, so stale ids resolve to *different real
+     articles* and the homepage confidently links the wrong headlines.
+
+   **Alternative for `article_views` (prefer this when the table is large):** only a
+   rolling 24-hour window is ever read from it, and nothing else in the codebase
+   reads it at all. So instead of an irreversible full-table remap, snapshot and
+   drop the pre-flip rows at cutover and let the window refill itself:
+
+   ```sql
+   CREATE TABLE article_views_pre_central AS SELECT * FROM article_views;
+   DELETE FROM article_views WHERE viewed_at < '<flip timestamp>';
+   ```
+
+   Cost: a few hours where "Most Read" shows the existing newest-stories fallback.
+   Benefit: no hours where it confidently shows the wrong stories, and the one-way
+   door on the biggest table disappears. Decide per-site before running, and record
+   which way you went.
+
+   Whichever way you go: rows written between the backfill and the `CMS_SOURCE`
+   redeploy still carry source ids. Re-run the backfill right after the redeploy —
+   it is idempotent (already-remapped rows match no `src` and report 0 updates).
 8. **Parity verification** (next section) on a staging frontend pointed at Central.
 9. **Engine cutover:** Brief Asia = NEW wiring (register an engine in Central with
    `allowedTenants=[brief-asia]`, mint a token, point the engine at
