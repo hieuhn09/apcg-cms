@@ -85,6 +85,10 @@ export const articleBookkeeping: CollectionBeforeChangeHook = ({
   // Translation writes touch one locale's content + the status sidecar only;
   // they must NOT bump version, flip editedByHuman, or mark siblings outdated.
   if ((req.context as { translationWrite?: boolean })?.translationWrite) return data;
+  // System maintenance writes (e.g. cron/unpin-expired clearing an expired pin)
+  // are metadata-only sweeps: same exemption, or every sweep would inflate
+  // `version` and stamp `lastEditedBy` on articles nobody touched.
+  if ((req.context as { systemWrite?: boolean })?.systemWrite) return data;
 
   const ctx = engineCtx(req.context);
   const isHuman = Boolean(req.user);

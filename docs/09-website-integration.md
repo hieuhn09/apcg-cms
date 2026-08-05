@@ -25,7 +25,7 @@ default). Disabled features return **404**.
 | `GET /api/public/articles?locale=&pillar=&country=&tag=&page=&limit=&sort=` | list envelope `{ docs, totalDocs, page, hasNextPage, totalPages }` |
 | `GET /api/public/articles?ids=1,2,3&locale=` | resolve a set by id (saved/history rails) |
 | `GET /api/public/articles?q=&locale=` | search (title/dek) |
-| `GET /api/public/articles?flag=deepDive\|sponsored\|pinnedToLatest` | one-flag feed |
+| `GET /api/public/articles?flag=deepDive\|sponsored\|pinnedToLatest\|breaking` | one-flag feed; `pinnedToLatest` excludes articles whose `pinnedUntil` has passed (empty `pinnedUntil` = pinned until manually unticked; the hourly `cron/unpin-expired` sweep clears the stale checkbox) |
 | `GET /api/public/articles/:slug?locale=` | single `{ doc }` |
 | `GET /api/public/site?locale=` | `{ site:{name,brand,seo,contact,socials,features,…}, pillars:[…] }` |
 | `GET /api/public/menus?type=header\|footer&locale=` | `{ menus:[…] }` |

@@ -282,6 +282,16 @@ export const Articles: CollectionConfig = {
             { name: "affiliate", type: "checkbox", defaultValue: false },
             { name: "deepDive", type: "checkbox", defaultValue: false },
             { name: "pinnedToLatest", type: "checkbox", defaultValue: false, label: "Pin to top of Latest" },
+            {
+              name: "pinnedUntil",
+              type: "date",
+              label: "Pinned until",
+              admin: {
+                date: { pickerAppearance: "dayAndTime" },
+                condition: (data) => Boolean(data?.pinnedToLatest),
+                description: "Optional expiry. Empty = pinned until manually unticked.",
+              },
+            },
             { name: "breaking", type: "checkbox", defaultValue: false, admin: { description: "Marks the story for the breaking-news treatment on the frontend." } },
             { name: "translationAssisted", type: "checkbox", defaultValue: false },
             { name: "longHaul", type: "checkbox", defaultValue: false, admin: { description: "\"The Long Haul\" weekly franchise flag (WTB)." } },

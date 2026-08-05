@@ -45,7 +45,13 @@ export async function GET(request: Request): Promise<Response> {
   const flag = url.searchParams.get("flag");
   if (flag === "deepDive") and.push({ deepDive: { equals: true } });
   if (flag === "sponsored") and.push({ sponsored: { equals: true } });
-  if (flag === "pinnedToLatest") and.push({ pinnedToLatest: { equals: true } });
+  if (flag === "pinnedToLatest") {
+    and.push({ pinnedToLatest: { equals: true } });
+    // Time-boxed pins: an empty pinnedUntil means "pinned until manually
+    // unticked"; a past one means the pin has lapsed even if the hourly
+    // unpin-expired cron has not swept the checkbox yet.
+    and.push({ or: [{ pinnedUntil: { exists: false } }, { pinnedUntil: { greater_than: new Date().toISOString() } }] });
+  }
   if (flag === "breaking") and.push({ breaking: { equals: true } });
 
   const pillarSlug = url.searchParams.get("pillar");
@@ -110,9 +116,21 @@ export async function GET(request: Request): Promise<Response> {
     and.push({ tags: { in: [id] } });
   }
 
-  const countryCode = url.searchParams.get("country");
-  if (countryCode) {
-    const c = await payload.find({ collection: "countries", where: { code: { equals: countryCode.toLowerCase() } }, limit: 1, depth: 0, overrideAccess: true });
+  // Country hub. Accepts EITHER the ISO code ("sg") or the slug ("singapore",
+  // "south-korea") — brief-asia's /country/[slug] routes are addressed by slug and
+  // its reader passes that straight through, while the code form is what this
+  // endpoint originally documented. Matching both keeps one filter for both
+  // conventions instead of a per-site slug→code table that silently drops any
+  // country added later.
+  const country = url.searchParams.get("country");
+  if (country) {
+    const c = await payload.find({
+      collection: "countries",
+      where: { or: [{ slug: { equals: country } }, { code: { equals: country.toLowerCase() } }] },
+      limit: 1,
+      depth: 0,
+      overrideAccess: true,
+    });
     const id = (c.docs[0] as { id?: number | string } | undefined)?.id;
     if (id == null) return jsonPublic(request, { docs: [], totalDocs: 0, page: 1, totalPages: 0, hasNextPage: false }, 200);
     and.push({ or: [{ country: { equals: id } }, { countries: { in: [id] } }] });

@@ -128,6 +128,7 @@ export const ACTIVITY_EVENTS = [
   "media_uploaded",
   "membership_changed",
   "integration_error",
+  "pin_expired",
 ] as const;
 export type ActivityEvent = (typeof ACTIVITY_EVENTS)[number];
 
