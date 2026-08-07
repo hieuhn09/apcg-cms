@@ -90,10 +90,27 @@ async function main() {
     try {
       const published = await fetchAll(token, collection, false);
       const drafts = VERSIONED.has(collection) ? await fetchAll(token, collection, true) : [];
-      // Merge by id, preferring the draft view (it carries the latest unpublished state).
+      // Merge by id, preferring the draft view — it carries the latest unpublished
+      // state, so an editor's in-progress work survives the migration.
+      //
+      // But keep the PUBLISHED doc's `_status`. The draft view reports
+      // `_status: "draft"` for any article with pending edits, and the importer maps
+      // that straight to `workflowStatus`, which is what the public API filters on.
+      // Taking the draft's status wholesale therefore UNPUBLISHES an article that is
+      // live on the source site right now: it silently disappears from the new site
+      // while every count still reconciles, because the row is present — just
+      // invisible. Measured on the dtw cutover: 1 article of 1245, identical title
+      // and dek, 22 characters of body difference, and it would have 404'd.
+      //
+      // Preferring draft CONTENT with published STATUS keeps both properties: no
+      // editor work is lost, and nothing that is live today goes dark.
       const byId = new Map<unknown, unknown>();
       for (const d of published) byId.set((d as { id: unknown }).id, d);
-      for (const d of drafts) byId.set((d as { id: unknown }).id, d);
+      for (const d of drafts) {
+        const id = (d as { id: unknown }).id;
+        const pub = byId.get(id) as { _status?: unknown } | undefined;
+        byId.set(id, pub?._status ? { ...(d as object), _status: pub._status } : d);
+      }
       const merged = [...byId.values()];
 
       if (DRY_RUN) {
