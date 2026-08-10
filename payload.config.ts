@@ -69,6 +69,16 @@ const allowedOrigins = (process.env.PUBLIC_API_ALLOWED_ORIGINS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+// Public base URL of the R2 bucket (custom domain or r2.dev), WITHOUT a
+// trailing slash — e.g. https://media.apcg.example. When set, media doc URLs
+// point STRAIGHT at R2/Cloudflare instead of `/api/media/file/...`, so image
+// bytes stop streaming through this deployment's serverless functions (which
+// was billed as Vercel fast origin transfer on every reader page view — R2
+// egress is free and Cloudflare CDN-caches it). When unset, behavior is
+// unchanged: URLs stay on the Payload API path. Object keys are
+// `<tenant-prefix>/<filename>`, mirrored by generateFileURL below.
+const r2PublicBaseUrl = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, "");
+
 export default buildConfig({
   admin: {
     user: Users.slug,
@@ -183,7 +193,18 @@ export default buildConfig({
             // vary per tenant. Keys land as `<tenant>/<filename>`, matching
             // scripts/migrate/copy-media.ts. Leave useCompositePrefixes off: the
             // doc prefix must win outright.
-            collections: { media: true },
+            collections: {
+              media: r2PublicBaseUrl
+                ? {
+                    // Serve image bytes directly from the R2 public domain.
+                    // Access control loss is nil: Media read access is already
+                    // `() => true` (published hero images are public bytes).
+                    disablePayloadAccessControl: true,
+                    generateFileURL: ({ filename, prefix }) =>
+                      `${r2PublicBaseUrl}/${prefix ? `${prefix}/` : ""}${encodeURIComponent(filename)}`,
+                  }
+                : true,
+            },
             alwaysInsertFields: true,
             clientUploads: true,
             bucket: process.env.R2_BUCKET as string,
