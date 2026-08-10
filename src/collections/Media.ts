@@ -1,5 +1,6 @@
-import type { CollectionConfig, FieldHook } from "payload";
+import type { CollectionAfterChangeHook, CollectionConfig, FieldHook } from "payload";
 import { tenantManagedAccess } from "@/access/collections";
+import { r2, r2MoveObject, r2ObjectExists } from "@/lib/r2";
 
 /**
  * Resolve the R2 key prefix for an upload: the owning tenant's slug.
@@ -29,6 +30,40 @@ const tenantKeyPrefix: FieldHook = async ({ value, data, originalDoc, operation,
     overrideAccess: true,
   });
   return (found as { slug?: string } | null)?.slug ?? value;
+};
+
+/**
+ * Client uploads strand the ORIGINAL file at the bucket root: with
+ * `clientUploads: true` the browser PUTs via a presigned URL that is signed
+ * BEFORE this doc (and its `prefix` hook) exists, so the key has no tenant
+ * prefix. The imageSizes derivatives are generated server-side during create
+ * and DO land under `<prefix>/`. Result: doc says `prefix=brief-asia`, the
+ * original sits at `<filename>`, and `/api/media/file/<filename>` 404s — every
+ * admin-uploaded image was broken this way (verified live 10-08-2026, three
+ * stranded objects). Server-side uploads (engine intake, REST with file bytes)
+ * are unaffected — the storage plugin writes those with the prefix.
+ *
+ * Fix: after create, if the object is missing at its prefixed key but present
+ * at the bare filename, move it into place. Best-effort: a failure logs and
+ * leaves the doc intact (bytes still recoverable at the root key).
+ */
+const relocateStrandedUpload: CollectionAfterChangeHook = async ({ doc, operation, req }) => {
+  if (operation !== "create" || !r2) return doc;
+  const { prefix, filename } = doc as { prefix?: string; filename?: string };
+  if (!prefix || !filename) return doc;
+  try {
+    const wantKey = `${prefix}/${filename}`;
+    if (await r2ObjectExists(wantKey)) return doc; // server-side upload: already right
+    if (await r2ObjectExists(filename)) {
+      await r2MoveObject(filename, wantKey);
+      req.payload.logger.info(`media: relocated client upload ${filename} -> ${wantKey}`);
+    }
+  } catch (err) {
+    req.payload.logger.warn(
+      `media: failed to relocate client upload ${filename}: ${(err as Error).message}`,
+    );
+  }
+  return doc;
 };
 
 /**
@@ -65,6 +100,9 @@ export const Media: CollectionConfig = {
      * update and delete remain restricted to the owning tenant's editors.
      */
     read: () => true,
+  },
+  hooks: {
+    afterChange: [relocateStrandedUpload],
   },
   upload: {
     mimeTypes: ["image/*"],
