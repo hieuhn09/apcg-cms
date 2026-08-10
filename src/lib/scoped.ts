@@ -28,7 +28,22 @@ export interface ScopedFindArgs {
   publishedOnly?: boolean;
 }
 
-/** Merge a tenant (and optional published) constraint into a caller's where. */
+/**
+ * Merge a tenant (and optional published) constraint into a caller's where.
+ *
+ * WHY the public articles routes do NOT use `publishedOnly` (_status filter),
+ * and must not casually gain it: ~3,300 live articles (the 2026-08 migration
+ * imports across all three tenants) sit on the main table with
+ * `_status: "draft"` + `workflowStatus: "published"` — they were created by
+ * import scripts, never natively Published, and ARE the live site. An _status
+ * filter would hide most of every site's archive. The public visibility
+ * contract is `workflowStatus` alone, and it is safe because Payload never
+ * writes a draft save to the main table — the one thing that ever did was our
+ * own system write-backs base-merging from the latest draft version
+ * (enqueueTranslations, cron/unpin-expired; both draft-guarded 10-08-2026).
+ * Any NEW system write on articles must follow the same rule: skip or pass
+ * `draft: true` when the doc's latest version is a draft.
+ */
 function withTenant(
   tenantId: number | string,
   where?: Where,

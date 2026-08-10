@@ -32,6 +32,8 @@ interface ExpiredPin {
   tenant?: unknown;
   slug?: string;
   pinnedUntil?: string | null;
+  /** From the draft:true find — the LATEST version's status, draft included. */
+  _status?: string;
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -86,6 +88,15 @@ export async function GET(request: Request): Promise<Response> {
         // phải chạy vòng enqueue dịch (dù nó idempotent). Revalidate vẫn chạy.
         context: { systemWrite: true, skipTranslationEnqueue: true },
         data: { pinnedToLatest: false, pinnedUntil: null },
+        // Draft-safe sweep: `payload.update` base-merges from the LATEST
+        // version. When the article has a pending draft on top of its live
+        // row (raw came from a draft:true find, so raw._status tells us), a
+        // plain update would publish that half-written draft as a side effect
+        // of clearing a pin flag. Sweep the draft surface instead — readers
+        // are already covered by the read-time expiry filter in the public
+        // articles route, so the live row's stale flag is harmless until the
+        // editor's next publish.
+        draft: raw._status === "draft",
       });
       unpinned.push({ id: raw.id, slug: raw.slug });
       await logActivity({

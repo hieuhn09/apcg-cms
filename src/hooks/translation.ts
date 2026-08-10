@@ -24,6 +24,19 @@ export const enqueueTranslations: CollectionAfterChangeHook = async ({ doc, req 
   const ctx = (req.context as { skipTranslationEnqueue?: boolean }) ?? {};
   if (ctx.skipTranslationEnqueue) return doc;
   if (doc.workflowStatus !== "published") return doc;
+  // DRAFT saves must not fan out — and, critically, must not reach the
+  // write-back below. Payload never touches the live row on a draft save, but
+  // `payload.update` (no `draft`) base-merges from the LATEST version. So when
+  // this hook fired on a Save-Draft of a live article, its write-back merged
+  // the fresh DRAFT into the live row: unpublished edits leaked straight onto
+  // the site and `_status` flipped to draft (reproduced 10-08-2026). Skipping
+  // draft saves costs nothing: the eventual Publish re-fires this hook and the
+  // stale-marking in articleBookkeeping has already flagged outdated locales.
+  // (`=== "draft"` not `!== "published"`: imported rows live with _status
+  // "draft" on the main table, and engine updates carry an explicit _status —
+  // only a true draft-save ever presents "draft" here on a published-workflow
+  // article.)
+  if ((doc as { _status?: string })._status === "draft") return doc;
 
   const tenantId = toId(doc.tenant);
   if (tenantId == null) return doc;
