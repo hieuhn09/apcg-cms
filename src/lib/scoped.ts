@@ -24,6 +24,8 @@ export interface ScopedFindArgs {
   page?: number;
   sort?: string;
   depth?: number;
+  /** Field selection (Payload `select`) — used by lightweight list views (e.g. sitemap refs). */
+  select?: Parameters<Payload["find"]>[0]["select"];
   /** When true, only return published rows (public API default). */
   publishedOnly?: boolean;
 }

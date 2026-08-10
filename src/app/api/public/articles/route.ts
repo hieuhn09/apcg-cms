@@ -24,7 +24,14 @@ export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const locale = clampLocale(url.searchParams.get("locale"), supportedLanguages(tenant), tenant.defaultLanguage);
   const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
-  const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? "20") || 20));
+  // view=refs — sitemap/feed enumeration: slug + dates only, no body, no
+  // relationships. Exists because a reader paging the FULL docs to enumerate a
+  // ~3k-article archive pulls tens of MB (brief-asia's sitemap build died on
+  // exactly that); refs pages are ~60 bytes/article, so the cap is 1000 not 50.
+  const refsView = url.searchParams.get("view") === "refs";
+  const maxLimit = refsView ? 1000 : 50;
+  const defaultLimit = refsView ? "1000" : "20";
+  const limit = Math.min(maxLimit, Math.max(1, Number(url.searchParams.get("limit") ?? defaultLimit) || 20));
   const sort = url.searchParams.get("sort") ?? "-publishedAt";
 
   const and: Where[] = [{ workflowStatus: { equals: "published" } }];
@@ -145,7 +152,8 @@ export async function GET(request: Request): Promise<Response> {
     page,
     limit,
     sort,
-    depth: 1,
+    depth: refsView ? 0 : 1,
+    ...(refsView ? { select: { slug: true, updatedAt: true, publishedAt: true } } : {}),
   });
 
   return jsonPublic(request, result, 200);
