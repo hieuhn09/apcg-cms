@@ -7,6 +7,7 @@ import {
   articleBookkeeping,
   articleActivity,
   enforceStatusAuthority,
+  syncNativePublish,
 } from "@/hooks/article-workflow";
 import { enqueueTranslations } from "@/hooks/translation";
 import {
@@ -53,7 +54,9 @@ export const Articles: CollectionConfig = {
     readVersions: featureGatedReadVersions("articles"),
   },
   hooks: {
-    beforeValidate: [enforceStatusAuthority],
+    // Order matters: syncNativePublish may raise workflowStatus to "published";
+    // enforceStatusAuthority must then judge that raised value.
+    beforeValidate: [syncNativePublish, enforceStatusAuthority],
     beforeChange: [articleBookkeeping],
     afterChange: [revalidate, articleActivity, enqueueTranslations],
     afterDelete: [afterDelete],

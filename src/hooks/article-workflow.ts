@@ -45,6 +45,52 @@ function statusOf(data: Record<string, unknown>, fallback?: unknown): ArticleSta
   return v;
 }
 
+/**
+ * Native Publish → workflowStatus sync.
+ *
+ * Articles carry TWO independent statuses: Payload's version `_status` (the
+ * admin's big Publish/Save Draft buttons) and the editorial `workflowStatus`
+ * select (Workflow tab, defaults to "draft"). The public read API filters ONLY
+ * on `workflowStatus === "published"` — so an editor who clicked Publish but
+ * never touched the Workflow tab shipped an article that exists as "published"
+ * in Payload yet never appears on the site. This happened in production
+ * (article 4016, 10-08-2026) and is trivially reproducible.
+ *
+ * Rule: a HUMAN clicking Publish (incoming `_status: "published"`) means "put
+ * this live", so workflowStatus follows — with two carve-outs:
+ *   - An EXPLICIT workflowStatus change in the same save wins (the admin form
+ *     always posts the select's value, so "explicit" = value differs from the
+ *     stored one). Publishing while flipping the select to draft/archived is a
+ *     deliberate take-down and must not be overridden.
+ *   - "scheduled" is exempt: the publish-scheduled cron owns that transition
+ *     at `scheduledFor`; Publish on a scheduled article just saves edits.
+ *
+ * Runs BEFORE enforceStatusAuthority in beforeValidate, so a contributor
+ * without publish rights who clicks Publish is still rejected by the authority
+ * gate (their sync target "published" is not in CONTRIBUTOR_ALLOWED_STATUSES).
+ * Engine/system writes (no req.user) are untouched — the engine must never
+ * publish directly.
+ */
+const SYNCABLE_STATUSES: ArticleStatus[] = ["draft", "pending_review", "approved"];
+
+export const syncNativePublish: CollectionBeforeValidateHook = ({ data, originalDoc, operation, req }) => {
+  if (!data || !req.user) return data;
+  if ((data as { _status?: string })._status !== "published") return data;
+
+  const stored = originalDoc?.workflowStatus as ArticleStatus | undefined;
+  const incoming = data.workflowStatus as ArticleStatus | undefined;
+
+  // Explicit change in the same save wins (update only — on create the form
+  // default "draft" is not an editorial choice to keep the article hidden).
+  if (operation === "update" && incoming !== undefined && stored !== undefined && incoming !== stored) {
+    return data;
+  }
+
+  const target = incoming ?? stored ?? "draft";
+  if (SYNCABLE_STATUSES.includes(target)) data.workflowStatus = "published";
+  return data;
+};
+
 export const enforceStatusAuthority: CollectionBeforeValidateHook = ({
   data,
   originalDoc,
