@@ -121,6 +121,12 @@ export default buildConfig({
     TranslationJobs,
   ],
   editor: lexicalEditor(),
+  // Vercel serverless bodies cap at ~4.5MB, so anything larger dies as an
+  // opaque 413 before Payload sees it. Capping just below that turns an
+  // oversized editor upload into a clear "Exceeded file size limit" error in
+  // the admin instead. Editors should resize to ≤1600px anyway (the largest
+  // imageSize derivative the reader sites ever request).
+  upload: { limits: { fileSize: 4 * 1024 * 1024 } },
   secret: payloadSecret,
   typescript: {
     outputFile: path.resolve(dirname, "src/payload-types.ts"),
@@ -206,7 +212,13 @@ export default buildConfig({
                 : true,
             },
             alwaysInsertFields: true,
-            clientUploads: true,
+            // clientUploads is intentionally OFF. The browser-side presigned PUT
+            // signs the RAW file.name while Payload sanitizes the doc filename at
+            // create ("...SAC .JPG" → "...SAC.JPG"), so the original strands under
+            // a key no lookup ever hits (4 broken editor uploads, 11-08-2026). It
+            // buys nothing here anyway: the admin create POST still carries the
+            // file bytes for imageSizes, so Vercel's body limit applies either
+            // way — and server-side writes need no bucket CORS.
             bucket: process.env.R2_BUCKET as string,
             config: {
               endpoint: process.env.R2_ENDPOINT,

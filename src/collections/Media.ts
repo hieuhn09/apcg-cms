@@ -46,6 +46,12 @@ const tenantKeyPrefix: FieldHook = async ({ value, data, originalDoc, operation,
  * Fix: after create, if the object is missing at its prefixed key but present
  * at the bare filename, move it into place. Best-effort: a failure logs and
  * leaves the doc intact (bytes still recoverable at the root key).
+ *
+ * NOTE 11-08-2026: `clientUploads` is now disabled in payload.config (the
+ * browser signed the RAW file.name while the doc got the sanitized filename —
+ * e.g. "...SAC .JPG" vs "...SAC.JPG" — so this hook's root lookup missed too
+ * and four editor uploads broke). With server-side uploads the original lands
+ * on the prefixed key directly; this hook stays as a no-op backstop.
  */
 const relocateStrandedUpload: CollectionAfterChangeHook = async ({ doc, operation, req }) => {
   if (operation !== "create" || !r2) return doc;
