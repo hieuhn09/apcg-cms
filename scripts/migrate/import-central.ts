@@ -97,6 +97,31 @@ function remapRel(coll: string, sourceVal: unknown): unknown {
   return mapped ?? undefined;
 }
 
+/**
+ * Remap upload nodes INSIDE a richtext value. Relationship FIELDS go through
+ * remapRel, but a Lexical body embeds media ids in its upload nodes — copied
+ * verbatim they keep SOURCE ids, which in the shared central media table belong
+ * to whichever tenant landed on that serial first (found 12-08-2026: brief-asia's
+ * EHG interview rendered WTB's World Cup/Qantas images inline). Rows imported
+ * before this fix were repaired by scripts/migrate/fix-body-upload-refs.ts.
+ */
+function remapUploadNodes(node: unknown): void {
+  if (Array.isArray(node)) {
+    for (const c of node) remapUploadNodes(c);
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  const obj = node as Record<string, unknown>;
+  if (obj.type === "upload") {
+    const raw = idOf(obj.value);
+    const mapped = idMaps.media?.get(raw) ?? idMaps.media?.get(Number(raw));
+    if (mapped != null) obj.value = mapped;
+    else if (raw != null) console.warn(`[import] richtext upload node references unmapped media id ${String(raw)} — left as-is`);
+  }
+  if (obj.root) remapUploadNodes(obj.root);
+  if (Array.isArray(obj.children)) remapUploadNodes(obj.children);
+}
+
 function idOf(v: unknown): unknown {
   if (v && typeof v === "object" && "id" in (v as Record<string, unknown>)) return (v as { id: unknown }).id;
   return v;
@@ -471,6 +496,7 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
     if (plan.coll === "articles") {
       base.workflowStatus = published ? "published" : "draft";
       base.origin = base.origin ?? "import";
+      if (base.body) remapUploadNodes(base.body);
     }
     plan.transform?.(d, base);
 
@@ -494,6 +520,7 @@ async function importPlan(payload: Awaited<ReturnType<typeof getPayload>>, tenan
         const val = localeValue(d[srcField(f)], locale);
         if (val !== undefined && val !== null) patch[f] = val;
       }
+      if (plan.coll === "articles" && patch.body) remapUploadNodes(patch.body);
       if (Object.keys(patch).length) {
         try {
           await pUpdate(payload, plan.coll, newDoc.id as number | string, patch, { locale, context: ctx, draft: asDraft });
