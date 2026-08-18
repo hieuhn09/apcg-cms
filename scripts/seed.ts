@@ -29,7 +29,7 @@ import { LOCALE_CODES, type LocaleCode } from "../src/lib/locales";
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL || "admin@example.com";
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD || "change-me-now";
 
-const COUNTRIES = [
+const COUNTRIES: ReadonlyArray<{ code: string; name: string; slug: string; region?: string }> = [
   { code: "sg", name: "Singapore", slug: "singapore", region: "southeast-asia" },
   { code: "vn", name: "Vietnam", slug: "vietnam", region: "southeast-asia" },
   { code: "id", name: "Indonesia", slug: "indonesia", region: "southeast-asia" },
@@ -45,6 +45,29 @@ const COUNTRIES = [
   { code: "bd", name: "Bangladesh", slug: "bangladesh", region: "south-asia" },
   { code: "lk", name: "Sri Lanka", slug: "sri-lanka", region: "south-asia" },
   { code: "pk", name: "Pakistan", slug: "pakistan", region: "south-asia" },
+  // Beyond-Asia coverage (GCV is a global title). `region` stays unset — the
+  // select only carries Asian options and widening a Payload select enum needs
+  // a schema migration; region is optional reference data anyway.
+  { code: "hk", name: "Hong Kong", slug: "hong-kong" },
+  { code: "mv", name: "Maldives", slug: "maldives" },
+  { code: "np", name: "Nepal", slug: "nepal" },
+  { code: "mn", name: "Mongolia", slug: "mongolia" },
+  { code: "ae", name: "United Arab Emirates", slug: "united-arab-emirates" },
+  { code: "sa", name: "Saudi Arabia", slug: "saudi-arabia" },
+  { code: "fr", name: "France", slug: "france" },
+  { code: "it", name: "Italy", slug: "italy" },
+  { code: "gr", name: "Greece", slug: "greece" },
+  { code: "gb", name: "United Kingdom", slug: "united-kingdom" },
+  { code: "se", name: "Sweden", slug: "sweden" },
+  { code: "no", name: "Norway", slug: "norway" },
+  { code: "dk", name: "Denmark", slug: "denmark" },
+  { code: "al", name: "Albania", slug: "albania" },
+  { code: "us", name: "United States", slug: "united-states" },
+  { code: "ca", name: "Canada", slug: "canada" },
+  { code: "mx", name: "Mexico", slug: "mexico" },
+  { code: "cl", name: "Chile", slug: "chile" },
+  { code: "ke", name: "Kenya", slug: "kenya" },
+  { code: "mz", name: "Mozambique", slug: "mozambique" },
 ] as const;
 
 interface PillarFixture {
@@ -221,6 +244,24 @@ const TENANTS: TenantFixture[] = [
     pillars: [],
     sectors: [],
   },
+  {
+    slug: "gcv",
+    name: "Global Chic Voyage",
+    defaultLanguage: "en",
+    // EN-only v1 (positioning brief promises multi-language later; keep the door open by adding codes here when it happens).
+    supportedLanguages: ["en"],
+    features: { articles: true, newsletters: true, podcasts: true, marketData: false, sponsorSlots: false, wireDrops: false, corrections: true, translations: false, dashboards: false },
+    autoPublishEngineDrafts: true,
+    // GCV visual rule: "never a colour per section" — every pillar carries the clay accent.
+    pillars: [
+      { slug: "trends-inspiration", title: "Trends & Inspiration", heading: "Trends & Inspiration", color: "var(--gcv-clay)", icon: "trend-up", order: 1, description: "Where taste in travel is moving and why: the behaviours, ideas and desires shaping the season ahead." },
+      { slug: "style-culture", title: "Style & Culture", heading: "Style & Culture", color: "var(--gcv-clay)", icon: "star", order: 2, description: "The aesthetics of the journey: craft, fashion, art, ritual and the cultures that shape how the world travels well." },
+      { slug: "destinations", title: "Destinations", heading: "Destinations", color: "var(--gcv-clay)", icon: "globe", order: 3, description: "The case for a place, written from inside it, with Asia as home ground." },
+      { slug: "retreat", title: "Retreat", heading: "Retreat", color: "var(--gcv-clay)", icon: "product", order: 4, description: "Hotels, resorts, wellness and sanctuary properties, reviewed to a critic's standard: the heart of the masthead." },
+      { slug: "dining", title: "Dining", heading: "Dining", color: "var(--gcv-clay)", icon: "spark", order: 5, description: "The tables worth travelling for: from Michelin rooms and fine dining to market-to-table and the hidden counter." },
+    ],
+    sectors: [],
+  },
 ];
 
 // DTW modules — ported from dtw-web/apps/web/src/lib/data.ts (static fixtures
@@ -277,6 +318,14 @@ const WTB_NEWSLETTERS = [
   { slug: "access-alert", name: "Access Alert", cadence: "As it happens (Live)", description: "Visa changes, entry rules and disruption, sent the moment they move. For the traveller who books on the news." },
   { slug: "where-next", name: "Where Next", cadence: "Monthly", description: "The rising map. The places the world is heading before the crowd arrives, with the reporting on why." },
   { slug: "the-table", name: "The Table", cadence: "Fortnightly · Thursday", description: "Where the world is eating now — new tables, chef moves and the reservations worth planning a whole trip around." },
+] as const;
+
+// GCV "The Letters" — from the design prototype's newsletter page (4 letters).
+const GCV_NEWSLETTERS = [
+  { slug: "the-sunday-essay", name: "The Sunday Essay", cadence: "Weekly", description: "One long read on a place worth the detour, from an editor who actually went. No listicles, no sponsored stops." },
+  { slug: "the-voyage-dispatch", name: "The Voyage Dispatch", cadence: "Twice weekly", description: "What changed this week in the places our readers actually go. New rooms, new routes, and new rules at the border." },
+  { slug: "the-reservation", name: "The Reservation", cadence: "Monthly", description: "Where our dining desk is booking, and the tables worth flying for. Written before the wait list forms." },
+  { slug: "the-retreat-edit", name: "The Retreat Edit", cadence: "Seasonal", description: "The spas, sailings and slow weeks we would spend our own money on. Twice a season, never more." },
 ] as const;
 
 type P = Awaited<ReturnType<typeof getPayload>>;
@@ -443,6 +492,19 @@ async function main() {
         );
       }
       console.log(`[seed] wtb newsletters ready (${WTB_NEWSLETTERS.length})`);
+    }
+
+    // ── GCV newsletters (4 "Letters"; articles/media/tags are data-migrated from the legacy gcv Postgres) ──
+    if (t.slug === "gcv") {
+      for (const [i, n] of GCV_NEWSLETTERS.entries()) {
+        await upsert(
+          payload,
+          "newsletters",
+          { and: [{ tenant: { equals: tenant.id } }, { slug: { equals: n.slug } }] },
+          { tenant: tenant.id, slug: n.slug, name: n.name, cadence: n.cadence, description: n.description, active: true, order: i + 1 },
+        );
+      }
+      console.log(`[seed] gcv newsletters ready (${GCV_NEWSLETTERS.length})`);
     }
   }
 
