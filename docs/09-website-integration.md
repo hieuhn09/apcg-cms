@@ -23,10 +23,31 @@ default). Disabled features return **404**.
 | Endpoint | Returns |
 |---|---|
 | `GET /api/public/articles?locale=&pillar=&country=&tag=&page=&limit=&sort=` | list envelope `{ docs, totalDocs, page, hasNextPage, totalPages }` |
+| `GET /api/public/articles?content_type=article\|daily-brief` | narrow by what the document is; **omit to get everything** (default). Combines with every other filter above |
 | `GET /api/public/articles?ids=1,2,3&locale=` | resolve a set by id (saved/history rails) |
 | `GET /api/public/articles?q=&locale=` | search (title/dek) |
 | `GET /api/public/articles?flag=deepDive\|sponsored\|pinnedToLatest\|breaking` | one-flag feed; `pinnedToLatest` excludes articles whose `pinnedUntil` has passed (empty `pinnedUntil` = pinned until manually unticked; the hourly `cron/unpin-expired` sweep clears the stale checkbox) |
 | `GET /api/public/articles/:slug?locale=` | single `{ doc }` |
+
+#### `content_type` — keeping daily briefs out of news feeds
+
+The content-engine publishes a machine-composed AM/PM digest through the same
+intake as ordinary articles, marked `contentType: "daily-brief"`. Left alone it
+lands in every surface a site treats as "articles" — hero, latest, section
+feeds, related, RSS, sitemap.
+
+A site opts into filtering per call site:
+
+- news surfaces → `content_type=article`
+- a brief archive page → `content_type=daily-brief`
+- single article (`/:slug`) → never filtered; the brief's own page must resolve
+- **`ids=` → do not filter.** The saved/history rails resolve by id, and a reader
+  who saved a brief has to get it back. The endpoint never infers the filter, so
+  this is only wrong if a caller passes `content_type` alongside `ids`.
+
+Filtering is a positive match. Never invert it client-side: ordinary articles
+carry `"article"` and briefs carry `"daily-brief"`, so `equals` is always
+sufficient and never risks dropping rows.
 | `GET /api/public/site?locale=` | `{ site:{name,brand,seo,contact,socials,features,…}, pillars:[…] }` |
 | `GET /api/public/menus?type=header\|footer&locale=` | `{ menus:[…] }` |
 | `GET /api/public/podcasts\|newsletters\|corrections\|wire\|market?locale=` | `{ data:{ … } }` (feature-gated) |

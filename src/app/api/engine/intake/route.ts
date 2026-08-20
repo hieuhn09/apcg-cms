@@ -40,6 +40,7 @@ import { getPayload } from "payload";
 import config from "@payload-config";
 import { authenticateEngine } from "@/lib/engine-auth";
 import { scopedCreate, scopedUpdate, scopedFind } from "@/lib/scoped";
+import { toContentTypeValue } from "@/lib/constants";
 import { featureEnabled } from "@/lib/tenant";
 import { markdownToLexical } from "@/lib/markdown";
 import { logActivity } from "@/lib/activity";
@@ -68,6 +69,7 @@ interface IntakeBody {
   heroImageUrl?: unknown;
   imageCredit?: unknown;
   byline?: unknown;
+  contentType?: unknown;
   slug?: unknown;
   sections?: unknown;
   subSectionSlug?: unknown;
@@ -132,6 +134,11 @@ export async function POST(request: Request): Promise<Response> {
   if (!slug) return json({ ok: false, status: "bad_request", reason: "could not derive slug" }, 400);
   const dek = isNonEmptyString(body.dek) ? body.dek.trim() : titleStr.slice(0, 200);
   const byline = isNonEmptyString(body.byline) ? body.byline.trim() : "";
+  // What the document IS. Absent on every ordinary article — engine-written and
+  // hand-written alike — so an unrecognised value falls back to "article" rather
+  // than 400ing: this endpoint carries five publications' daily output and must
+  // not start rejecting posts over a metadata field it doesn't recognise.
+  const contentType = toContentTypeValue(body.contentType) ?? "article";
   const tags = Array.isArray(body.tags) ? body.tags.filter(isNonEmptyString).map((t) => t.trim()) : [];
   const takeaways = Array.isArray(body.takeaways)
     ? body.takeaways.filter(isNonEmptyString).map((t) => t.trim()).join("\n") || undefined
@@ -202,6 +209,7 @@ export async function POST(request: Request): Promise<Response> {
       data: {
         _status: autoPublish ? "published" : "draft",
         workflowStatus: landedStatus,
+        contentType,
         origin: "engine",
         editedByHuman: false,
         aiAssisted: true,
