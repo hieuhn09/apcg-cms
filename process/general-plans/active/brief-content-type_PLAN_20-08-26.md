@@ -112,7 +112,7 @@ if (contentType === "article" || contentType === "daily-brief") {
 `resolveOrCreateAuthor` (`intake/route.ts:476-486`) tìm theo `name` trước rồi mới tạo với `role: "Staff Writer"`. Seed sẵn một hàng để nó nối vào thay vì tạo mới:
 
 ```
-tenant: dtw · name: "DTW Briefing Desk" · role: "Newsroom systems" · city: (để trống)
+tenant: dtw · name: "DTW Briefing Desk" · role: "Dailytechwire Newsroom" · city: "Singapore"
 ```
 
 Không phải sửa code intake. Sửa lại `role` bất cứ lúc nào trong `/admin`, không cần deploy.
@@ -152,7 +152,7 @@ Chạy trên **local + dữ liệu thật đã pull** trước khi deploy. `T` =
 | 8 | `GET /api/public/articles?content_type=bogus&limit=1` | `totalDocs` = **T** (bỏ qua như vắng mặt) |
 | 9 | `GET /api/public/articles?view=refs&content_type=article&limit=1000` | không lỗi, đếm khớp |
 | 10 | POST intake một bài giả có `"contentType":"daily-brief"` | tạo được; `/admin` hiện "Daily brief"; **(5) vẫn = T; (7) = 1** |
-| 11 | Lặp lại (10) với byline `DTW Briefing Desk` | **không** sinh Author mới; nối vào hàng đã seed; `role` vẫn là "Newsroom systems" |
+| 11 | Lặp lại (10) với byline `DTW Briefing Desk` | **không** sinh Author mới; nối vào hàng đã seed; `role` vẫn là "Dailytechwire Newsroom" |
 | 12 | POST intake một bài giả **không** có `contentType` | lưu thành `article` |
 | 13 | POST intake với `"contentType":"rác"` | lưu thành `article`, **không** 400 |
 | 14 | `GET /api/public/articles/<slug-brief>` | **200** — trang bài brief vẫn mở được |
