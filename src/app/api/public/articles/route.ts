@@ -44,9 +44,42 @@ export async function GET(request: Request): Promise<Response> {
     and.push({ id: { in: ids } });
   }
 
-  // Free-text-ish search on title + dek.
+  // Free-text-ish search on title + dek + author name + pillar title (the
+  // reader's search page promises "a place, a section, or a contributor's
+  // name" — GCV audit item 6). Authors and pillars resolve to ids first and
+  // broaden the OR. (Body is Lexical JSON — not queryable with `like` on the
+  // Postgres adapter, so it stays out rather than risking a 500.)
   const q = url.searchParams.get("q");
-  if (q && q.trim()) and.push({ or: [{ title: { like: q.trim() } }, { dek: { like: q.trim() } }] });
+  if (q && q.trim()) {
+    const needle = q.trim();
+    const or: Where[] = [{ title: { like: needle } }, { dek: { like: needle } }];
+    const [byAuthor, byPillar] = await Promise.all([
+      scopedFind({
+        payload,
+        collection: "authors",
+        tenantId: tenant.id,
+        where: { name: { like: needle } },
+        limit: 20,
+        depth: 0,
+      }),
+      scopedFind({
+        payload,
+        collection: "pillars",
+        tenantId: tenant.id,
+        where: { title: { like: needle } },
+        limit: 5,
+        depth: 0,
+      }),
+    ]);
+    const authorIds = byAuthor.docs.map((d) => (d as { id: number | string }).id);
+    if (authorIds.length) {
+      or.push({ author: { in: authorIds } });
+      or.push({ coAuthors: { in: authorIds } });
+    }
+    const qPillarIds = byPillar.docs.map((d) => (d as { id: number | string }).id);
+    if (qPillarIds.length) or.push({ pillar: { in: qPillarIds } });
+    and.push({ or });
+  }
 
   // One-flag feeds (deep dive / sponsored / pinned to latest / breaking).
   const flag = url.searchParams.get("flag");

@@ -182,7 +182,8 @@ export async function POST(request: Request): Promise<Response> {
     const authorId = await resolveOrCreateAuthor(payload, tenant.id, byline, tenant.timezone as string | undefined);
 
     let heroImageId: number | string | undefined;
-    if (heroImageUrl) heroImageId = await uploadHero(payload, tenant.id, heroImageUrl, titleStr, slug, imageCredit ?? sourceName);
+    // Never fall back to the source publication's name as a photo credit (GCV audit item 1).
+    if (heroImageUrl) heroImageId = await uploadHero(payload, tenant.id, heroImageUrl, titleStr, slug, imageCredit);
 
     const lexicalBody = await markdownToLexical(payload, bodyMarkdownStr);
 
