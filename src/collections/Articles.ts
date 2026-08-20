@@ -13,6 +13,7 @@ import { enqueueTranslations } from "@/hooks/translation";
 import {
   ARTICLE_STATUSES,
   CONTENT_ORIGINS,
+  CONTENT_TYPES,
   TRANSLATION_STATES,
 } from "@/lib/constants";
 import { LOCALE_CODES, LOCALE_LABELS } from "@/lib/locales";
@@ -304,6 +305,24 @@ export const Articles: CollectionConfig = {
           label: "Engine contract",
           description: "Provenance + conflict-resolution. Mostly engine/system managed.",
           fields: [
+            {
+              // Nature of the content, not its provenance — `origin` says WHO wrote it,
+              // this says WHAT it is. Engine-set; absent on every manual article, which is
+              // why the DB column is NOT NULL DEFAULT 'article' (see the migration): a
+              // nullable column would force every consumer to write null-safe filters.
+              // Deliberately NOT localized — one article has one nature in every language.
+              // Unrelated to the `briefs` array field on the Content tab (key-figures block).
+              name: "contentType",
+              type: "select",
+              required: true,
+              defaultValue: "article",
+              options: CONTENT_TYPES.map((c) => ({ label: c.label, value: c.value })),
+              admin: {
+                readOnly: true,
+                description:
+                  "Set by the engine. 'Daily brief' = a machine-composed digest of our own reporting, not a news story. Reader sites filter on it.",
+              },
+            },
             {
               name: "origin",
               type: "select",

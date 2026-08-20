@@ -1,6 +1,7 @@
 /**
  * GET /api/public/articles — published article list for the token's tenant.
- *   Query: locale, pillar (slug), country (code), tag (slug), page, limit, sort.
+ *   Query: locale, pillar (slug), country (code), tag (slug), content_type,
+ *          page, limit, sort.
  * Returns the Payload list envelope (docs, totalDocs, page, hasNextPage, …).
  */
 import { getPayload } from "payload";
@@ -35,6 +36,24 @@ export async function GET(request: Request): Promise<Response> {
   const sort = url.searchParams.get("sort") ?? "-publishedAt";
 
   const and: Where[] = [{ workflowStatus: { equals: "published" } }];
+
+  // content_type — opt-in filter on what the document IS (see Articles.contentType).
+  // Absent means no filtering, so every existing caller keeps its current results;
+  // a site starts excluding daily briefs from its news surfaces the day it starts
+  // sending `content_type=article`, and reads its brief archive with `daily-brief`.
+  //
+  // Positive match (`equals`), never `not_equals`: exclusion-by-negation is the
+  // one shape that can silently drop rows, and this filter guards every feed the
+  // reader sites have. An unrecognised value is ignored rather than 400ing —
+  // a typo in a query string must not blank out a homepage.
+  //
+  // Applies to `ids` too when explicitly passed, which is why nothing here
+  // infers it: the account rails resolve saved/history articles by id and must
+  // keep returning a brief the reader saved.
+  const contentType = url.searchParams.get("content_type");
+  if (contentType === "article" || contentType === "daily-brief") {
+    and.push({ contentType: { equals: contentType } });
+  }
 
   // Resolve a set of articles by id (account Saved / History rails).
   const idsParam = url.searchParams.get("ids");

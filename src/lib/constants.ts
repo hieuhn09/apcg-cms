@@ -55,6 +55,25 @@ export const PUBLIC_VISIBLE_STATUSES: ArticleStatus[] = ["published"];
 export const CONTENT_ORIGINS = ["engine", "manual", "import"] as const;
 export type ContentOrigin = (typeof CONTENT_ORIGINS)[number];
 
+// ── Content type ────────────────────────────────────────────────────────────
+// WHAT a document is, as opposed to `origin` (WHO produced it). Only the daily
+// brief is marked; everything else — engine-written and hand-written alike — is
+// an ordinary article. The column carries a NOT NULL DEFAULT so consumers can
+// filter with a plain positive match instead of null-safe gymnastics.
+export const CONTENT_TYPES = [
+  { label: "Article", value: "article" },
+  { label: "Daily brief", value: "daily-brief" },
+] as const;
+export type ContentTypeValue = (typeof CONTENT_TYPES)[number]["value"];
+export const CONTENT_TYPE_VALUES: readonly ContentTypeValue[] = CONTENT_TYPES.map((c) => c.value);
+
+/** Narrow an untrusted string to a ContentTypeValue. Anything else → null. */
+export function toContentTypeValue(raw: unknown): ContentTypeValue | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim();
+  return (CONTENT_TYPE_VALUES as readonly string[]).includes(v) ? (v as ContentTypeValue) : null;
+}
+
 // ── Content-engine actions ──────────────────────────────────────────────────
 // Granted per engine on ContentEngines.allowedActions. The intake/translation
 // handlers map an incoming operation to one of these and check membership.

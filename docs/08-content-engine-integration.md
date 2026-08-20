@@ -36,6 +36,7 @@ Content-Type: application/json
   "tags": ["Policy", "Markets"],
   "takeaways": ["Point one", "Point two"],
   "byline": "Mei Lin Tan",
+  "contentType": "article",
   "heroImageUrl": "https://example.com/image.jpg",
   "sections": ["finance"],
   "countries": ["sg", "vn"],
@@ -64,6 +65,22 @@ Content-Type: application/json
 | 403 | `{ ok:false, status:"forbidden", reason }` | tenant/action not allowed |
 | 422 | `{ ok:false, status:"unprocessable", reason }` | feature disabled / unknown pillar |
 | 5xx | `{ ok:false, status:"error" }` | transient — safe to retry |
+
+### `contentType` — what the document is
+
+Optional. `"article"` (default) or `"daily-brief"`. Set on create only; a refresh
+of an existing draft never re-classifies it.
+
+Omit it for ordinary output. Send `"daily-brief"` for a machine-composed digest
+of a publication's own reporting — the content-engine's AM/PM brief — so reader
+sites can keep it out of news feeds while still serving it at its own URL.
+
+Unrecognised values fall back to `"article"` rather than returning 400: this
+endpoint carries several publications' daily output and must not start rejecting
+posts over a metadata field it does not recognise.
+
+Ordinary articles carry no marker of their own — absence means article. Consumers
+filter with a positive match (`content_type=article`), never by negation.
 
 **Retry rule:** retry on 5xx (transient). Do NOT retry 4xx/409 (terminal).
 
