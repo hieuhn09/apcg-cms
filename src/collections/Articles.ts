@@ -1,5 +1,6 @@
 import type { CollectionConfig, PayloadRequest } from "payload";
 import { editorialContentAccess } from "@/access/collections";
+import { isSystemAdmin, tenantIdsWithRole, toId } from "@/access/helpers";
 import { featureGatedAccess, featureGatedReadVersions } from "@/access/features";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
 import { revalidateHooks } from "@/hooks/revalidate";
@@ -24,6 +25,28 @@ const localeOptions = LOCALE_CODES.map((code) => ({ label: LOCALE_LABELS[code], 
 /** Relationship value → id (Payload hands us either the id or the populated doc). */
 const relId = (v: unknown): unknown =>
   v != null && typeof v === "object" ? (v as { id?: unknown }).id : v;
+
+/**
+ * Only editorial roles (editor / websiteAdmin) may flip the Exclusive flag.
+ * Other roles still see the checkbox but read-only (field access denies the
+ * write, and the admin UI disables the input accordingly). Local-API writes
+ * (engine intake, scripts) run with overrideAccess and are unaffected.
+ */
+const canFlagExclusive = ({
+  req,
+  doc,
+  data,
+}: {
+  req: PayloadRequest;
+  doc?: Record<string, unknown>;
+  data?: Record<string, unknown>;
+}): boolean => {
+  if (isSystemAdmin(req)) return true;
+  const editorTenants = tenantIdsWithRole(req, ["websiteAdmin", "editor"]);
+  const tenantId = toId(doc?.tenant ?? data?.tenant);
+  if (tenantId == null) return editorTenants.length > 0;
+  return editorTenants.includes(tenantId);
+};
 
 /**
  * Articles — the system of record, now tenant-scoped. The `tenant` field is
@@ -285,6 +308,20 @@ export const Articles: CollectionConfig = {
             },
             { name: "affiliate", type: "checkbox", defaultValue: false },
             { name: "deepDive", type: "checkbox", defaultValue: false },
+            {
+              // Editor-set flag for BriefAsia's cross-pillar "Exclusive" section.
+              // Never inferred from tag/author/pillar — hand-toggled only.
+              name: "exclusive",
+              type: "checkbox",
+              defaultValue: false,
+              index: true,
+              label: "Exclusive",
+              access: { create: canFlagExclusive, update: canFlagExclusive },
+              admin: {
+                description:
+                  "Apply this label only when the story rests on reporting BriefAsia did itself: a story we broke, a document we obtained, or an interview we conducted. Aggregation, translation, wire copy and press releases do not qualify.",
+              },
+            },
             { name: "pinnedToLatest", type: "checkbox", defaultValue: false, label: "Pin to top of Latest" },
             {
               name: "pinnedUntil",

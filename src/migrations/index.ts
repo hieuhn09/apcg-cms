@@ -3,6 +3,7 @@ import * as migration_20260714_014601_add_wtb_schema from './20260714_014601_add
 import * as migration_20260801_082303_migration_hardening from './20260801_082303_migration_hardening';
 import * as migration_20260805_023748_add_pinned_until from './20260805_023748_add_pinned_until';
 import * as migration_20260820_084629_add_content_type from './20260820_084629_add_content_type';
+import * as migration_20260824_000000_add_exclusive_flag from './20260824_000000_add_exclusive_flag';
 
 export const migrations = [
   {
@@ -29,5 +30,10 @@ export const migrations = [
     up: migration_20260820_084629_add_content_type.up,
     down: migration_20260820_084629_add_content_type.down,
     name: '20260820_084629_add_content_type'
+  },
+  {
+    up: migration_20260824_000000_add_exclusive_flag.up,
+    down: migration_20260824_000000_add_exclusive_flag.down,
+    name: '20260824_000000_add_exclusive_flag'
   },
 ];

@@ -112,6 +112,7 @@ export async function GET(request: Request): Promise<Response> {
     and.push({ or: [{ pinnedUntil: { exists: false } }, { pinnedUntil: { greater_than: new Date().toISOString() } }] });
   }
   if (flag === "breaking") and.push({ breaking: { equals: true } });
+  if (flag === "exclusive") and.push({ exclusive: { equals: true } });
 
   const pillarSlug = url.searchParams.get("pillar");
   let pillarId: number | string | undefined;
