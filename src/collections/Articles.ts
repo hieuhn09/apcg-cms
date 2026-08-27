@@ -102,7 +102,18 @@ export const Articles: CollectionConfig = {
               hooks: { beforeValidate: [uniqueWithinTenant("slug")] },
               admin: { description: "URL slug. Unique within this tenant." },
             },
-            { name: "dek", type: "textarea", required: true, localized: true, label: "Standfirst (dek)" },
+            {
+              name: "dek",
+              type: "textarea",
+              // Optional since WAD audit 26/08 item 21: migrated legacy articles
+              // carried junk placeholder deks ("c", brand names) purely to pass
+              // this validation, and the junk leaked into meta descriptions.
+              // Frontends render nothing for an empty dek; no DB change (the
+              // localized column was already nullable).
+              required: false,
+              localized: true,
+              label: "Standfirst (dek)",
+            },
             { name: "body", type: "richText", localized: true },
             {
               name: "section",
