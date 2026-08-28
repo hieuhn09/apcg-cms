@@ -7,6 +7,7 @@
 import { getPayload } from "payload";
 import config from "@payload-config";
 import { resolveReadToken, jsonPublic, preflight } from "@/lib/public";
+import { slugify } from "@/lib/http";
 import { scopedFind } from "@/lib/scoped";
 import { featureEnabled, supportedLanguages } from "@/lib/tenant";
 import { clampLocale } from "@/lib/locales";
@@ -33,7 +34,17 @@ export async function GET(request: Request): Promise<Response> {
   const maxLimit = refsView ? 1000 : 50;
   const defaultLimit = refsView ? "1000" : "20";
   const limit = Math.min(maxLimit, Math.max(1, Number(url.searchParams.get("limit") ?? defaultLimit) || 20));
-  const sort = url.searchParams.get("sort") ?? "-publishedAt";
+  // `sort` accepts a comma-separated list ("-publishedAt,-id"). Payload wraps a
+  // bare string in a single-element array without splitting it, so a compound
+  // sort has to arrive as a real array or the whole thing is read as one
+  // (nonexistent) column name and silently dropped. Readers need the compound
+  // form for stable offset pagination: when a dozen articles share a publish
+  // date, a sort on the date alone leaves their relative order up to the
+  // planner, and page 2 then repeats and swallows rows (WAD audit 28/08 item 8).
+  const sortParam = url.searchParams.get("sort") ?? "-publishedAt";
+  const sort = sortParam.includes(",")
+    ? sortParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : sortParam;
 
   const and: Where[] = [{ workflowStatus: { equals: "published" } }];
 
@@ -160,7 +171,24 @@ export async function GET(request: Request): Promise<Response> {
   const authorSlug = url.searchParams.get("author");
   if (authorSlug) {
     const a = await scopedFind({ payload, collection: "authors", tenantId: tenant.id, where: { slug: { equals: authorSlug } }, limit: 1, depth: 0 });
-    const id = (a.docs[0] as { id?: number | string } | undefined)?.id;
+    let id = (a.docs[0] as { id?: number | string } | undefined)?.id;
+    // Authors imported by name carry no slug of their own (BA/DTW/WAD all did),
+    // so a byline link built from the name found nothing and the author page
+    // answered "No published stories yet" under a byline that linked to it
+    // (WAD audit 28/08 item 1). Fall back to the slug each name derives to —
+    // both conventions, since a reader that keeps apostrophes as separators
+    // sends "o-connor" where slugify() produces "oconnor".
+    if (id == null) {
+      const all = await scopedFind({ payload, collection: "authors", tenantId: tenant.id, limit: 500, depth: 0 });
+      const wanted = authorSlug.toLowerCase();
+      const match = (all.docs as Array<{ id?: number | string; name?: string | null }>).find((d) => {
+        const name = (d.name ?? "").trim();
+        if (!name) return false;
+        const loose = name.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+        return slugify(name) === wanted || loose === wanted;
+      });
+      id = match?.id;
+    }
     if (id == null) return jsonPublic(request, { docs: [], totalDocs: 0, page: 1, totalPages: 0, hasNextPage: false }, 200);
     // An article carries one primary `author` plus optional `coAuthors`; the
     // byline page must list both or a co-authored piece vanishes from its own

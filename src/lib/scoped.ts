@@ -22,7 +22,10 @@ export interface ScopedFindArgs {
   locale?: string;
   limit?: number;
   page?: number;
-  sort?: string;
+  /** A single field, or several for a compound order ("-publishedAt" then "-id").
+   *  Payload only splits an ARRAY into multiple order-by clauses; a comma inside
+   *  a plain string is read as part of one column name and silently dropped. */
+  sort?: string | string[];
   depth?: number;
   /** Field selection (Payload `select`) — used by lightweight list views (e.g. sitemap refs). */
   select?: Parameters<Payload["find"]>[0]["select"];
