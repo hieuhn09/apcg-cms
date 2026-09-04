@@ -13,6 +13,31 @@ import { featureEnabled, supportedLanguages } from "@/lib/tenant";
 import { clampLocale } from "@/lib/locales";
 import type { Where } from "payload";
 
+/**
+ * Field selection for the NORMAL list view — everything except `body`.
+ *
+ * The list feeds cards, rails and rows; not one reader renders article body from
+ * a list (verified across all five sites — `body` is read only on the article
+ * detail page, which uses `/api/public/articles/[slug]` and still gets it in
+ * full). Yet the list was returning the whole localized richText for every row:
+ * at limit=20 that is the bulk of the response, and it is paid for twice —
+ * once as Vercel origin transfer out of this function, and again as a fat entry
+ * in each site's `unstable_cache` (cms-client.central.ts already notes it has to
+ * dodge the 2MB per-item cap because of exactly this).
+ *
+ * Exclusive select (all `false`) rather than an allow-list on purpose: the
+ * reader contract keeps growing fields (`exclusive`, `subSectionSlugs`, city
+ * refs…), and an allow-list would silently drop each new one until someone
+ * noticed a blank card. Excluding the one field nobody reads cannot do that.
+ *
+ * Knock-on to know about: two readers (GCV, WAD) derive card read-time from the
+ * body when present and fall back to the stored `readMin` otherwise. Central
+ * computes `readMin` from the same text on intake, so cards keep a correct
+ * number — it can differ by at most a minute (220 wpm rounded here vs 200 wpm
+ * ceiled there).
+ */
+const LIST_SELECT = { body: false } as const;
+
 export function OPTIONS(request: Request) {
   return preflight(request);
 }
@@ -234,7 +259,9 @@ export async function GET(request: Request): Promise<Response> {
     limit,
     sort,
     depth: refsView ? 0 : 1,
-    ...(refsView ? { select: { slug: true, updatedAt: true, publishedAt: true } } : {}),
+    select: refsView
+      ? { slug: true, updatedAt: true, publishedAt: true }
+      : LIST_SELECT,
   });
 
   return jsonPublic(request, result, 200);
