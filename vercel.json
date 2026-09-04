@@ -1,8 +1,20 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["sin1"],
+  "regions": [
+    "sin1"
+  ],
   "crons": [
-    { "path": "/api/cron/publish-scheduled", "schedule": "0 * * * *" },
-    { "path": "/api/cron/unpin-expired", "schedule": "0 * * * *" }
+    {
+      "path": "/api/cron/publish-scheduled",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/unpin-expired",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/refresh-ai-leaderboard",
+      "schedule": "0 3 * * 1"
+    }
   ]
 }

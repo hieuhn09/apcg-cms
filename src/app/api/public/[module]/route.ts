@@ -4,7 +4,7 @@
  * never an empty 200. Static sibling routes (articles, menus, site, preview)
  * take precedence over this dynamic one.
  *
- *   podcasts | newsletters | corrections | wire | market | dashboards
+ *   podcasts | newsletters | corrections | wire | market | dashboards | sponsors
  */
 import { getPayload } from "payload";
 import config from "@payload-config";
@@ -19,7 +19,7 @@ type CollSlug = Parameters<typeof scopedFind>[0]["collection"];
 
 const MODULES: Record<
   string,
-  { feature: FeatureKey; collections: { slug: CollSlug; sort: string; key: string; where?: () => Where }[] }
+  { feature: FeatureKey; collections: { slug: CollSlug; sort: string; key: string; depth?: number; where?: () => Where }[] }
 > = {
   podcasts: { feature: "podcasts", collections: [{ slug: "podcasts", sort: "-publishedAt", key: "podcasts" }] },
   newsletters: { feature: "newsletters", collections: [{ slug: "newsletters", sort: "order", key: "newsletters" }] },
@@ -56,6 +56,33 @@ const MODULES: Record<
       { slug: "aiLeaderboardRows", sort: "rank", key: "aiLeaderboardRows" },
     ],
   },
+  // Sponsor placements. The reader picks the slot it wants client-side
+  // (`?slot=` narrows it server-side); rows outside their startsAt/endsAt
+  // window are dropped here so a lapsed booking can never render.
+  sponsors: {
+    feature: "sponsorSlots",
+    collections: [
+      {
+        slug: "sponsorSlots",
+        sort: "-updatedAt",
+        key: "sponsorSlots",
+        // depth 2: the reader renders the sponsored article as a full card, so
+        // `article.pillar` / `article.author` / `article.heroImage` must be
+        // populated objects, not bare ids. At depth 1 `article` resolves but its
+        // own relationships stay ids and the card loses its pillar tag + byline.
+        depth: 2,
+        where: () => {
+          const now = new Date().toISOString();
+          return {
+            and: [
+              { or: [{ startsAt: { exists: false } }, { startsAt: { less_than_equal: now } }] },
+              { or: [{ endsAt: { exists: false } }, { endsAt: { greater_than_equal: now } }] },
+            ],
+          };
+        },
+      },
+    ],
+  },
 };
 
 export function OPTIONS(request: Request) {
@@ -78,10 +105,35 @@ export async function GET(
   const url = new URL(request.url);
   const locale = clampLocale(url.searchParams.get("locale"), supportedLanguages(tenant), tenant.defaultLanguage);
 
+  // `?slot=` narrows the sponsors module server-side. Ignored elsewhere.
+  const slot = url.searchParams.get("slot");
+
   const data: Record<string, unknown> = {};
   for (const c of def.collections) {
-    const res = await scopedFind({ payload, collection: c.slug, tenantId: tenant.id, locale, sort: c.sort, limit: 100, depth: 1, where: c.where?.() });
+    let where = c.where?.();
+    if (module === "sponsors" && slot) {
+      where = where ? { and: [where, { slot: { equals: slot } }] } : { slot: { equals: slot } };
+    }
+    const res = await scopedFind({
+      payload,
+      collection: c.slug,
+      tenantId: tenant.id,
+      locale,
+      sort: c.sort,
+      limit: 100,
+      depth: c.depth ?? 1,
+      where,
+    });
     data[c.key] = res.docs;
   }
+
+  // Dashboard methodology/disclaimer copy lives on the TENANT, not in a
+  // collection (it is one blob per site), so it rides along with the rows the
+  // page renders it under — one fetch, not two.
+  if (module === "dashboards") {
+    const t = tenant as unknown as { dashboards?: unknown };
+    data.methodology = t.dashboards ?? null;
+  }
+
   return jsonPublic(request, { data }, 200);
 }

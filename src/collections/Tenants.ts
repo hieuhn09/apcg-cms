@@ -179,6 +179,50 @@ export const Tenants: CollectionConfig = {
       ],
     },
 
+    // ── Dashboard copy (DTW AI Leaderboard) ──
+    // Absorbed 04-09-2026 from dtw-web's local `dashboardMethodology` global when
+    // local Payload was removed from the sites. Kept as a group of three plain
+    // strings rather than Payload-localized fields ON PURPOSE: the reader ships
+    // all three languages to one client component that switches locale in the
+    // browser, so a single fetch must carry every translation. A localized field
+    // would force three `?locale=` round trips to render one table.
+    //
+    // The Indonesian key is `ind`, not `id`: Payload's Postgres/Drizzle adapter
+    // silently DROPS any field named "id" at any nesting depth
+    // (@payloadcms/drizzle traverseFields) — no error, no column, and the
+    // generated TS type still lists it. `getDashboardMethodology()` on the
+    // reader maps `ind` back to the app-facing `id` key.
+    {
+      name: "dashboards",
+      type: "group",
+      admin: {
+        description:
+          "AI Leaderboard methodology + disclaimer copy shown under the table. Only read when the `dashboards` feature is on.",
+      },
+      fields: [
+        {
+          name: "aiMethodology",
+          type: "group",
+          admin: { description: "Methodology copy under the AI Leaderboard table (source + scoring method)." },
+          fields: [
+            { name: "en", type: "textarea" },
+            { name: "vi", type: "textarea" },
+            { name: "ind", type: "textarea", label: "Indonesian (id)", admin: { description: 'Named "ind" not "id" — see the field group comment.' } },
+          ],
+        },
+        {
+          name: "disclaimer",
+          type: "group",
+          admin: { description: 'Short disclaimer line, e.g. "For informational purposes only · not investment or procurement advice".' },
+          fields: [
+            { name: "en", type: "text" },
+            { name: "vi", type: "text" },
+            { name: "ind", type: "text", label: "Indonesian (id)", admin: { description: 'Named "ind" not "id" — see the field group comment.' } },
+          ],
+        },
+      ],
+    },
+
     // ── Engine governance (system-managed) ──
     {
       name: "allowedEngines",
