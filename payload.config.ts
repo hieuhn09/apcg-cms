@@ -121,12 +121,18 @@ export default buildConfig({
     TranslationJobs,
   ],
   editor: lexicalEditor(),
-  // Vercel serverless bodies cap at ~4.5MB, so anything larger dies as an
-  // opaque 413 before Payload sees it. Capping just below that turns an
-  // oversized editor upload into a clear "Exceeded file size limit" error in
-  // the admin instead. Editors should resize to ≤1600px anyway (the largest
-  // imageSize derivative the reader sites ever request).
-  upload: { limits: { fileSize: 4 * 1024 * 1024 } },
+  // Admin uploads go straight from the browser to R2 (clientUploads, below), so
+  // the file bytes never pass through a Vercel request body and the ~4.5MB
+  // serverless body cap no longer binds. This limit is what the presigned-URL
+  // handler enforces before it signs anything, so an oversized file still fails
+  // fast with "Exceeded file size limit" instead of a mid-upload error.
+  //
+  // 20MB is sized for editorial photography with headroom; the create request
+  // still pulls the object back into memory to generate the imageSizes, so this
+  // is also the per-invocation memory floor. Server-side multipart POSTs to
+  // /api/media (scripts, not the admin) remain bound by Vercel's ~4.5MB body cap
+  // regardless of this number.
+  upload: { limits: { fileSize: 20 * 1024 * 1024 } },
   secret: payloadSecret,
   typescript: {
     outputFile: path.resolve(dirname, "src/payload-types.ts"),
@@ -212,13 +218,28 @@ export default buildConfig({
                 : true,
             },
             alwaysInsertFields: true,
-            // clientUploads is intentionally OFF. The browser-side presigned PUT
-            // signs the RAW file.name while Payload sanitizes the doc filename at
-            // create ("...SAC .JPG" → "...SAC.JPG"), so the original strands under
-            // a key no lookup ever hits (4 broken editor uploads, 11-08-2026). It
-            // buys nothing here anyway: the admin create POST still carries the
-            // file bytes for imageSizes, so Vercel's body limit applies either
-            // way — and server-side writes need no bucket CORS.
+            /**
+             * Upload straight from the browser to R2 via a presigned PUT, so the
+             * file bytes skip Vercel's ~4.5MB request body cap. The admin create
+             * POST then carries only JSON metadata; the server fetches the object
+             * back from R2 to generate the imageSizes.
+             *
+             * This was OFF between 11-08-2026 and 08-09-2026 because the presigned
+             * key and the stored doc filename could diverge (payload signs with
+             * `sanitizeFilename`, then re-sanitizes at create with the stricter
+             * `sanitize-filename` package — "SAC .JPG" → "SAC.JPG"), stranding the
+             * original under a key no lookup ever hit. Still true in 3.85.1, so
+             * collections/Media.ts verifies the object landed on the doc's key
+             * after every client upload, relocates it when it did not, and fails
+             * the create outright if it cannot — no more silently broken media.
+             *
+             * REQUIRES bucket CORS allowing PUT from the admin origin:
+             * `npm run r2:cors`. Note the signed docPrefix comes from the form, so
+             * any authenticated CMS user can sign a PUT into another tenant's
+             * prefix; acceptable here (all users are internal staff) and the doc's
+             * own prefix is still set server-side from its tenant.
+             */
+            clientUploads: true,
             bucket: process.env.R2_BUCKET as string,
             config: {
               endpoint: process.env.R2_ENDPOINT,

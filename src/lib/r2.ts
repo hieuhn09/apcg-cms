@@ -45,6 +45,14 @@ export async function r2ObjectExists(key: string): Promise<boolean> {
   }
 }
 
+/**
+ * CopySource is a URL path, so the key must be percent-encoded — but per
+ * SEGMENT: encoding the whole key would turn the "/" of a tenant prefix into
+ * %2F, which is not reliably decoded back into a path separator.
+ */
+const encodeCopySourceKey = (key: string): string =>
+  key.split("/").map(encodeURIComponent).join("/");
+
 /** Server-side copy then delete (R2 has no atomic rename). */
 export async function r2MoveObject(fromKey: string, toKey: string): Promise<void> {
   if (!r2) return;
@@ -52,7 +60,7 @@ export async function r2MoveObject(fromKey: string, toKey: string): Promise<void
     new CopyObjectCommand({
       Bucket: r2.bucket,
       Key: toKey,
-      CopySource: `/${r2.bucket}/${encodeURIComponent(fromKey)}`,
+      CopySource: `/${r2.bucket}/${encodeCopySourceKey(fromKey)}`,
     }),
   );
   await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: fromKey }));
