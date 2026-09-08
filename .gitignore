@@ -33,3 +33,6 @@ src/payload-types.ts
 # media (local dev fallback when R2 is not configured)
 /media/
 .vibecode-backup*/
+
+# harness runtime logs
+.claude/hooks/.logs/
