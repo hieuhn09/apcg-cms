@@ -19,3 +19,7 @@ export async function pCreate(payload: Payload, collection: string, data: AnyArg
 export async function pUpdate(payload: Payload, collection: string, id: number | string, data: AnyArgs, args: AnyArgs = {}) {
   return payload.update({ collection: collection as never, id, data: data as never, overrideAccess: true, ...args } as never);
 }
+
+export async function pDelete(payload: Payload, collection: string, id: number | string, args: AnyArgs = {}) {
+  return payload.delete({ collection: collection as never, id, overrideAccess: true, ...args } as never);
+}

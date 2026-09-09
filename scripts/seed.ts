@@ -130,7 +130,7 @@ const TENANTS: TenantFixture[] = [
       { slug: "technology", title: "Technology", titleVi: "Công nghệ", titleId: "Teknologi", heading: "Technology", color: "var(--technology)", icon: "spark", order: 3, description: "AI, startups, platforms, chips, developer tools, product-market shifts, and technology regulation." },
       { slug: "real-estate", title: "Real Estate", titleVi: "Bất động sản", titleId: "Properti", heading: "Real Estate", color: "var(--real-estate)", icon: "product", order: 4, description: "Homes, offices, hotels, proptech, land, city development, and infrastructure across Asian property markets." },
       { slug: "travel-dining", title: "Travel & Dining", titleVi: "Du lịch & Ẩm thực", titleId: "Travel & Dining", heading: "Travel & Dining", color: "var(--travel-dining)", icon: "globe", order: 5, description: "Premium travel, destination intelligence, hotels, retreats, restaurants, and regional spending shifts." },
-      { slug: "lifestyle", title: "Lifestyle", titleVi: "Phong cách sống", titleId: "Gaya Hidup", heading: "Lifestyle", color: "var(--lifestyle)", icon: "star", order: 6, description: "Luxury, fashion, art, culture, health, wellness, and Asia's changing consumer class." },
+      { slug: "lifestyle", title: "Lifestyle", titleVi: "Phong cách sống", titleId: "Gaya Hidup", heading: "Lifestyle", color: "var(--lifestyle)", icon: "star", order: 6, description: "Luxury, fashion, consumer, culture, health, wellness, and Asia's changing consumer class." },
       { slug: "sustainability", title: "Sustainability", titleVi: "Bền vững", titleId: "Keberlanjutan", heading: "Sustainability", color: "var(--sustainability)", icon: "trend-up", order: 7, description: "Green finance, energy transition, climate policy, mobility, nature, and circular economy." },
       { slug: "perspectives", title: "Perspectives", titleVi: "Góc nhìn", titleId: "Perspektif", heading: "Perspectives", color: "var(--perspectives)", icon: "feather", order: 8, description: "Opinion, founder stories, analysis, interviews, and essays explaining the forces shaping Asia." },
     ],
@@ -180,7 +180,7 @@ const TENANTS: TenantFixture[] = [
       // Lifestyle
       { slug: "luxury", title: "Luxury", titleVi: "Xa xỉ", pillarSlug: "lifestyle", order: 1 },
       { slug: "fashion", title: "Fashion", titleVi: "Thời trang", pillarSlug: "lifestyle", order: 2 },
-      { slug: "art", title: "Art", titleVi: "Nghệ thuật", pillarSlug: "lifestyle", order: 3 },
+      { slug: "consumer", title: "Consumer", titleVi: "Tiêu dùng", pillarSlug: "lifestyle", order: 3 },
       { slug: "culture", title: "Culture", titleVi: "Văn hóa", pillarSlug: "lifestyle", order: 4 },
       { slug: "health", title: "Health", titleVi: "Sức khỏe", pillarSlug: "lifestyle", order: 5 },
       // Sustainability
