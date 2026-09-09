@@ -167,8 +167,8 @@ export const syncNativeUnpublish: CollectionBeforeValidateHook = ({ data, origin
 
 | Gate / Scenario | Strategy | Proves SPEC criterion |
 |---|---|---|
-| `pnpm typecheck` (`tsc --noEmit`) exits 0 | Fully-Automated | Compile correctness of the new hook + import only |
-| `pnpm lint` (`next lint`) exits 0 | Fully-Automated | Style/lint only |
+| `npm run typecheck` (`tsc --noEmit`) exits 0 | Fully-Automated | Compile correctness of the new hook + import only |
+| `npm run lint` (`next lint`) exits 0 | Fully-Automated | Style/lint only |
 | Manual script step 1–4 (Unpublish → curl → 404) | Hybrid (live CMS) | A1, A2 |
 | Manual script step 5–6 (Publish → curl → 200) | Hybrid (live CMS) | A3 |
 | Manual script step 7 (console set `approved`, re-read) | Hybrid (live CMS) | A4 |
@@ -187,13 +187,13 @@ This repo has **no test runner** — `package.json` offers only `lint` and `type
 2. `src/collections/Articles.ts` — add `syncNativeUnpublish` to the import block (lines 8-12).
 3. `src/collections/Articles.ts` — replace the `beforeValidate` array (line 83) and its ordering comment (lines 81-82).
 4. `src/collections/Articles.ts` — append the Save-Draft sentence to the `workflowStatus` field `admin.description` (line 167).
-5. Run `pnpm typecheck` — must exit 0.
-6. Run `pnpm lint` — must exit 0.
+5. Run `npm run typecheck` — must exit 0.
+6. Run `npm run lint` — must exit 0.
 7. Hand the manual verification script to the user. Do not self-certify A1–A8.
 
 ## Acceptance Criteria
 
-Verbatim from the SPEC (A1–A8). Testing context: this repo has **no test runner**; `pnpm lint` and `pnpm typecheck` are the only automated gates, and all behavioural criteria are verified by the manual post-phase testing script in the validate-contract.
+Verbatim from the SPEC (A1–A8). Testing context: this repo has **no test runner**; `npm run lint` and `npm run typecheck` are the only automated gates, and all behavioural criteria are verified by the manual post-phase testing script in the validate-contract.
 
 | # | Criterion | Gate |
 |---|---|---|
@@ -211,7 +211,7 @@ Verbatim from the SPEC (A1–A8). Testing context: this repo has **no test runne
 Single-phase plan. This phase is complete only when **all** of the following hold:
 
 1. Checklist items 1–4 applied, touching exactly the two files in Touchpoints.
-2. `pnpm typecheck` and `pnpm lint` both exit 0 (post-phase testing gate).
+2. `npm run typecheck` and `npm run lint` both exit 0 (post-phase testing gate).
 3. The manual verification script has been handed to the user and steps 1–8 confirmed by a human on the live CMS.
 4. Code-only completion is `CODE DONE`, **not** `VERIFIED`. The plan may not be archived until step 3 returns a human-confirmed pass, because A1–A7 have no automated coverage.
 5. If any manual step fails, execute the Rollback Plan and return to PLAN — do not patch forward on a live publication.
@@ -270,8 +270,8 @@ risk-class: public-API-adjacent, multi-tenant-live
 
 | Tier | Command | Precondition |
 |---|---|---|
-| Fully-automated | `pnpm typecheck` — must exit 0 | `node_modules` installed |
-| Fully-automated | `pnpm lint` — must exit 0 | `node_modules` installed |
+| Fully-automated | `npm run typecheck` — must exit 0 | `node_modules` installed |
+| Fully-automated | `npm run lint` — must exit 0 | `node_modules` installed |
 | Hybrid | Manual verification script below | Deployed CMS + tenant read token |
 | Known-gap | Engine/cron no-op under real traffic; legacy-row invariance under a prod sweep | — |
 
@@ -310,7 +310,7 @@ Abort and roll back if step 3 returns `200`, step 4 shows `draft` or `archived`,
 | E2 | Do **not** add an `_status` filter to any public route, and do not modify `src/lib/scoped.ts`. | Entry |
 | E3 | Do **not** run, write, or propose any migration or bulk data-repair script. | Entry |
 | E4 | Preserve all four trigger conditions verbatim. Dropping condition 3 or 4 breaks the console actions (A4) — this is the single highest-risk deviation. | Hook write |
-| E5 | If `pnpm typecheck` reveals `originalDoc` is typed such that `workflowStatus` is not accessible, cast as in the existing `syncNativePublish` (line 80) — do not change the trigger design. | After step 5 |
+| E5 | If `npm run typecheck` reveals `originalDoc` is typed such that `workflowStatus` is not accessible, cast as in the existing `syncNativePublish` (line 80) — do not change the trigger design. | After step 5 |
 | E6 | Do not self-certify A1–A8. Hand the manual script to the user and report `DONE_WITH_CONCERNS` with the manual gates listed as unrun. | Completion |
 
 ### Known gaps carried
