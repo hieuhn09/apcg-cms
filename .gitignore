@@ -36,3 +36,5 @@ src/payload-types.ts
 
 # Harness hook logs (generated at runtime, never tracked)
 .claude/hooks/.logs/
+.vercel
+.env*
