@@ -390,19 +390,6 @@ async function main() {
         workflowStatus: article.workflowStatus ?? null,
       };
 
-      /* Secondary sections are out of scope for this version. */
-      const proposedSections = d.proposed?.sections ?? null;
-      if (action === "move" && Array.isArray(proposedSections) && proposedSections.length > 1) {
-        record(d, {
-          outcome: "skipped",
-          matchedBy,
-          articleId: article.id,
-          before,
-          reason: "secondary-sections-not-supported",
-        });
-        continue;
-      }
-
       let data: Record<string, unknown>;
       let after: ResultRow["after"];
       let note = "";
@@ -470,6 +457,19 @@ async function main() {
             reason: "already at target pillar/sub-section",
           });
           continue;
+        }
+
+        /* Secondary sections are NOT written by this script — only the primary
+           pillar/subSection pair is. A decision carrying extra sections is still
+           applied (its primary move is real); the unapplied remainder is reported
+           on the row so the operator can see exactly what was left behind. */
+        const proposedSections = d.proposed?.sections ?? null;
+        if (Array.isArray(proposedSections) && proposedSections.length > 1) {
+          const secondary = proposedSections.filter((s) => s !== categorySlug);
+          if (secondary.length > 0) {
+            const sectionsNote = `secondary sections not applied (unsupported): ${JSON.stringify(secondary)}`;
+            note = note ? `${note}; ${sectionsNote}` : sectionsNote;
+          }
         }
 
         // pillar + subSection ALWAYS travel together — Articles.subSection's
