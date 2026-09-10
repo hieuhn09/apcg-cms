@@ -17,9 +17,10 @@ import {
  * depends on. Keeping video in its own collection means the mimetype blast
  * radius is exactly this file — no existing upload field's `relationTo` widens.
  *
- * Deliberately carries NO bespoke fields beyond `prefix` (caption / credit /
- * description live on the Article, next to the rest of its editorial copy).
- * It is pure file storage.
+ * Carries the same `alt` / `caption` / `credit` trio as `Media`, so a video
+ * dropped mid-body is described exactly like an image dropped mid-body. The
+ * Article's own `videoCaption` / `videoCredit` / `videoDescription` remain
+ * separate — those describe the HERO video slot, not the uploaded document.
  *
  * Upload integrity (presigned-key verification, per-tenant key prefixing) is
  * IMPORTED from `@/lib/upload-integrity`, shared byte-for-byte with `Media` —
@@ -57,6 +58,13 @@ export const VideoMedia: CollectionConfig = {
     mimeTypes: ["video/*"],
   },
   fields: [
+    // Same three fields as `Media`, same order, same localization split: a
+    // mid-body video needs alt / caption / credit for exactly the reasons a
+    // mid-body image does. `credit` stays UNlocalized to match Media — a
+    // videographer's name is not translated.
+    { name: "alt", type: "text", required: true, localized: true, admin: { description: "Alt text — required (WCAG 2.1 AA)." } },
+    { name: "caption", type: "text", localized: true },
+    { name: "credit", type: "text", admin: { description: "Videographer / source credit." } },
     {
       // Same shape as Media.prefix, same shared hooks: declared here rather
       // than left to storage-s3's field injection so the column exists whether
