@@ -86,9 +86,6 @@ export function jsonPublic(request: Request, body: unknown, status: number): Res
   // too, a shared cache that keyed only on Origin could hand gzipped bytes to a
   // client that asked for identity. Both dimensions must be listed.
   headers.Vary = "Origin, Accept-Encoding";
-  // PROBE-ONLY telemetry: proves this code path ran, so "the client got gzip"
-  // can be told apart from "the edge compressed it". Remove before shipping.
-  headers["X-Origin-Encoded"] = `gzip;l=${GZIP_LEVEL};in=${raw.byteLength};out=${gz.byteLength}`;
   return new Response(gz, { status, headers });
 }
 
