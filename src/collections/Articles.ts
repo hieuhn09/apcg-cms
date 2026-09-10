@@ -3,6 +3,7 @@ import { editorialContentAccess } from "@/access/collections";
 import { isSystemAdmin, tenantIdsWithRole, toId } from "@/access/helpers";
 import { featureGatedAccess, featureGatedReadVersions } from "@/access/features";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
+import { tenantHasFeature } from "@/lib/tenant";
 import { revalidateHooks } from "@/hooks/revalidate";
 import {
   articleBookkeeping,
@@ -46,6 +47,34 @@ const canFlagExclusive = ({
   const tenantId = toId(doc?.tenant ?? data?.tenant);
   if (tenantId == null) return editorTenants.length > 0;
   return editorTenants.includes(tenantId);
+};
+
+/**
+ * Only tenants with the `video` feature flag may set the article video fields.
+ *
+ * Feature-gated, NOT role-gated (unlike canFlagExclusive above): Criterion 2 is
+ * about which TENANT may use video at all, not which role within an enabled
+ * tenant may set it — inside an enabled tenant, video is ordinary editorial
+ * copy and needs no extra role check.
+ *
+ * This is the API half of the gate and stands alone: it denies the write even
+ * when the admin-UI gate (components/admin/VideoFieldGate.tsx) is bypassed, and
+ * it applies to direct REST/local-API writes that never render a UI at all.
+ * Fails closed on an unresolvable tenant.
+ */
+const canSetVideo = async ({
+  req,
+  doc,
+  data,
+}: {
+  req: PayloadRequest;
+  doc?: Record<string, unknown>;
+  data?: Record<string, unknown>;
+}): Promise<boolean> => {
+  if (isSystemAdmin(req)) return true;
+  const tenantId = toId(doc?.tenant ?? data?.tenant);
+  if (tenantId == null) return false;
+  return tenantHasFeature(req.payload, tenantId as number | string, "video");
 };
 
 /**
@@ -427,10 +456,74 @@ export const Articles: CollectionConfig = {
         {
           label: "Media",
           fields: [
-            { name: "heroImage", type: "upload", relationTo: "media" },
+            {
+              name: "heroImage",
+              type: "upload",
+              relationTo: "media",
+              /**
+               * Conditionally required: a video needs a poster, and the hero
+               * image IS the poster (Criterion 6) — but articles without video
+               * must stay exactly as permissive as they are today, so this is a
+               * conditional validate rather than `required: true`.
+               *
+               * "Media" is an UNNAMED tab, so heroImage and video are true
+               * document-level siblings and siblingData carries both.
+               */
+              validate: (value: unknown, { siblingData }: { siblingData?: Record<string, unknown> }) => {
+                if (siblingData?.video && !value) {
+                  return "A hero image is required whenever a video is attached.";
+                }
+                return true;
+              },
+            },
             { name: "imageLabel", type: "text", localized: true, admin: { description: "Label for generative cover art when no hero image." } },
             { name: "leadImageCaption", type: "text", localized: true, admin: { description: "Caption shown under the lead image (WTB)." } },
             { name: "imageUrl", type: "text", admin: { description: "Deprecated external-URL fallback." } },
+            /**
+             * Video (optional, tenant-gated). Plain — NOT localized: one upload
+             * and one set of credits per article, mirroring `exclusive`'s flat
+             * columns rather than Media's localized alt/caption.
+             *
+             * Both halves of the gate are attached to every field: `access`
+             * (server, authoritative) and `admin.components.Field` (UI).
+             */
+            {
+              name: "video",
+              type: "upload",
+              relationTo: "videoMedia",
+              access: { create: canSetVideo, update: canSetVideo },
+              admin: {
+                description: "Optional short video. Requires a hero image (used as the poster) and a description.",
+                components: { Field: "./src/components/admin/VideoFieldGate#VideoUploadFieldGate" },
+              },
+            },
+            {
+              name: "videoCaption",
+              type: "text",
+              access: { create: canSetVideo, update: canSetVideo },
+              admin: { components: { Field: "./src/components/admin/VideoFieldGate#VideoTextFieldGate" } },
+            },
+            {
+              name: "videoCredit",
+              type: "text",
+              access: { create: canSetVideo, update: canSetVideo },
+              admin: { components: { Field: "./src/components/admin/VideoFieldGate#VideoTextFieldGate" } },
+            },
+            {
+              name: "videoDescription",
+              type: "text",
+              access: { create: canSetVideo, update: canSetVideo },
+              admin: {
+                description: "Accessible description of the video — required whenever a video is attached (Criterion 8).",
+                components: { Field: "./src/components/admin/VideoFieldGate#VideoTextFieldGate" },
+              },
+              validate: (value: unknown, { siblingData }: { siblingData?: Record<string, unknown> }) => {
+                if (siblingData?.video && !value) {
+                  return "A description is required whenever a video is attached.";
+                }
+                return true;
+              },
+            },
           ],
         },
       ],

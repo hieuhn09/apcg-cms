@@ -36,7 +36,20 @@ import type { Where } from "payload";
  * number — it can differ by at most a minute (220 wpm rounded here vs 200 wpm
  * ceiled there).
  */
-const LIST_SELECT = { body: false } as const;
+// `video`/`videoCaption`/`videoCredit`/`videoDescription` join `body` in the
+// exclusion list: the video only ever renders in the article-page hero slot, so
+// no listing surface has any use for it. Excluding it here is the NETWORK half
+// of the structural guarantee (the reader-side type half is that ArticleView
+// never gains a video field) — a card cannot render what never arrives. Each
+// field must be named individually; excluding `video` does not cascade to the
+// other three.
+const LIST_SELECT = {
+  body: false,
+  video: false,
+  videoCaption: false,
+  videoCredit: false,
+  videoDescription: false,
+} as const;
 
 export function OPTIONS(request: Request) {
   return preflight(request);

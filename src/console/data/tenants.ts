@@ -64,6 +64,7 @@ export async function getSiteConfig(user: CmsUser | null, slug: string): Promise
       translations: Boolean(r.featuresTranslations),
       dashboards: Boolean(r.featuresDashboards),
       citiesMap: Boolean(r.featuresCitiesMap),
+      video: Boolean(r.featuresVideo),
     },
   };
 }

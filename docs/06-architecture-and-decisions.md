@@ -60,6 +60,49 @@ buckets, reader accounts (stay in frontends), rate-limit enforcement beyond a ba
 counter, page builder, multi-region DB. None require schema rewrites — they extend
 the model rather than change it.
 
+## Payload gotchas learned (from the video-support feature, 10-09-26)
+
+Durable, repo-wide implications — not specific to video — confirmed while building
+optional per-article video support (`process/general-plans/completed/article-video-support_10-09-26/`):
+
+- **Mimetype validation is per-collection, not per-relationship-field.** Payload's
+  `upload.mimeTypes` is a collection-level setting. Widening a shared upload
+  collection (e.g. adding `video/*` to `media`'s existing `image/*`) would
+  contaminate every field that relates to it. A separate collection (`videoMedia`)
+  is the correct isolation boundary for a new upload type, not a wider
+  `mimeTypes` array on an existing one. (Upstream gap: Payload GitHub Discussion
+  #653 — there is no field-level mimetype constraint.)
+- **`required: true` is application-layer only — it never becomes a DB `NOT
+  NULL`.** Verified against the base schema: `Articles.title`, `pillar`, `author`,
+  `readMin` are all `required` in the Payload field config and all nullable at
+  the Postgres column level. A conditional `validate` function (fires only when
+  a sibling field has a value) is therefore a safe, fully reversible way to
+  enforce "required sometimes" — it never touches the DB constraint layer.
+- **Named `group` fields flatten to real, individually-migrated columns.**
+  `Tenants.features` is a Payload `group` field; each checkbox inside it
+  (`features.articles`, `features.newsletters`, …) is its own DB column
+  (`features_articles`, `features_newsletters`, …), not a JSON blob. Adding a
+  new feature flag always needs a `tenants` migration — easy to miss because the
+  admin UI makes it look like one nested field.
+- **There is a third, hand-maintained admin surface for tenant features:**
+  `src/console/data/{schema,tenants}.ts`. The separate `console` app mirrors the
+  `tenants.features_*` columns in its own Drizzle schema (`schema.ts`) and reads
+  them into a `Record<FeatureKey, boolean>` literal in `getSiteConfig()`
+  (`tenants.ts`). Any new entry in `FEATURE_KEYS` (`src/lib/constants.ts`) must
+  also land in both of these files or `console`'s typecheck fails and its
+  per-tenant settings page silently drops the new flag. This was previously
+  undocumented anywhere in `docs/`.
+- **`admin.condition` is synchronous and cannot do a live per-tenant lookup.**
+  The Payload admin's selected-tenant state (from
+  `@payloadcms/plugin-multi-tenant`) is not passed into a field's
+  `admin.condition(data, siblingData, {user, operation})` callback, and that
+  callback cannot be async. Genuinely live per-tenant field visibility (as
+  opposed to a value baked in at document-load time) requires a custom admin
+  Field Component reading `useTenantSelection()` from
+  `@payloadcms/plugin-multi-tenant/client` (confirmed exported at the pinned
+  `3.85.1`) — see `src/components/admin/VideoFieldGate.tsx` for the working
+  pattern.
+
 ## Reference: files that implement each decision
 
 - Multi-tenant plugin + locales + R2: `payload.config.ts`

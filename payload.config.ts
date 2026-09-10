@@ -19,6 +19,7 @@ import { ActivityLog } from "@/collections/ActivityLog";
 
 // Tenant-scoped collections (the plugin injects a `tenant` field into each).
 import { Media } from "@/collections/Media";
+import { VideoMedia } from "@/collections/VideoMedia";
 import { Authors } from "@/collections/Authors";
 import { Pillars } from "@/collections/Pillars";
 import { SubSections } from "@/collections/SubSections";
@@ -98,6 +99,7 @@ export default buildConfig({
     ActivityLog,
     // tenant-scoped
     Media,
+    VideoMedia,
     Authors,
     Pillars,
     SubSections,
@@ -173,6 +175,7 @@ export default buildConfig({
       // relationship + scopes admin list/edit views by the selected tenant.
       collections: {
         media: {},
+        videoMedia: {},
         authors: {},
         pillars: {},
         subsections: {},
@@ -211,6 +214,16 @@ export default buildConfig({
                     // Serve image bytes directly from the R2 public domain.
                     // Access control loss is nil: Media read access is already
                     // `() => true` (published hero images are public bytes).
+                    disablePayloadAccessControl: true,
+                    generateFileURL: ({ filename, prefix }) =>
+                      `${r2PublicBaseUrl}/${prefix ? `${prefix}/` : ""}${encodeURIComponent(filename)}`,
+                  }
+                : true,
+              // Same treatment for video: same bucket, same per-doc tenant
+              // prefix, same public R2 domain. A <video src> cannot carry a
+              // Bearer token any more than an <img src> can.
+              videoMedia: r2PublicBaseUrl
+                ? {
                     disablePayloadAccessControl: true,
                     generateFileURL: ({ filename, prefix }) =>
                       `${r2PublicBaseUrl}/${prefix ? `${prefix}/` : ""}${encodeURIComponent(filename)}`,

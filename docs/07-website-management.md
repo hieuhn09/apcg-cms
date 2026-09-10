@@ -60,6 +60,16 @@ The gate implementation is `src/access/features.ts` (applied per collection);
 the feature → collection map is documented in `FEATURE_COLLECTIONS`
 (`src/lib/constants.ts`).
 
+**When adding a new feature key**, four places must all be updated together, or
+`npm run typecheck` fails or the `console` app's per-tenant settings page silently
+drops the flag: `FEATURE_KEYS` + `FEATURE_COLLECTIONS` (`src/lib/constants.ts`),
+the `Tenants.features` checkbox (`src/collections/Tenants.ts` — needs a DB
+migration, since each checkbox is a real column, not a JSON blob), and BOTH
+`src/console/data/schema.ts` (Drizzle mirror) and `src/console/data/tenants.ts`
+(`getSiteConfig()`'s `Record<FeatureKey, boolean>` literal) in the separate
+`console` app. See `docs/06-architecture-and-decisions.md` §Payload gotchas
+learned.
+
 ## Mint / rotate tokens
 
 - **Read token** (frontend): `tsx scripts/mint-token.ts read --tenant <slug> --label frontend`.
