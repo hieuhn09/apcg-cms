@@ -9,6 +9,7 @@
  * reads are impossible by construction.
  */
 
+import { gzipSync } from "node:zlib";
 import type { Payload } from "payload";
 import { bearerToken, sha256Hex } from "@/lib/crypto";
 import type { TenantDoc } from "@/lib/tenant";
@@ -33,11 +34,62 @@ export function preflight(request: Request): Response {
   return new Response(null, { status: 204, headers: corsHeaders(request.headers.get("origin")) });
 }
 
+/**
+ * PROBE (branch probe/gzip-public-api) — compress in the function instead of at
+ * the edge, so the bytes leaving this function (billed as Fast Origin Transfer)
+ * are the compressed ones. Revert this block to restore the previous behaviour;
+ * nothing else in the file changed.
+ *
+ * Level 6 is deliberate for the probe: Node's zlib at level 6 produces a
+ * byte-stream the Vercel edge compressor demonstrably does NOT produce for the
+ * same input, so byte-identity of the wire bytes is what distinguishes
+ * pass-through from edge re-encoding.
+ */
+const GZIP_LEVEL = 6;
+
+/** Don't gzip small envelopes — the ~20-byte gzip framing is pure loss there. */
+const GZIP_MIN_BYTES = 1024;
+
+/**
+ * True when the caller actually accepts gzip. Honours an explicit `gzip;q=0`
+ * (RFC 9110 §12.5.3 — that is a refusal, not an acceptance) and deliberately
+ * does NOT treat a bare `*` as consent, so anything ambiguous still gets plain
+ * JSON.
+ */
+function acceptsGzip(header: string | null): boolean {
+  if (!header) return false;
+  for (const part of header.split(",")) {
+    const [tokenRaw, ...params] = part.trim().split(";");
+    if ((tokenRaw ?? "").trim().toLowerCase() !== "gzip") continue;
+    const q = params.map((p) => p.trim().toLowerCase()).find((p) => p.startsWith("q="));
+    if (q && Number(q.slice(2)) === 0) return false;
+    return true;
+  }
+  return false;
+}
+
 export function jsonPublic(request: Request, body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", ...corsHeaders(request.headers.get("origin")) },
-  });
+  const json = JSON.stringify(body);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...corsHeaders(request.headers.get("origin")),
+  };
+
+  const raw = Buffer.from(json, "utf8");
+  if (raw.byteLength < GZIP_MIN_BYTES || !acceptsGzip(request.headers.get("accept-encoding"))) {
+    return new Response(raw, { status, headers });
+  }
+
+  const gz = gzipSync(raw, { level: GZIP_LEVEL });
+  headers["Content-Encoding"] = "gzip";
+  // corsHeaders() sets `Vary: Origin`. Once the body varies by Accept-Encoding
+  // too, a shared cache that keyed only on Origin could hand gzipped bytes to a
+  // client that asked for identity. Both dimensions must be listed.
+  headers.Vary = "Origin, Accept-Encoding";
+  // PROBE-ONLY telemetry: proves this code path ran, so "the client got gzip"
+  // can be told apart from "the edge compressed it". Remove before shipping.
+  headers["X-Origin-Encoded"] = `gzip;l=${GZIP_LEVEL};in=${raw.byteLength};out=${gz.byteLength}`;
+  return new Response(gz, { status, headers });
 }
 
 /**
