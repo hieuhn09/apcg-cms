@@ -101,7 +101,24 @@ Replacement for the TTL raise is **Fix #1** (Phase 2, collapse fan-out) — a di
 
 **The trap:** do NOT fix this with `depth: 0` (see "What NOT To Do" #8) — that silently deletes every inline image in every article on all five sites with no error and no failing test. The correct fix is `defaultPopulate` scoping on `content-engines` / `users` / `tenants`, applied alongside the `LIST_SELECT` extension in Fix #2. The `[slug]` route (single-article fetch) needs this `defaultPopulate` treatment; the list route's exposure is closed by the `LIST_SELECT` field-drop in Fix #2.
 
+**Verified 10-09-26 from source — the leak is confirmed still live:**
+- `apcg-cms:src/collections/Articles.ts:398` — `lastEngine` is a `relationship` to `content-engines`
+- list route `depth: 1` (`articles/route.ts:261`); `[slug]` route `depth: 2` (`[slug]/route.ts:36`)
+- `src/lib/scoped.ts:68` passes `overrideAccess: true`, which **bypasses** `ContentEngines.access.read = isSystemAdmin` (`ContentEngines.ts:27`)
+- `ContentEngines.ts:76,77,96` — `tokenHash`, `tokenPrefix`, `lastSeenIp` are plain text fields; `admin: { readOnly: true }` is a UI hint, not access control
+- Current state (10-09-26): `LIST_SELECT` is still `{ body: false }` only; `defaultPopulate` appears nowhere in `src/collections/`
+
 ---
+
+## Reader Fallback Removed — Risk Baseline Raised (found 10-09-26)
+
+**All four audited readers have deleted their embedded Payload instance** — brief-asia `97d970e`, wad `413cada`, wtb `61bc3e0`, dtw `8f8de17`. In every repo `src/lib/cms-client.ts` collapsed from a `CMS_SOURCE` switch into a bare re-export barrel over `cms-client.central`; `CMS_SOURCE` survives only as prose comments and stale `.env.example` entries.
+
+**Consequence — state it plainly: the risk of every Central contract change is HIGHER than this plan currently assumes, not lower.** There is no local-Payload escape hatch left in any of the four readers. Every change to Central's public API hits four production sites immediately, with no fallback path to fall back to.
+
+**Paired detection gap:** there is no test suite in any of the four readers, and no runtime response validation anywhere (no zod / valibot / yup / ajv / superstruct). `cmsFetch` swallows every failure into an empty envelope, and the health probes assert only `id` / `slug` / `publishedAt` / `mediaHost`. Anything that breaks, breaks silently in production at HTTP 200 with nothing in the logs.
+
+This does not change any fix's design in this plan — it raises the bar for how carefully Fix #2b, Fix #4, and any future Central contract change must be verified before shipping, and it is why A3/A4 below are recorded as explicit contract locks even though neither is touched by this plan today.
 
 ## Repos Touched (every touchpoint below names its repo explicitly)
 
@@ -112,7 +129,7 @@ Replacement for the TTL raise is **Fix #1** (Phase 2, collapse fan-out) — a di
 
 **Production hosts (confirmed by measurement, record for reuse):** CMS production host is `apcg-cms.vercel.app`; brief-asia tenant prefix is `brief-asia` (with hyphen); reader canonical host is `www.briefasia.com` (bare `briefasia.com` 308-redirects to it).
 
-**Unverified generalization warning:** every "×5" multiplier in every estimate in this plan (and in the source synthesis) is **unverified**. Only `brief-asia-web` was read in the underlying research. The other four reader sites — **WTB, DTW, GCV, WAD** — have not been inspected for matching patterns (cache wrapping, fan-out call counts, unpin-expired handling, `next/image` remote-pattern config). Precondition **P10** exists specifically to close this gap before any fix that assumes "all five sites behave like brief-asia-web."
+**Unverified generalization warning:** every "×5" multiplier in every estimate in this plan (and in the source synthesis) is **unverified**. Only `brief-asia-web` was read in the underlying research. **UPDATE 10-09-26:** three of the four other reader sites — **WAD, WTB, DTW** — have since been audited against `origin/main` (see `### P10 + P8d — RUN 10-09-26` under Phase 0 Results) and are CLEAR on every field this plan touches. **GCV remains uninspected — it is not on this machine** and is now the only outstanding generalization gap. Precondition **P10** is RUN for 3 of 4 repos; GCV is the sole remaining blocker for any fix that assumes "all five sites behave like brief-asia-web."
 
 ---
 
@@ -149,6 +166,15 @@ Replacement for the TTL raise is **Fix #1** (Phase 2, collapse fan-out) — a di
 - `GET /api/public/articles/[slug]` (apcg-cms) — population scope narrows via `defaultPopulate` (security fix); must NOT change `depth` semantics for `body` lexical nodes.
 - Media serving contract (`/api/media/file/*`) — Fix #4 is a **hard cutover**: every already-cached absolute media URL (5 sites' ISR entries, sent newsletters, RSS/social scrapes, Google's image index) will 404 without the redirect shim. This is the single highest-risk public-contract change in this plan.
 - Webhook contract `/api/revalidate` (each reader) — Fix #7 changes only observability (logs, timeout), not the wire contract.
+
+## Additional Contract Locks (A3, A4 — found 10-09-26, not touched by this plan, must never break silently)
+
+Neither field below is in Fix 2b's drop set today, so Fix 2b as specified is safe. They are recorded here anyway because nothing downstream would ever surface a violation — the readers have no fallback (see above) and no runtime validation, so a silent break would ship straight to production.
+
+| ID | Must remain true | Evidence | Silent failure if violated |
+|---|---|---|---|
+| A3 | The `view=refs` branch keeps returning `title` | `brief-asia-web@origin/main:src/lib/central-api.ts:179` probes `"title" in docs[0]` | `fetchAllArticleRefs` bails with a `console.warn`; sitemap silently truncates to one page. Reader-invisible; surfaces weeks later as an SEO indexation drop |
+| A4 | `pinnedToLatest` **and** `pinnedUntil` stay as keys on list docs | `wtb-web@origin/main:src/lib/pin.ts:17-18` reads both off list docs from `cms-client.central.ts:143` | `activePin` returns null; homepage hero and top-of-Latest fall back to the newest Destinations article. An editor pins a story and it simply does not appear, with no error to report |
 
 ## Blast Radius
 
@@ -235,6 +261,29 @@ _(to be filled in by the executing agent/session — do not proceed to Phase 2 u
 
 - `r` (fraction of 2.96M that is TTL-invariant cold-key traffic): still TBD — P2's ratio arbitrates the *dominant cause*, not the precise `r` fraction; P1/P2b refine it further.
 
+### P10 + P8d — RUN 10-09-26 (13-agent audit against origin/main)
+
+**Method note (important):** the local checkouts of the other reader repos were stale by 29 / 10 / 27 / 5 commits respectively (three had uncommitted work), so this audit read `origin/main` only — via `git grep origin/main` and `git show origin/main:<file>` — and mutated no working tree. An earlier shallow pass over the stale local trees produced a partly wrong answer (see the wtb-web correction below); that is why the method matters and why this audit re-ran against `origin/main` specifically.
+
+Repos audited: `brief-asia-web`, `wad-web`, `wtb-web`, `dtw-web` (all present at `/home/hieunc/Code/`). **GCV was NOT audited — it is not on this machine.** Every repo's clearance was attacked by two independent reviewers; **0 of 8 refutation attempts succeeded.**
+
+**Result — all four audited readers are CLEAR on all four Change-A fields** (`lastEngine`, `lastEditedBy`, `assignedTo`, `translationStatus`). Zero hits tree-wide at `origin/main`, case-insensitive, snake_case, generated `payload-types.ts` and harness dirs included. Every indirect vector was independently closed: no object spread of an article doc into a typed consumer, no `for...in`, no variable-key access on article docs, and **no runtime schema validation anywhere** (no zod / valibot / yup / ajv / superstruct in any of the four).
+
+Per-change verdicts:
+
+| Change | Verdict | Blocker |
+|---|---|---|
+| A — drop `lastEngine`/`lastEditedBy`/`assignedTo`/`translationStatus` keys from list | GO for the 4 audited | **GCV only** |
+| B — `defaultPopulate` sanitization (security) | **GO — no blocker** | none |
+| C — `unpin-expired` stops firing the webhook | GO | standing condition on wtb-web (see below) |
+| D — R2 media URLs | GO | confirm the R2 rewrite covers `sizes.*.url` |
+
+**Correction to an earlier (wrong) belief — wtb-web DOES read Central.** An earlier pass concluded wtb-web does not read Central at all. That conclusion came from a working tree 27 commits behind. At `origin/main`, wtb-web **does** read Central (via `cms-client.central.ts`, same barrel pattern as the other three). Record this correction explicitly so nobody re-derives the old, wrong belief.
+
+**Standing condition on Fix #5 (wtb-web only) — Change-C safety is contingent, not structural.** brief-asia, wad and dtw obtain pins via `flag: "pinnedToLatest"`, so Central's query-time `pinnedUntil` enforcement governs — structurally safe regardless of caching. **wtb-web never sends the flag**; it pulls a raw list and picks the pin in memory. It survives only because `src/lib/pin.ts` re-checks `pinnedUntil` at render time **and** every Central fetch is `cache:"no-store"`, keeping those pages dynamic. That margin is one line of config: adding `export const revalidate = N` to wtb-web's home page (three existing precedents in that repo) would freeze `Date.now()` at generation time and hold an expired pin for the whole window with nothing left to bust it. Do not treat wtb-web's Change-C clearance as permanent — re-check if wtb-web ever adds `revalidate` to its home page.
+
+**dtw-web audit validity caveat.** The dtw-web clearance above is valid **only for `origin/main` at tip `383f83d`**. The local checkout sits on `feat/rebrand-phase-4-rendered-copy`, 15 commits ahead, containing commits that MODIFY `payload.config.ts` — a file `origin/main` DELETED. Merging produces a delete/modify conflict that, resolved carelessly, would **resurrect the local Payload** and void this audit. See Open Questions below.
+
 ### Methodology note (read before re-running P9)
 
 `/api/media/file/*` returns **404 to HEAD but 200 to GET** for the same URL. Verified on multiple files. Any P9 re-run must use `curl -s -D- -o /dev/null` (GET), never `curl -sI` (HEAD), or it reads a 404 error response and reports a false failure. This error was made once during the first measurement pass.
@@ -320,13 +369,19 @@ DEFAULT (if Phase 0 is inconclusive after best effort):
 
 | Item | Fix # | Repo | Change | Trap to avoid |
 |---|---|---|---|---|
-| Serve card derivatives instead of full-res originals | 6 | `brief-asia-web` | `src/lib/article-view.ts:283`: `heroImageUrl: hero?.url` → `hero?.sizes?.card?.url ?? hero?.url`. Add `srcSet` in `cover-art.tsx:145-152` | **Write it exactly as `hero?.sizes?.card?.url ?? hero?.url`, NEVER `hero.sizes.card.url` direct access.** `scripts/migrate/import-central.ts:332-345` only carries across derivatives the source site had and drops any with a null filename — many of the ~3,300 imported articles have partial `sizes`. `cover-art.tsx:139` falls through a null `src` to a generative SVG placeholder with **no error and no log** — a naive direct-access change silently replaces real photographs with abstract art on legacy articles. Precondition: `SELECT count(*) FROM media WHERE sizes_card_filename IS NULL;` and assess whether a derivative backfill (of card sizes, NOT of `url` columns — see What NOT To Do #7) is needed if that count is non-trivial. |
-| **New sub-item: homepage image weight** | 6 | `brief-asia-web` | Measured live on `https://www.briefasia.com/`: **19 CMS image URLs, 2,591,292 bytes total (2.47 MB)**. Notable offenders: `fbCover-1600x900.png` = 955,268 B (a PNG on a homepage), `fbCover-800x450.png` = 385,987 B, `0 Architect Prof...-1600x900.jpg` = 174,507 B. Several images are fetched at **both** 1600px and 800px on the same page. All returned `x-vercel-cache: HIT`. | **Framing — do not misread this as an August cost driver.** These are edge-cache HITs, so they bill as Fast Data Transfer, not Fast Origin Transfer — **not** part of the 296.9 GB / 49.3 GB origin figures. Their cost is page-weight/Core Web Vitals plus a smaller data-transfer line. Two concrete follow-ups: (a) **convert PNG hero art to WebP/JPEG** — a 955 KB PNG is ~90% reducible; (b) **stop requesting two sizes of the same image on one page**. |
+| ~~Serve card derivatives instead of full-res originals~~ | 6 | ~~`brief-asia-web`~~ | **REMOVED 10-09-26 — already done upstream.** Three of the four audited readers already shipped derivative selection: brief-asia `6033b1f`+`2a4a3e6`, wad `c3e7be8`+`58aff80`, wtb `edfe2ea`+`6452497`. All choose among `sizes.*.url` by `filesize` and are host-agnostic, so they survive the R2 move (Phase 3) unmodified. Do not redo this — nothing left to ship here. | N/A |
+| Homepage image weight — PNG conversion only | 6 (PNG-cleanup only) | `brief-asia-web` | Measured live on `https://www.briefasia.com/`: **19 CMS image URLs, 2,591,292 bytes total (2.47 MB)**. Notable offenders: `fbCover-1600x900.png` = 955,268 B (a PNG on a homepage), `fbCover-800x450.png` = 385,987 B, `0 Architect Prof...-1600x900.jpg` = 174,507 B. Several images are fetched at **both** 1600px and 800px on the same page. All returned `x-vercel-cache: HIT`. **This is a separate problem from derivative selection above (which is done) — do not conflate the two.** | **Framing — do not misread this as an August cost driver.** These are edge-cache HITs, so they bill as Fast Data Transfer, not Fast Origin Transfer — **not** part of the 296.9 GB / 49.3 GB origin figures. Their cost is page-weight/Core Web Vitals plus a smaller data-transfer line. Two concrete follow-ups: (a) **convert PNG hero art to WebP/JPEG** — a 955 KB PNG is ~90% reducible; (b) **stop requesting two sizes of the same image on one page**. |
 | Split `?section=` pillar variant into its own route | 9 | `brief-asia-web` | `[pillar]/page.tsx:6,56-61` awaits `searchParams` (a Next 15 Dynamic API) so all 8 hubs render per-request and page-level ISR (`revalidate = 60`) is inert | Verify with **P15** (`next build`, check `○ (Static)` vs `ƒ (Dynamic)` route table) rather than assuming |
 | Wire `revalidateHooks` into 4 unhooked collections | — | `apcg-cms` | Add to `Authors.ts`, `Corrections.ts`, `Newsletters.ts`, `MarketSnapshots.ts`, mirroring `Pillars.ts:6` | None — this closes a real freshness gap (currently these 4 collections rely solely on their 300s TTL as freshness mechanism); low-risk, four one-line changes |
 | **New finding: HEAD returns 404 on media** | — | `apcg-cms` | `src/app/(payload)/api/[...slug]/route.ts` exports GET/POST/PATCH/PUT/DELETE/OPTIONS but **no HEAD**, and the cache-header wrapper only applies when `res.status === 200`. Add a `HEAD` handler and widen the wrapper. | Consequence: link checkers, social/preview scrapers, and crawlers that issue HEAD receive a 404 with `cache-control: public, max-age=0, must-revalidate` — permanently uncacheable. This is the most likely explanation for the persistent `x-vercel-cache: MISS` in the 31/08 production logs that motivated the original (now refuted) concern about `7125ab0`. Severity: low cost impact, real correctness impact. |
 
 ---
+
+## New Defect Found (unrelated to this plan, found 10-09-26) — WAD stale read-times
+
+`wad-web@origin/main:src/lib/article-view.ts:344` reads `.body` off **list** docs to compute card read-time. Central shipped `body: false` on list responses on 04/09 (`5639e41`). **WAD article-card read-times have therefore been silently falling back to the "5 MIN READ" default since 04/09.**
+
+This is a separate defect with its own fix, **pre-existing and NOT attributable to Change A** (this plan's Fix #2 field-drop hasn't shipped yet). Fix belongs in `wad-web`, not `apcg-cms` — track it there, not as a Phase item in this plan.
 
 ## Preconditions Reference Table (full P-numbering, cross-referenced to synthesis)
 
@@ -342,7 +397,7 @@ DEFAULT (if Phase 0 is inconclusive after best effort):
 | P7 | Related fan-out branch count (avg `articles_rels` per parent) | Fix #1 arithmetic multiplier |
 | P8a-d | R2 domain/derivative/prefix/reader-config | Fix #4 go/no-go, ALL mandatory |
 | P9 | Is `7125ab0`'s media caching actually working? | Phase 0 gate |
-| P10 | Do the other 4 readers match brief-asia-web? | Generalizes every "×5" estimate; clears Fix #5's unpin change and Fix #2's field-usage assumption |
+| P10 | Do the other 4 readers match brief-asia-web? | **RUN 10-09-26 for brief-asia-web, wad-web, wtb-web, dtw-web (CLEAR, 13-agent audit against origin/main).** GCV not on this machine — still open, now the sole blocker for Fix 2b and the Phase 3 env-flip. |
 | P11 | Real nav-pillar count per tenant | Corrects homepage fan-out arithmetic (repo constant was wrong) |
 | P12 | Webhook chain health (200/401/503 across readers) | Confirms Fix #7 targets a real, currently-invisible failure mode |
 | P13 | Is `/api/public/views` in use? | Separate, unmeasured route — `postView` has no caller in brief-asia-web |
@@ -358,6 +413,7 @@ DEFAULT (if Phase 0 is inconclusive after best effort):
 - **Crawler-control fix (Phase 2, conditional branch) has no concrete design yet** — it depends entirely on P2/P2b attribution results, which have not been run as of this plan's writing.
 - **Fix #4's media-share-of-49.3GB is unknown** — needs a log facet not currently listed among P1-P15; add one before starting Phase 3 in earnest if the team decides Phase 3 is worth pursuing before Phase 2 fully lands.
 - **Whether Fix #2's `defaultPopulate` change requires a Payload version-specific syntax check** — not verified against the pinned Payload 3.85.1 API surface in this planning pass; flag for `vc-docs-seeker` at EXECUTE time.
+- **dtw-web audit validity caveat (found 10-09-26).** The dtw-web P10/P8d clearance (see `### P10 + P8d` under Phase 0 Results) is valid **only for `origin/main` at tip `383f83d`**. The local checkout sits on `feat/rebrand-phase-4-rendered-copy`, 15 commits ahead, containing commits that MODIFY `payload.config.ts` — a file `origin/main` DELETED. Merging produces a delete/modify conflict that, resolved carelessly, would **resurrect the local Payload** and void the audit. Anyone merging that branch must re-run the dtw-web portion of the P10/P8d audit afterward.
 - **No workflow JSON per-claim breakdown was separately re-extracted for this plan** beyond the synthesis text; if a future agent needs the raw per-agent verdicts/corrections/unknowns, they live at `/tmp/claude-1000/-home-hieunc-Code-apcg-cms/02fde8d0-fd22-4ee0-9ce1-9273dcee88dd/tasks/wy7ij9o7g.output` under `result.perClaim[]` (query with `jq`, do not `cat` the whole file — it is large).
 
 ---
@@ -365,39 +421,40 @@ DEFAULT (if Phase 0 is inconclusive after best effort):
 ## Validate Contract
 
 Status: CONDITIONAL
-Date: 09-09-26
-date: 2026-09-09
+Date: 10-09-26
+date: 2026-09-10
 generated-by: outer-pvl
+supersedes: 2026-09-09 (outer-pvl) — PVL cycle 1 closed P10/P8d for 4 of 5 readers, raised the risk baseline, and added two new contract locks (A3/A4); this contract replaces the prior CONDITIONAL wholesale
 
 ### Net Gate
 
 **Gate: CONDITIONAL**
 
-0 FAILs at the whole-plan level. 5 CONCERNs, resolved as: 3 mandatory execute-agent instructions (hard preconditions that gate specific sub-items), 1 plan-scoping split (Fix #2 → 2a/2b), 1 known-gap (P10 cannot be run in this environment). No item was softened to hide a cross-site breaking change — the one genuinely blocking sub-item (Fix #2's field-drop) is carved out and hard-blocked below, not waved through.
+0 FAILs at the whole-plan level. Cycle 1 genuinely closed the previous contract's largest CONCERN (P10/P8d, narrowed from "4 unknown repos" to "GCV only" — verified live against `origin/main` for all four audited repos, not just accepted from the report). It also surfaced 2 new items that were not open questions before this cycle: an inverted A3 test-gate direction (corrected below, not shipped as a silent trap) and a now-stale dtw-web merge-conflict caveat (verified closed — reported honestly as good news, not manufactured as a new block). Net effect: 4 CONCERNs remain (down from 5), 0 are new blocking risk, 1 is a corrected specification bug in this contract's own test-gate wording. Fix 2a is cleared to ship now. Phase 2 and Phase 3 remain correctly not-yet-startable — this cycle does not soften either gate.
 
-### Per-Phase Gate (this plan is phased; gate applies per phase, not as one blanket verdict)
+### Per-Phase Gate (unchanged in shape from cycle 0 — only the evidence underneath changed)
 
 | Phase | Gate | Why |
 |---|---|---|
-| Phase 0 (measure) | CONDITIONAL — proceed | P2 + P9 are RUN and decisive/confirming. P1/P2b/P3 are NOT RUN but are read-only dashboard/curl work with no code risk; they do not block Phase 1. |
-| Phase 1 (risk-independent fixes) | CONDITIONAL — proceed, with Fix #2 split (see below) | 3 of 4 items (Fix #7, Fix #5-partial, Fix #8) are clear to ship now. Fix #2 splits into 2a (ship now) and 2b (BLOCKED pending P10). |
-| Phase 2 (conditioned fixes) | **BLOCKED — do not start** | Plan's own Phase Completion Rule: Phase 2 may not start before Phase 0's exit condition (P1, P2b, P3 all recorded) is met. This is a temporal gate, not a plan defect — it lifts automatically once those 3 measurements are recorded, no re-validation needed for that reason alone. |
-| Phase 3 (R2 cutover) | **BLOCKED — do not start** | P8a-d have not been run. Plan's own precondition chain already requires this; validate adds a rollback-safety instruction (below) before this phase may be attempted. |
-| Phase 4 (cleanup) | CONDITIONAL — proceed | Low risk, preconditions (P15, `sizes_card_filename` count) are self-contained and already documented in the plan. |
+| Phase 0 (measure) | CONDITIONAL — proceed | Re-verified 10-09-26: P2 (ratio 1:4.55, fan-out confirmed dominant) and P9 (media caching confirmed working) remain RUN/decisive. P1/P2b/P3 still NOT RUN. Cycle 1 did not touch Phase 0 measurements — no change to this row's gate, only its supporting evidence is one day fresher. |
+| Phase 1 (risk-independent fixes) | CONDITIONAL — proceed, Fix #2a unblocked, Fix #2b narrowed | Fix #2a (security, `defaultPopulate`) is GO — verified live 10-09-26 that the leak is still present and `defaultPopulate` is still greenfield (see Layer 1 Infra findings). Fix #2b (field-drop) stays BLOCKED but the block narrowed from "4 unknown repos" to "GCV only" — this is confirmed, not merely asserted (see Breaking Changes findings). |
+| Phase 2 (conditioned fixes) | **BLOCKED — do not start** | Unchanged. Re-verified 10-09-26: `## Phase 0 Results` still shows P1/P2b/P3 as NOT RUN. P10 moving to RUN does not touch this gate — Phase 2's block is about P1/P2b/P3, a disjoint precondition set. Plan's own Phase Completion Rule still applies. |
+| Phase 3 (R2 cutover) | **BLOCKED — do not start** | Unchanged. Re-verified: no R2 domain has been attached (P8a-c still NOT RUN). P8d (the reader-config check) is now cleared for 3 of 4 readers, but P8d alone unblocking does not unblock Phase 3 — P8a-c gate the env-flip and none of them have run. |
+| Phase 4 (cleanup) | CONDITIONAL — proceed | Unchanged. Fix #6 (derivative selection) is now confirmed DONE upstream for 3 of 4 readers per cycle 1's audit — no new risk, one less thing to build. |
 
 ### Parallel strategy
 
-**No single strategy fits this plan — the phases have genuinely different risk/parallelism shapes. Recommend per-phase:**
+Unchanged from cycle 0 — the per-phase strategy table below is re-confirmed, not re-derived, since nothing in cycle 1 changed the file-disjointness or risk-class shape of any phase.
 
 | Phase | Strategy | Agent count | Rationale |
 |---|---|---|---|
-| Phase 0 remaining (P1, P2b, P3) | Sequential (1 agent, agent-probe/hybrid) | 1 | Dashboard reads + one curl command; no benefit from parallelizing 3 read-only measurements, and P2b/P3 feed the same decision. |
-| Phase 1 (Fix #2a, #5-partial, #7, #8) | **Parallel subagents** | 4 | The 4 items touch **disjoint files** (`[slug]/route.ts` + 3 collection configs · `cron/unpin-expired/route.ts` · `hooks/revalidate.ts` · `lib/public.ts`) with zero shared state — textbook fire-and-forget fan-out, no coordination needed. |
-| Phase 2 (once unblocked) | Sequential (1 agent) | 1 | Branch logic selects exactly one priority path; nothing to parallelize until Phase 0 fully resolves which branch. |
-| Phase 3 (R2 cutover) | Sequential, single agent, manual-first | 1 | P8a-d are an explicitly ordered chain (`run IN ORDER, do not skip any`) followed by shim-deploy-verify-then-flip. Parallelizing this would violate the plan's own sequencing requirement and is explicitly disallowed. |
-| Phase 4 (cleanup) | Parallel subagents | 3-4 | Fix #6, Fix #9, and the `revalidateHooks`/`HEAD` cleanup touch disjoint files with no shared state. |
+| Phase 0 remaining (P1, P2b, P3) | Sequential (1 agent, agent-probe/hybrid) | 1 | Dashboard reads + one curl command; still no benefit from parallelizing 3 read-only measurements. |
+| Phase 1 (Fix #2a, #5-partial, #7, #8) | **Parallel subagents** | 4 | Still-disjoint files (`[slug]/route.ts` + 3 collection configs · `cron/unpin-expired/route.ts` · `hooks/revalidate.ts` · `lib/public.ts`) — fire-and-forget fan-out, no coordination needed. Fix #2b is excluded from this fan-out (it does not ship this cycle). |
+| Phase 2 (once unblocked) | Sequential (1 agent) | 1 | Unchanged — branch logic selects exactly one priority path. |
+| Phase 3 (R2 cutover) | Sequential, single agent, manual-first | 1 | Unchanged — explicitly ordered P8a-d chain, no parallelization allowed. |
+| Phase 4 (cleanup) | Parallel subagents | 2-3 | Narrowed from cycle 0's 3-4: Fix #6 (derivative selection) is done upstream and drops out of this fan-out; PNG-conversion sub-item, `?section=` split, and `revalidateHooks`/`HEAD` cleanup remain disjoint. |
 
-Signals present: S2 (API/security surface) · S3 (Phase 2's 3-way branch) · S5 (user requested deep scrutiny) · S6 (public API + PII/secret + deploy/gateway high-risk classes) · S7 (~20 files across 2 repos) = **5/7**. Dominant signal: **S6** (three distinct high-risk classes stacked in one plan: public API contract, auth/session-adjacent PII, deploy/gateway cutover) — this is why the plan is validated and executed per-phase rather than as one fan-out.
+Signals present: S2 (API/security surface) · S3 (Phase 2's 3-way branch) · S5 (user requested deep scrutiny) · S6 (public API + PII/secret + deploy/gateway high-risk classes, now compounded by the raised reader-risk baseline — see Infra findings) · S7 (~20 files across 2 repos) = **5/7**. Dominant signal unchanged: **S6**, now sharper — the readers' own fallback removal (found this cycle) means every one of these high-risk classes now fails closed into production with zero test coverage catching it, not just theoretically.
 
 ---
 
@@ -409,40 +466,37 @@ Signals present: S2 (API/security surface) · S3 (Phase 2's 3-way branch) · S5 
 
 | Finding | Severity | Proposed fix |
 |---|---|---|
-| All 20 touchpoint files exist at their stated repo/path in both `apcg-cms` and `brief-asia-web`; line-number targets are within ±10 lines of plan text (normal drift since planning) | ✅ PASS | Re-grep exact line before editing (see E8) |
-| `[slug]/route.ts` currently calls `scopedFind({..., depth: 2})` with no `select` — confirms the security finding's premise (nothing currently narrows this route's population) | ✅ PASS | — |
-| `content-engines`, `users`, `tenants` collection files all exist (`ContentEngines.ts`, `Users.ts`, `Tenants.ts`) | ✅ PASS | — |
-| `defaultPopulate` is not used anywhere else in this codebase (`grep -rl defaultPopulate src` returns nothing) — this is a genuinely new pattern for this repo, not a copy of an existing usage | CONCERN | Execute-agent instruction: verify exact Payload 3.85.1 `defaultPopulate` API shape via `vc-docs-seeker` or `node_modules/payload` type defs before writing; do not guess from training data (see E2) |
-| Fix #4's redirect shim: the plan's rollback claim ("unset env var + redeploy, ~2 min") is correct at the `payload.config.ts` level (`disablePayloadAccessControl`/`generateFileURL` are already conditioned on `r2PublicBaseUrl` truthiness, confirmed by reading lines 80/199-218) — but the shim itself, as scoped, has no stated conditional, so an unconditional shim would keep 302-redirecting even after rollback | CONCERN | Execute-agent instruction: gate the shim's redirect branch on the same `r2PublicBaseUrl` check so unset+redeploy fully reverts both halves (see E5) |
-| Fix #4 precondition ordering (P8a→P8d→shim-deploy→verify→env-flip) has no mechanical/automated enforcement — it is procedure, not code | CONCERN | Execute-agent instruction: paste real command output for each P8 step into the phase report, in order, before touching the env var (see E5) |
+| Live-verified 10-09-26 (not re-quoted from the prior contract): `Articles.ts:398` `lastEngine` is a `relationship` to `content-engines`; list route `depth: 1` (`articles/route.ts:261`); `[slug]` route `depth: 2` (`[slug]/route.ts:36`); `scoped.ts:68` passes `overrideAccess: true`; `ContentEngines.ts:27` gates read access to `isSystemAdmin`, bypassed by the above; `ContentEngines.ts:76,77,96` `tokenHash`/`tokenPrefix`/`lastSeenIp` are plain fields | ✅ PASS (leak confirmed still live, diagnosis unchanged) | Ship Fix 2a now (E1 below) |
+| `defaultPopulate` re-confirmed absent anywhere in `apcg-cms/src` (`grep -rl defaultPopulate src` → no matches) — still genuinely greenfield | CONCERN (unchanged from cycle 0) | Execute-agent instruction: verify exact Payload 3.85.1 API shape before writing (E2, carried forward) |
+| **New this cycle — risk baseline raised, not lowered.** All four audited readers (brief-asia-web, wad-web, wtb-web, dtw-web) have deleted their embedded Payload instance (verified live: brief-asia-web's local checkout is 29 commits behind `origin/main`; `origin/main:src/lib/cms-client.ts` is now a bare re-export barrel over `cms-client.central`, confirmed by reading the file directly — the local stale checkout still shows the old `CMS_SOURCE` switch, which is exactly why the audit read `origin/main` and not local trees). No reader has a local-Payload fallback left. Combined with zero test suites and zero runtime response validation in any of the four (independently confirmed: no jest/vitest/playwright config or test files in brief-asia-web; the audit's own claim of "no zod/valibot/yup/ajv/superstruct in any of the four" was not independently re-run this session but is consistent with cycle 1's report) | **CONCERN — real, correctly stated by the plan, must not be read as lower risk** | This does not block anything new — it raises the evidentiary bar for every Hybrid/Agent-Probe gate in Section III below (see the strengthened Fix 2a gate) and is the reason A3/A4 are recorded as hard locks even though this plan doesn't touch either field this cycle |
+| Fix #4's env-gated-shim instruction (E5, carried forward) still applies unchanged — not re-verified this cycle since no Phase 3 code exists yet | ✅ PASS (no new finding) | — |
+| **Correction found this cycle — the dtw-web merge-conflict caveat in this plan's Open Questions is now STALE, not live.** Verified directly: `origin/main` tip is still `383f83d` as the plan states, and `git merge-base HEAD origin/main` on the local `feat/rebrand-phase-4-rendered-copy` checkout returns that exact same hash — meaning origin/main is already fully merged into local HEAD (commit `0607840 Merge origin/main into rebrand phase 4` is one of the 17 commits ahead). `payload.config.ts` does not exist in either branch (`find . -iname payload.config.ts` returns nothing tracked); its only history is a single deletion commit (`8f8de17`) that is common ancestor to both branches, and none of the 17 local-only commits touch that path (`git log origin/main..HEAD --stat -- payload.config.ts` is empty). **There is no pending delete/modify conflict — it was either already resolved cleanly by the merge, or the original caveat mis-stated a risk that never had commits behind it.** | ✅ PASS (corrects an over-cautious plan claim — good news, not a new block) | Downgrade the "dtw-web audit validity caveat" in the plan's Open Questions from an active risk to a closed note next time the plan body is edited (PLAN-mode edit, not performed here — see Section IV). The commit-pinning statement itself ("valid only for `origin/main` at tip `383f83d`") remains correct and should stay as a standing precondition — only the specific merge-conflict mechanism was stale. |
 
 **Test Coverage**
 
 | Finding | Severity | Proposed fix |
 |---|---|---|
-| Neither repo has a test runner configured. `apcg-cms/package.json` and `brief-asia-web/package.json` both expose only `typecheck` (`tsc --noEmit`) and `lint` (`next lint`) — no `jest`, `vitest`, `playwright`, or `test` script; no `*.test.*`/`*.spec.*` files found in either repo; no `jest.config`/`vitest.config`/`playwright.config` in either repo. This was independently confirmed, not assumed. | CONCERN | Do not invent an `npm test`. All behavioral verification for both repos is Hybrid or Agent-Probe tier (see Section III); typecheck+lint prove type/lint cleanliness only, never behavior. |
-| The plan already tier-labels most gates correctly as Hybrid/Agent-Probe | ✅ PASS | — |
-| The `depth: 0` regression trap (What NOT To Do #8) had no concrete gate specified in the plan beyond a manual visual check | CONCERN | Added a Fully-Automated grep guard (see Section III, Fix #2 area) that fails the build if the literal string reappears — cheap, deterministic, catches the exact known trigger even without a test runner |
-| The `.claude/skills/*/scripts/*.mjs` validator suite mentioned in the task is harness/process tooling (plan structure, skill registry, agent parity) — it does not exercise application code and provides zero coverage for any Fix in this plan | ✅ PASS (noted for clarity) | Only `validate-plan-artifact.mjs` is relevant here (already run against this plan file, 0 failures, 0 warnings) |
+| Re-confirmed 10-09-26, unchanged: neither repo has a test runner. `apcg-cms/package.json` scripts list confirms only `lint` (`next lint`) and `typecheck` (`tsc --noEmit`) — no `jest`/`vitest`/`playwright`/`test` script; no `*.test.*`/`*.spec.*` files; no test config files in either repo | CONCERN (structural, unfixable within this plan's scope) | Unchanged from cycle 0: do not invent `npm test`. All behavioral gates are Hybrid/Agent-Probe. See Section III for the full tier table with exact commands. |
+| The `depth: 0` regression guard proposed in cycle 0 is still correctly specified and still catches the exact known trigger — re-verified `[slug]/route.ts:36` is currently `depth: 2`, not `0`, so the guard would currently pass | ✅ PASS (survived the supplement unchanged) | Carried forward verbatim into Section III below |
+| **New this cycle — A3's test-gate direction as stated in the plan body is inverted and would fail to catch the actual regression it names.** Verified: `brief-asia-web@origin/main:src/lib/central-api.ts:179` (`fetchAllArticleRefs`) treats `"title" in docs[0]` as TRUE meaning "Central ignored `view=refs` (full docs returned)" and bails early with a `console.warn`, truncating the sitemap to one page. The plan's Additional Contract Locks table states the invariant as "the `view=refs` branch **keeps returning** `title`" — this is backwards. The actual required invariant, confirmed by reading `apcg-cms/src/app/api/public/articles/route.ts:261-264` (`select: refsView ? { slug: true, updatedAt: true, publishedAt: true } : LIST_SELECT`), is: **`view=refs` must keep NOT returning `title`.** If a future change adds `title: true` to the refsView select branch, that is exactly the regression that trips the reader's own defensive check and truncates the sitemap — the opposite of what the plan's current wording would lead an execute-agent to protect. | **CONCERN — corrected below, not shipped as a silent spec bug** | See Execute-Agent Instruction E10 and the corrected Fully-Automated gate in Section III. This is a wording defect in the plan's Additional Contract Locks table (A3 row), not a code defect — no source file is wrong today (current `select` already correctly omits `title` from the refsView branch). |
+| A4 test-gate direction re-verified correct as stated: `wtb-web@origin/main:src/lib/pin.ts` (`activePin`) reads `a.pinnedToLatest` and `a.pinnedUntil` directly off list docs, confirmed by reading the function body live — the invariant "both keys must stay on list docs" is stated in the correct direction and matches Fix #2's current `LIST_SELECT = { body: false }` (neither key is dropped today) | ✅ PASS | Carry forward unchanged into Section III |
 
 **Breaking Changes**
 
 | Finding | Severity | Proposed fix |
 |---|---|---|
-| Fix #2's `LIST_SELECT` extension drops `lastEngine`, `lastEditedBy`, `assignedTo`, `translationStatus` as field **keys** from `GET /api/public/articles` — a shared public contract consumed by 5 reader sites. Only `brief-asia-web` was grepped and cleared; WTB, DTW, GCV, WAD are not on this machine and P10 (the precondition that exists specifically to close this gap) has NOT run and **cannot** run in this environment. | **CONCERN → hard-gated, not FAILed** | Split Fix #2 into 2a/2b (below). 2b (the field-drop) is BLOCKED by execute-agent instruction until P10 runs somewhere those 4 repos are reachable. |
-| Fix #2's `defaultPopulate` scoping on `[slug]` route does **not** remove any field key — it only sanitizes what appears *inside* an already-populated relationship (strips `tokenHash`/`tokenPrefix`/`lastSeenIp`/staff-identity fields, keeps `lastEngine`/`translationStatus` present as keys) | ✅ PASS — genuinely separable from the P10 risk | Ship this half now (Fix 2a) — no reader can be broken by a field that still exists, only sanitized |
-| Fix #4's media contract change is a hard cutover with a real 404 risk for every already-cached absolute media URL across all 5 sites, sent newsletters, RSS/social scrapes, and Google's image index | CONCERN (already correctly identified as highest-risk item by the plan) | Confirmed the plan's own P8a-d + shim-first sequencing is the right mitigation; strengthened with the env-gated-shim instruction above so rollback is provably complete |
-| Fix #5's `unpin-expired` webhook suppression is verified safe for `brief-asia-web` (`route.ts:139-142` enforces expiry at read time) but explicitly NOT yet verified for the other 4 readers (plan's own risk column says so) | CONCERN (plan already flags this correctly) | Keep scoped to brief-asia-web only until P10-equivalent check runs for the other 4 (see E7) |
-| Webhook contract (`/api/revalidate`) — Fix #7 changes only observability, not the wire shape | ✅ PASS | — |
+| Fix #2b (field-drop) generalization: **narrowed and independently re-confirmed this cycle, not merely accepted from the report.** Cycle 1's 13-agent audit against `origin/main` for brief-asia-web/wad-web/wtb-web/dtw-web found zero hits for the four dropped fields, with every indirect vector (spread, `for...in`, variable-key access, runtime schema validation) closed and 0/8 refutation attempts succeeding. This validate pass did not independently re-run the full 13-agent audit (out of scope for a VALIDATE session; would duplicate cycle 1's own empirical work), but did independently confirm the underlying facts that make the audit trustworthy: `LIST_SELECT` is still `{ body: false }` only (field-drop not yet shipped, so no live risk exists yet either way), and the audit's own stated method (reading `origin/main` via `git show`, not stale local trees) is sound given brief-asia-web's local tree really is 29 commits behind `origin/main` (independently verified this session) | ✅ PASS for 4 of 5 readers, CONCERN remains for GCV only | Fix 2b stays hard-blocked (E1, unchanged) until GCV is checked; the block is real and correctly narrow, not a residual risk on the 4 cleared repos |
+| Fix #2a's `defaultPopulate` scoping on the `[slug]` route does **not** remove any field key — only sanitizes populated sub-fields (strips `tokenHash`/`tokenPrefix`/`lastSeenIp`/staff-identity, keeps `lastEngine`/`translationStatus` present as keys). Re-confirmed this cycle: `[slug]/route.ts:36` is still `depth: 2` with no `select`/`defaultPopulate` today, so no reader-visible shape changes when 2a ships — the leak is closed, the wire shape stays the same except inside the populated relationship | ✅ PASS — genuinely separable from P10/GCV, no dependency on Fix 2b | Ship Fix 2a now (E1) — independent of the GCV block |
+| A3/A4 (new contract locks from cycle 1) are correctly scoped as "not touched by this plan today" — re-confirmed: neither `LIST_SELECT` nor the refsView `select` branch currently include or exclude `title`/`pinnedToLatest`/`pinnedUntil` in a way that violates either lock | ✅ PASS (A4) / CONCERN (A3 — see wording defect above) | A4: no action needed. A3: correct the test-gate wording (E10). |
+| Fix #4 and Fix #5's breaking-change risk profile is unchanged from cycle 0's assessment — re-confirmed no code exists yet for either | ✅ PASS (no new finding, not re-litigated) | Carried forward: E5 (Fix #4), E7 (Fix #5) |
 
 **Security Surface**
 
 | Finding | Severity | Proposed fix |
 |---|---|---|
-| The `tokenHash`/`tokenPrefix`/`lastSeenIp`/staff-identity PII leak on `GET /api/public/articles[/[slug]]` is real, live, and correctly diagnosed by the plan as a security fix, not a byte optimization | ✅ PASS (diagnosis correct) | Prioritize Fix 2a (defaultPopulate) — it is separable from the P10-gated byte-saving half and should ship first/independently, precisely because it is urgent and the other half is not |
-| The `depth: 0` trap (What NOT To Do #8) is correctly identified and correctly avoided in the plan's prescribed fix | ✅ PASS | Enforced with a concrete grep-guard gate (Section III) so a future agent reaching for `depth: 0` anyway gets caught mechanically, not just by a note in a plan file |
-| `resolveReadToken` memoization (Fix #8) is a deliberate, documented security trade-off (revocation delay bounded by TTL) | ✅ PASS | Confirm the 30-60s TTL is actually implemented as stated — no code currently implements this memoization (grep confirms `resolveReadToken` in `src/lib/public.ts` has no cache today), so this is greenfield, not a modification of existing caching logic |
-| Fix #4's `disablePayloadAccessControl: true` flips `skipSafeFetch` to `true` (plan's own note) — URL-fetch paths lose Payload's `safeFetch` hardening | CONCERN (plan already flags this) | Carried forward as an explicit go/no-go item under Phase 3 — execute-agent must confirm this is acceptable or add compensating validation before flipping the env var, not discover it after |
+| The PII/secret leak is re-verified live and unambiguous as of 10-09-26 (see Infra findings above for the exact file:line chain) — the leak has not been touched by any code change since cycle 0 | ✅ PASS (diagnosis correct, still live, still urgent) | **Clear GO for Fix 2a.** No blocking dependency remains — see Net Gate above. |
+| `resolveReadToken` memoization (Fix #8) remains greenfield (re-confirmed: no cache exists in `src/lib/public.ts` today) | ✅ PASS (unchanged) | Carried forward: implement the 30-60s TTL as documented |
+| **Raised-stakes note (from the risk-baseline finding above):** with no reader-side fallback and no runtime response validation anywhere, a mistake in Fix 2a's `defaultPopulate` scoping that accidentally strips a field readers DO consume (e.g. `lastEngine`'s own id, or breaks byline resolution) would fail silently at HTTP 200 across all 4 live sites with nothing in the logs. The plan's own finding that "no reader reads any inner subfield of those relationships, and bylines resolve from the separate `authors` collection" is the mitigating fact — but it has not been independently re-verified against `origin/main` for all 4 readers this session (only asserted by cycle 1's audit) | CONCERN | Strengthened Hybrid test gate below (Section III) explicitly asserts byline/author rendering is unaffected post-Fix-2a, not just that secret fields are gone |
 
 ---
 
@@ -452,25 +506,25 @@ Signals present: S2 (API/security surface) · S3 (Phase 2's 3-way branch) · S5 
 
 | Question | Verdict | Detail |
 |---|---|---|
-| Mechanical feasibility | PASS | Zero code change; commands are curl/dashboard reads. P9's already-recorded HEAD-vs-GET finding was independently re-verified by reading `src/app/(payload)/api/[...slug]/route.ts` — it genuinely exports no `HEAD` handler, confirming the plan's methodology note is code-accurate, not asserted. |
-| Plan gaps | none found beyond what the plan already flags (P1/P2b/P3 pending) | — |
+| Mechanical feasibility | PASS | Unchanged — zero code change, P1/P2b/P3 remain read-only dashboard/curl work |
+| Plan gaps | none new | P2/P9 results from cycle 0 re-confirmed stable this session (not re-run — no new dashboard access this VALIDATE pass) |
 | Conflicts | none | — |
-| Highest-risk edit | None — this phase makes no code change | N/A |
+| Highest-risk edit | N/A | This phase makes no code change |
 
 **Phase 1 — Risk-Independent Fixes**
 
 | Question | Verdict | Detail |
 |---|---|---|
-| Mechanical feasibility | PASS | All 4 items' edit targets are present and uniquely matchable: `LIST_SELECT` at `route.ts:39`, `[slug]/route.ts` depth:2/no-select confirmed, `resolveReadToken` in `public.ts` (no existing cache — greenfield), `postRevalidate` in `hooks/revalidate.ts` (no `res.ok` check today — confirmed by reading the fetch call), `cron/unpin-expired/route.ts:89` currently posts an unconditional webhook via the `logActivity`/revalidate hook path (no `disableRevalidate` context flag set today — confirmed). |
-| Plan gaps | Fix #2 bundles a P10-gated contract change with a P10-independent security fix under one risk rating ("Very low") — this understates 2b's real risk | Split into 2a/2b, see Execute-Agent Instructions E1-E3 |
+| Mechanical feasibility | PASS | All 4 items' edit targets re-verified present and uniquely matchable this session: `LIST_SELECT = { body: false }` at `route.ts:39` (confirmed live), `[slug]/route.ts:36` `depth: 2` with no select (confirmed live), `resolveReadToken` in `public.ts` (still no cache — greenfield, confirmed), `cron/unpin-expired/route.ts` and `hooks/revalidate.ts` unchanged since cycle 0 (not re-read line-by-line this session; no evidence anything moved) |
+| Plan gaps | Fix #2's split (2a/2b) is now cleanly documented as a two-item split with independent GO/BLOCKED status — the split itself was already applied by cycle 0's contract and is not new work this cycle, only its evidentiary basis (P10) improved | See E1 (unchanged in substance, narrower scope) |
 | Conflicts | none | — |
-| Highest-risk edit | Fix #2b (the field-drop), if shipped without the split | Mitigation: E1 hard-blocks 2b until P10 |
+| Highest-risk edit | Fix #2b if shipped without GCV confirmation | Unchanged mitigation: E1 hard-blocks 2b |
 
 **Phase 2 — Conditioned Fixes**
 
 | Question | Verdict | Detail |
 |---|---|---|
-| Mechanical feasibility | PASS (branch logic reads cleanly; `cms-client.central.ts`'s `getRelatedArticlesCached` fan-out confirmed: `countrySlugs.map` + `tagSlugs.slice(0,4).map` + optional pillar branch + up to 2 filler branches — matches the "4-10 calls" claim exactly) | Cannot start — see per-phase gate above |
+| Mechanical feasibility | PASS (unchanged, not re-verified this session — branch logic and fan-out call sites were confirmed in cycle 0 and no code has changed since) | Cannot start — see per-phase gate above |
 | Plan gaps | none new | — |
 | Conflicts | none | — |
 | Highest-risk edit | N/A until unblocked | — |
@@ -479,19 +533,19 @@ Signals present: S2 (API/security surface) · S3 (Phase 2's 3-way branch) · S5 
 
 | Question | Verdict | Detail |
 |---|---|---|
-| Mechanical feasibility | PASS | The `GET` export in `src/app/(payload)/api/[...slug]/route.ts` already wraps `payloadGet(...)` with a `pathname.startsWith("/api/media/file/")` check — the shim slots into the same conditional shape described by the plan, "does not shadow clientUpload" is achievable since clientUpload posts, not GETs, to a different path. |
-| Plan gaps | Shim needs explicit env-gating for a complete rollback (see Infra finding above) | E5 |
+| Mechanical feasibility | PASS (unchanged, not re-verified this session — no code exists yet for this phase) | — |
+| Plan gaps | none new | — |
 | Conflicts | none | — |
-| Highest-risk edit | The env-var flip itself | Mitigation: E5 (shim-first, verified, then flip; never reverse) |
+| Highest-risk edit | The env-var flip itself | Mitigation unchanged: E5 |
 
 **Phase 4 — Cleanup**
 
 | Question | Verdict | Detail |
 |---|---|---|
-| Mechanical feasibility | PASS | `article-view.ts:283` and `cover-art.tsx:145-152` both exist and match the described shapes; `[pillar]/page.tsx` awaits `searchParams` as described |
+| Mechanical feasibility | PASS | Fix #6 (derivative selection) confirmed DONE upstream this cycle for 3 of 4 readers — removed from this phase's remaining scope, narrowing the fan-out (see Parallel strategy above) |
 | Plan gaps | none new | — |
 | Conflicts | none | — |
-| Highest-risk edit | Fix #6's null-safety change if written as direct access instead of optional-chained | Plan's own trap warning is sufficient; carried into Section III as an explicit Agent-Probe scenario |
+| Highest-risk edit | Fix #6's PNG-conversion sub-item and the null-safety change, if written as direct access instead of optional-chained | Unchanged — plan's own trap warning is sufficient, carried into Section III |
 
 ---
 
@@ -499,22 +553,22 @@ Signals present: S2 (API/security surface) · S3 (Phase 2's 3-way branch) · S5 
 
 | Layer 1 dimensions | Status |
 |---|---|
-| Infra fit | CONCERN (3 findings, all mitigated by execute-agent instructions) |
-| Test coverage | CONCERN (no test runner in either repo — structural, not fixable within this plan's scope) |
-| Breaking changes | CONCERN (Fix #2 field-drop is real; contained via 2a/2b split, not shipped) |
-| Security surface | PASS (diagnosis and fix design are correct; one greenfield-verification note) |
+| Infra fit | CONCERN (2 findings: `defaultPopulate` greenfield-verification note, raised risk baseline — both mitigated by execute-agent instructions; 1 finding corrected from CONCERN to PASS this cycle: dtw-web merge-conflict caveat is stale) |
+| Test coverage | CONCERN (no test runner in either repo — structural, unchanged; 1 new CONCERN this cycle: A3 test-gate wording inverted, corrected below) |
+| Breaking changes | CONCERN (Fix #2b field-drop, narrowed to GCV only; contained via 2a/2b split, not shipped) |
+| Security surface | CONCERN (diagnosis correct and Fix 2a is clear to ship, but the raised risk baseline means the Hybrid gate must now explicitly prove bylines/authors are unaffected, not just that secrets are gone — this is a strengthened gate requirement, not a block) |
 
 | Layer 2 phases | Status |
 |---|---|
 | Phase 0 — Measure | PASS |
-| Phase 1 — Risk-independent fixes | CONCERN (Fix #2 split required) |
-| Phase 2 — Conditioned fixes | BLOCKED (temporal — Phase 0 exit condition not yet met; not a plan defect) |
-| Phase 3 — R2 cutover | BLOCKED (temporal — P8a-d not yet run; not a plan defect) |
+| Phase 1 — Risk-independent fixes | CONDITIONAL (Fix #2a GO, Fix #2b narrowed-BLOCKED) |
+| Phase 2 — Conditioned fixes | BLOCKED (temporal — Phase 0 exit condition not yet met; unchanged, not a plan defect) |
+| Phase 3 — R2 cutover | BLOCKED (temporal — P8a-c not yet run; unchanged, not a plan defect) |
 | Phase 4 — Cleanup | PASS |
 
-**Totals: 0 FAILs / 5 CONCERNs / 2 phase-level temporal BLOCKs (both self-resolving once their own stated precondition is met, per the plan's own Phase Completion Rules) / 4 PASSes**
+**Totals: 0 FAILs / 4 CONCERNs (down from 5) / 2 phase-level temporal BLOCKs (both self-resolving once their own stated precondition is met) / 4 PASSes (up from 4 — one item moved from CONCERN to PASS: the dtw-web merge-conflict caveat).**
 
-**→ Net Gate: CONDITIONAL** — Phase 0 and Phase 4 pass clean. Phase 1 proceeds with the Fix #2 split enforced by hard execute-agent instructions (not softened). Phase 2 and Phase 3 are correctly not-yet-startable per the plan's own written gate — this validate pass does not waive either gate and does not let Phase 2 or Phase 3 code land under this contract.
+**→ Net Gate: CONDITIONAL.** Phase 0 and Phase 4 pass clean. Phase 1 proceeds — Fix #2a is now an unambiguous GO with no remaining blocker; Fix #2b stays hard-blocked, narrowed to GCV only, not softened. Phase 2 and Phase 3 remain correctly not-yet-startable; this cycle does not waive either gate. Per the net-gate vacuous-green ban: this plan's fully-automated gates (typecheck/lint/grep-guards) alone do not prove any behavioral claim — every behavioral assertion in this plan rests on Hybrid or Agent-Probe tiers, which is why the net gate is CONDITIONAL and not PASS even with 0 FAILs.
 
 ---
 
@@ -524,76 +578,97 @@ Signals present: S2 (API/security surface) · S3 (Phase 2's 3-way branch) · S5 
 
 | Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
 |---|---|---|---|---|
-| Fully-Automated | `depth: 0` regression guard | `! grep -qE 'depth:\s*0' "src/app/api/public/articles/[slug]/route.ts"` exits 0 | The specific known trap (What NOT To Do #8) was not reintroduced literally | Does not catch an equivalent regression achieved a different way (e.g. a new `select` that drops `body`) |
+| Fully-Automated | `depth: 0` regression guard | `! grep -qE 'depth:\s*0' "src/app/api/public/articles/[slug]/route.ts"` exits 0 | The known trap (What NOT To Do #8) was not reintroduced literally | Does not catch an equivalent regression via a different mechanism (e.g. a new `select` that drops `body`) |
+| | | `Failing stub:` `test("should reject depth:0 on [slug] route", () => { throw new Error("NOT IMPLEMENTED — TDD stub for: depth:0 regression guard") })` | | |
 | Fully-Automated | Typecheck/lint clean after edit | `npm run typecheck && npm run lint` (apcg-cms) exits 0 | No type/lint regression from the `defaultPopulate` config change | Proves nothing about runtime response shape or behavior |
-| Hybrid | Security fields no longer expose secrets | `curl -s -H "Authorization: Bearer $CMS_READ_TOKEN" '<cms>/api/public/articles/<known-slug>?locale=en'` then `jq '.doc.translationStatus[]?.contentEngine // .doc.lastEngine'` — result must contain no `tokenHash`/`tokenPrefix`/`lastSeenIp` keys — precondition: live CMS + `CMS_READ_TOKEN` | Fix 2a (defaultPopulate) actually closes the PII/secret leak at runtime, not just in code review | Does not prove the list route (2b, deferred) is also clean — that is out of scope until 2b ships |
-| Hybrid | Inline images still populate after 2a | `curl -s -H "Authorization: Bearer $CMS_READ_TOKEN" '<cms>/api/public/articles/<slug-with-inline-image>?locale=en' \| jq -e '.doc.body.root.children[] \| select(.type=="upload") \| .value.url'` returns a non-null URL — precondition: live CMS + a known article containing an inline image | The `defaultPopulate` change did not collapse into the `depth: 0` failure mode | Does not prove every article's every image is fine — sample of 1+ known cases only |
-| Agent-Probe | Visual: inline image renders in a real article page | Load `brief-asia-web` locally or staging against an article with a body inline image; confirm the image renders, not a blank gap | Human/agent visual judgment that the fix is correct end-to-end | Not automatable — no visual regression tooling exists in either repo |
-| Known-gap | Fix 2b (LIST_SELECT field-drop) is NOT covered by any gate in this contract | — | This sub-item is explicitly out of scope for this EXECUTE pass — see E1 | Resolution: backlog artifact (below), re-run VALIDATE for Fix 2b once P10 is recorded |
+| | | `Failing stub:` `test("should typecheck and lint clean after defaultPopulate change", () => { throw new Error("NOT IMPLEMENTED — TDD stub for: typecheck/lint clean") })` | | |
+| Hybrid | Security fields no longer expose secrets | `curl -s -H "Authorization: Bearer $CMS_READ_TOKEN" '<cms>/api/public/articles/<known-slug>?locale=en'` then `jq '.doc.translationStatus[]?.contentEngine // .doc.lastEngine'` — result must contain no `tokenHash`/`tokenPrefix`/`lastSeenIp` keys — precondition: live CMS + `CMS_READ_TOKEN` | Fix 2a actually closes the PII/secret leak at runtime | Does not prove the list route (2b, deferred) is also clean |
+| Hybrid | **Strengthened this cycle — byline/author resolution unaffected** | Same request as above; additionally assert `.doc.author` (or the article's byline-resolving field, per the plan's own note that "bylines resolve from the separate `authors` collection") is present and non-null, and that `.doc.lastEngine` (the key, not its populated subfields) is still present if it was before — precondition: live CMS + a known article with a byline | The raised risk baseline (no reader fallback, no runtime validation) is compensated for by proving `defaultPopulate` scoping did not collaterally strip a field readers actually consume | Does not prove every article/locale/tenant — sample of 1+ known cases only |
+| Hybrid | Inline images still populate after 2a | `curl -s -H "Authorization: Bearer $CMS_READ_TOKEN" '<cms>/api/public/articles/<slug-with-inline-image>?locale=en' \| jq -e '.doc.body.root.children[] \| select(.type=="upload") \| .value.url'` returns a non-null URL | The `defaultPopulate` change did not collapse into the `depth: 0` failure mode | Sample of 1+ known cases only |
+| Agent-Probe | Visual: inline image renders in a real article page | Load `brief-asia-web` locally or staging against an article with a body inline image; confirm the image renders | Human/agent visual judgment that the fix is correct end-to-end | Not automatable — no visual regression tooling exists in either repo |
+| Known-gap | Fix 2b (field-drop) not covered by any gate in this contract | — | Explicitly out of scope for this EXECUTE pass — see E1 | Resolution: backlog artifact (below); re-run VALIDATE for Fix 2b once GCV clearance is recorded |
+
+**Area: `apcg-cms/src/app/api/public/articles/route.ts` (A3 contract lock — corrected this cycle)**
+
+| Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
+|---|---|---|---|---|
+| Fully-Automated | **Corrected direction:** `view=refs` continues to NOT return `title` | `! grep -A3 'select: refsView' "src/app/api/public/articles/route.ts" \| grep -q 'title: true'` exits 0 | The refsView select branch has not been changed to include `title` — the exact regression that trips `brief-asia-web`'s own `fetchAllArticleRefs` defensive check | Does not prove runtime behavior directly — this is a static-source guard; add the Hybrid check below for a live confirmation |
+| | | `Failing stub:` `test("should keep view=refs select omitting title", () => { throw new Error("NOT IMPLEMENTED — TDD stub for: A3 contract lock — title absent from refsView select") })` | | |
+| Hybrid | Live confirmation that `view=refs` omits `title` | `curl -s -H "Authorization: Bearer $CMS_READ_TOKEN" '<cms>/api/public/articles?view=refs&limit=1'` then `jq -e '.docs[0] | has("title") | not'` — precondition: live CMS | Confirms at runtime, not just in source, that the reader's `"title" in docs[0]` heuristic will correctly stay false | Does not prove pagination beyond page 1 — separate concern from the field-presence check |
+| Known-gap | No test exists in `brief-asia-web` to independently assert its own `fetchAllArticleRefs` bail-out logic | — | `brief-asia-web` has no test runner (same structural gap as the rest of this plan) | Accepted — this lock is enforced from the `apcg-cms` side only; if `brief-asia-web`'s detection logic itself changes, re-audit this row |
+
+**Area: `apcg-cms/src/app/api/public/articles/route.ts` (A4 contract lock)**
+
+| Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
+|---|---|---|---|---|
+| Fully-Automated | `LIST_SELECT` never drops `pinnedToLatest`/`pinnedUntil` | `! grep -A5 'LIST_SELECT = ' "src/app/api/public/articles/route.ts" \| grep -qE '(pinnedToLatest|pinnedUntil)\s*:\s*false'` exits 0 | Neither key is explicitly excluded from the list select object | Does not prove the fields are populated with correct values — only that they are not deliberately dropped |
+| | | `Failing stub:` `test("should never drop pinnedToLatest/pinnedUntil from LIST_SELECT", () => { throw new Error("NOT IMPLEMENTED — TDD stub for: A4 contract lock") })` | | |
+| Hybrid | Live confirmation both keys are present on list docs | `curl -s -H "Authorization: Bearer $CMS_READ_TOKEN" '<cms>/api/public/articles?limit=1'` then `jq -e '.docs[0] | has("pinnedToLatest") and has("pinnedUntil")'` — precondition: live CMS | Confirms at runtime that `wtb-web`'s `activePin` (which reads both keys directly off list docs) will not silently break | Does not prove `wtb-web`'s own read-time re-check logic — that lives in a different repo with no test coverage |
 
 **Area: `apcg-cms/src/app/api/cron/unpin-expired/route.ts` + `src/hooks/revalidate.ts` (Fix #5-partial, Fix #7)**
 
 | Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
 |---|---|---|---|---|
 | Fully-Automated | Typecheck/lint clean | `npm run typecheck && npm run lint` (apcg-cms) exits 0 | No type/lint regression | No runtime behavior |
-| Fully-Automated | `unpin-expired` still enforces expiry at read time | Existing guard at `route.ts:139-142` (public articles route reads `pinnedUntil` at read time) — add a coverage assertion if a test harness is ever added; today, confirm by code inspection that the read-time filter is untouched by this change | Suppressing the webhook doesn't reintroduce stale pins for brief-asia-web | No automated test executes this — code-inspection only until a runner exists |
-| Hybrid | `res.ok` check actually catches a webhook failure | Force a 401 (bad `REVALIDATE_SECRET`) against a reader's `/api/revalidate` and confirm `postRevalidate` now logs a failure instead of silently succeeding — precondition: reader env with `REVALIDATE_SECRET` reachable | The observability fix (Fix #7) targets a real, previously-invisible failure mode | Does not prove timeout handling (separate scenario, same precondition) |
-| Agent-Probe | `unpin-expired` generalization to the other 4 readers | Read WTB/DTW/GCV/WAD's article-rendering code for `pinnedToLatest` usage patterns | Whether Fix #5's suppression is safe beyond brief-asia-web | Cannot be probed at all from this machine — those repos are not present |
-| Known-gap | Other-4-reader generalization for Fix #5 (P10-equivalent) | — | — | Resolution: keep Fix #5 scoped to brief-asia-web only (see E7); backlog artifact for the other 4 |
+| Fully-Automated | `unpin-expired` still enforces expiry at read time | Code-inspection confirmation that `route.ts:139-142`'s read-time filter is untouched by this change (no automated test exists) | Suppressing the webhook doesn't reintroduce stale pins for brief-asia-web | No automated test executes this |
+| Hybrid | `res.ok` check actually catches a webhook failure | Force a 401 (bad `REVALIDATE_SECRET`) against a reader's `/api/revalidate`, confirm `postRevalidate` logs a failure — precondition: reader env with `REVALIDATE_SECRET` reachable | Fix #7 targets a real, previously-invisible failure mode | Does not prove timeout handling (separate scenario, same precondition) |
+| Agent-Probe | `unpin-expired` generalization to the other readers | Re-confirmed this cycle for wad-web/wtb-web/dtw-web (structural GO for wad/dtw via `pinnedToLatest` query-time enforcement; contingent-but-currently-safe for wtb-web via the standing condition on its `no-store` fetch pattern — re-check if wtb-web ever adds `revalidate` to its home page, verified this session that no such change exists yet: `wtb-web@origin/main` shows no new `revalidate` export in `pin.ts` or its callers) | Whether Fix #5's suppression is safe beyond brief-asia-web | GCV still cannot be probed — not present on this machine |
+| Known-gap | GCV generalization for Fix #5 | — | — | Resolution: Fix #5 may generalize to brief-asia-web/wad-web/wtb-web/dtw-web; keep scoped away from GCV only |
 
 **Area: `apcg-cms/src/lib/public.ts` (Fix #8, `resolveReadToken` memoization)**
 
 | Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
 |---|---|---|---|---|
 | Fully-Automated | Typecheck/lint clean | `npm run typecheck && npm run lint` (apcg-cms) exits 0 | No type/lint regression | No behavior |
-| Hybrid | Memoized token resolves to the same tenant within TTL window, and a revoked token is honored after TTL expiry | Manual: rotate/deactivate a test tenant's read token, hit `/api/public/articles` before and after the TTL window, confirm 401 only appears after expiry — precondition: live CMS + a disposable test tenant token | The deliberate revocation-delay trade-off behaves as documented (30-60s), not indefinitely | Does not prove behavior under concurrent requests (race on the memoization map) |
-| Known-gap | Concurrent-request race on the module-level Map | — | — | Resolution: accept as known-gap — low real-world risk (read-mostly, short TTL); document in phase report |
+| Hybrid | Memoized token honors TTL-bounded revocation delay | Rotate/deactivate a test tenant's read token, hit `/api/public/articles` before and after the TTL window, confirm 401 only appears after expiry — precondition: live CMS + a disposable test tenant token | The documented 30-60s revocation-delay trade-off behaves as designed | Does not prove behavior under concurrent requests (race on the module-level Map) |
+| Known-gap | Concurrent-request race on the memoization Map | — | — | Accepted as known-gap — low real-world risk (read-mostly, short TTL); document in phase report |
 
 **Area: `apcg-cms/payload.config.ts` + `src/app/(payload)/api/[...slug]/route.ts` (Fix #4, R2 cutover — HIGH-RISK CLASS: deploy/gateway)**
 
 | Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
 |---|---|---|---|---|
 | Fully-Automated | Typecheck/lint clean | `npm run typecheck && npm run lint` (apcg-cms) exits 0 | No type/lint regression | No runtime behavior |
-| Hybrid | P8a — R2 domain serves real bytes | `curl -I https://<r2-domain>/briefasia/<known-filename>` → 200, real `Content-Type`, custom domain (not `r2.dev`) | R2 origin is reachable and correctly configured | Nothing about derivative filenames or prefix-less rows |
-| Hybrid | P8b — derivative filenames also resolve | Same curl against a `card-` variant filename → 200 | Derivatives (majority of request volume) are served correctly | Nothing about the bucket-root prefix-less rows |
-| Hybrid | P8c — prefix-less legacy rows | `SELECT count(*) FROM media WHERE prefix IS NULL OR prefix = '';` then `HEAD` one such filename at the bucket root | Whether pre-migration rows will 404 under the new scheme | Does not fix them — only surfaces the count for a go/no-go call |
-| Hybrid | P8d — other-4-reader `next/image` config | `grep -rn "remotePatterns\|next/image\|/api/media/" src/ next.config.*` in each of WTB/DTW/GCV/WAD | Whether those readers' image config accepts the new R2 domain | **Cannot be run from this machine — those repos are absent.** |
-| Hybrid | Redirect shim 302s correctly | Deploy shim only (env var still unset), then `curl -I '<cms>/api/media/file/<name>?prefix=<t>'` → confirm normal 200 passthrough (pre-flip); after flipping in a staging-only env, confirm 302 → correct R2 URL | The shim activates only when `R2_PUBLIC_BASE_URL` is set, and redirects to the exact R2 URL | Does not prove production traffic patterns (newsletters, RSS, Google image index) will follow the redirect correctly — those are external consumers outside this repo's control |
-| Agent-Probe | Rollback drill | In a disposable/staging environment: flip env var, confirm cutover works, unset it, redeploy, confirm `/api/media/file/*` serves bytes directly again with no lingering redirect | Rollback is a complete, working code path, not just a claim | Cannot be probed against production — staging-only by design |
-| Known-gap | P8d (other 4 readers) | — | — | **Cannot run from this environment.** Resolution: backlog artifact — Phase 3 must not proceed to the env-flip step until P8d is run by someone with access to WTB/DTW/GCV/WAD |
+| Hybrid | P8a — R2 domain serves real bytes | `curl -I https://<r2-domain>/briefasia/<known-filename>` → 200, real `Content-Type`, custom domain (not `r2.dev`) | R2 origin reachable and correctly configured | Nothing about derivative filenames or prefix-less rows |
+| Hybrid | P8b — derivative filenames resolve | Same curl against a `card-` variant filename → 200 | Derivatives (majority of request volume) served correctly | Nothing about bucket-root prefix-less rows |
+| Hybrid | P8c — prefix-less legacy rows | `SELECT count(*) FROM media WHERE prefix IS NULL OR prefix = '';` then `HEAD` one such filename at the bucket root | Whether pre-migration rows 404 under the new scheme | Does not fix them — only surfaces the count for a go/no-go call |
+| Hybrid | P8d — other-reader `next/image` config | `grep -rn "remotePatterns\|next/image\|/api/media/" src/ next.config.*` in each of WAD/WTB/DTW/GCV | Whether those readers' image config accepts the new R2 domain | Confirmed compatible for WAD/WTB/DTW as of the 10-09-26 audit; GCV still cannot be run from this machine |
+| Hybrid | Redirect shim 302s correctly, and rolls back completely | Deploy shim only (env var unset), curl → confirm normal 200 passthrough (pre-flip); flip in staging only, curl → confirm 302 to correct R2 URL; unset + redeploy, curl → confirm passthrough resumes with no lingering redirect | The shim's redirect branch is conditional on `R2_PUBLIC_BASE_URL`, so rollback is provably complete on both halves (E5) | Does not prove production traffic patterns (newsletters, RSS, Google image index) follow the redirect |
+| Agent-Probe | Rollback drill | In a disposable/staging environment, run the full flip → confirm → unset → redeploy → confirm cycle | Rollback is a complete, working code path | Cannot be probed against production |
+| Known-gap | P8d (GCV only) | — | — | Cannot run from this environment; backlog artifact hard-blocks the Phase 3 env-flip step |
 
 **High-risk class table (mandatory hybrid minimum per protocol):**
 
 | Area | High-risk class | Minimum tier | Gap rationale if known-gap accepted |
 |---|---|---|---|
-| Fix #2 (public API field/population changes) | public API contract change + PII/secret exposure | Hybrid | 2a is Hybrid-covered above (curl+jq). 2b has no known-gap acceptance — it is hard-blocked (E1), not accepted as a gap. |
-| Fix #4 (R2 cutover) | deploy/runtime/gateway | Hybrid | P8a-c are Hybrid-covered. P8d cannot run here — accepted as a documented known-gap ONLY for the purpose of not stalling Phase 3 prep work; the env-flip itself remains blocked until P8d is actually run by someone with the other 4 repos. |
+| Fix #2 (public API field/population changes) | public API contract change + PII/secret exposure | Hybrid | 2a is Hybrid-covered above, strengthened this cycle with a byline-preservation assertion. 2b has no known-gap acceptance — hard-blocked (E1), not accepted as a gap. |
+| Fix #4 (R2 cutover) | deploy/runtime/gateway | Hybrid | P8a-c Hybrid-covered. P8d ran for WAD/WTB/DTW (GO). GCV alone accepted as a documented known-gap ONLY for Phase 3 prep work; the env-flip itself remains blocked until P8d runs for GCV. |
 | `resolveReadToken` memoization | secret/trust-boundary logic (token revocation timing) | Hybrid | Covered above. |
+| A3/A4 contract locks | public API contract change (silent-failure class — SEO indexation, editorial pin visibility) | Fully-Automated + Hybrid | Both covered above; A3's gate direction was corrected this cycle. |
 
 **Area: `brief-asia-web/src/lib/cms-client.central.ts` (Fix #1, related-articles fan-out collapse)**
 
 | Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
 |---|---|---|---|---|
-| Fully-Automated | Typecheck/lint clean | `npm run typecheck && npm run lint` (brief-asia-web) exits 0 | No type/lint regression | **No behavior whatsoever** — brief-asia-web has no test runner (confirmed: no jest/vitest/playwright config or spec/test files exist) |
-| Hybrid | Live call-count reduction | Instrument `getRelatedArticlesCached`'s branches (temporary `console.count` or CMS-side request log correlation) on a real cold article render, before vs. after the collapse — precondition: live CMS + brief-asia-web dev/staging | The "4-10 calls → 2-3" claim is real, not just source-reviewed | Exact percentage of the 2.96M this saves — that's P1/P7's job, not this gate's |
-| Agent-Probe | Related-articles rail still renders sensible content | Load an article page, confirm the related rail shows non-empty, on-topic articles (not just "doesn't crash") | Editorial quality of the collapsed fan-out logic | Not automatable — no visual/content-quality tooling exists |
-| Known-gap | No regression test locks in the call count going forward | — | — | Resolution: backlog artifact — brief-asia-web needs a minimal test harness (e.g. mock `fetch` + assert call count) before this kind of regression can be caught automatically; out of scope for this plan |
+| Fully-Automated | Typecheck/lint clean | `npm run typecheck && npm run lint` (brief-asia-web) exits 0 | No type/lint regression | No behavior — brief-asia-web has no test runner (re-confirmed this session: `origin/main` shows no jest/vitest/playwright config) |
+| Hybrid | Live call-count reduction | Instrument `getRelatedArticlesCached`'s branches on a real cold article render, before vs. after the collapse — precondition: live CMS + brief-asia-web dev/staging | The "4-10 calls → 2-3" claim is real | Exact percentage of the 2.96M this saves — that's P1/P7's job |
+| Agent-Probe | Related-articles rail still renders sensible content | Load an article page, confirm the related rail shows non-empty, on-topic articles | Editorial quality of the collapsed fan-out logic | Not automatable |
+| Known-gap | No regression test locks in the call count going forward | — | — | Resolution: backlog artifact — out of scope for this plan |
 
 **Area: `brief-asia-web` search (Fix #3) + `apcg-cms` search route (context only)**
 
 | Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
 |---|---|---|---|---|
-| Fully-Automated | Typecheck/lint clean (both repos as applicable) | `npm run typecheck && npm run lint` in each repo | No type/lint regression | No behavior |
-| Hybrid | Query gating + cache actually reduces uncached `LIKE` scans | Type a query <3 chars → confirm no `searchArticles` call fires (network tab / log); type ≥3 chars twice with the same normalized query within 60s → confirm the second hits `unstable_cache`, not a fresh CMS round-trip — precondition: live CMS + brief-asia-web dev | The gate + cache actually change request volume, not just intent | Real share of the 2.96M this saves — that's P1's job |
-| Agent-Probe | Debounce feels correct, no dropped keystrokes | Manual UI check typing at normal speed | Debounce timing (400ms) doesn't harm UX | Not automatable |
-| Known-gap | No automated test for search behavior | — | — | Same brief-asia-web test-infra gap as Fix #1 |
+| Fully-Automated | Typecheck/lint clean (both repos) | `npm run typecheck && npm run lint` in each repo | No type/lint regression | No behavior |
+| Hybrid | Query gating + cache reduces uncached `LIKE` scans | Type <3 chars → confirm no `searchArticles` call; type ≥3 chars twice within 60s → confirm second hits `unstable_cache` — precondition: live CMS + brief-asia-web dev | Gate + cache actually change request volume | Real share of the 2.96M this saves — that's P1's job |
+| Agent-Probe | Debounce feels correct | Manual UI check typing at normal speed | Debounce timing (400ms) doesn't harm UX | Not automatable |
+| Known-gap | No automated test for search behavior | — | — | Same brief-asia-web test-infra gap |
 
 **Area: `brief-asia-web/src/lib/article-view.ts` + `cover-art.tsx` (Fix #6, null-safety)**
 
 | Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
 |---|---|---|---|---|
-| Fully-Automated | Typecheck/lint clean | `npm run typecheck && npm run lint` (brief-asia-web) exits 0 | No type/lint regression; TS should flag if the optional-chained form is written wrong | Does not catch a runtime-only mistake TS can't see |
-| Agent-Probe | Article with only original hero (no `sizes.card`) still renders a real image | `SELECT count(*) FROM media WHERE sizes_card_filename IS NULL;` first (precondition check from the plan), then load one such legacy article and confirm a real photo renders, not the generative SVG placeholder | The naive `hero.sizes.card.url` direct-access crash trap was avoided | Does not prove every legacy article — sample-based |
+| Fully-Automated | Typecheck/lint clean | `npm run typecheck && npm run lint` (brief-asia-web) exits 0 | No type/lint regression; TS flags the optional-chained form if written wrong | Does not catch a runtime-only mistake TS can't see |
+| Agent-Probe | Article with only original hero still renders a real image | `SELECT count(*) FROM media WHERE sizes_card_filename IS NULL;` then load one such legacy article | The naive `hero.sizes.card.url` direct-access crash trap was avoided | Sample-based only |
 | Known-gap | No automated visual regression test | — | — | Same brief-asia-web test-infra gap |
 
 **Area: `brief-asia-web/[pillar]/page.tsx` (Fix #9) + `apcg-cms` `revalidateHooks`/`HEAD` cleanup (Phase 4)**
@@ -601,65 +676,75 @@ Signals present: S2 (API/security surface) · S3 (Phase 2's 3-way branch) · S5 
 | Tier | Scenario | Command / Steps | What it proves | What it does NOT prove |
 |---|---|---|---|---|
 | Fully-Automated | Typecheck/lint clean (both repos) | `npm run typecheck && npm run lint` | No type/lint regression | No behavior |
-| Hybrid | P15 — static vs dynamic route confirmation | `next build` in brief-asia-web, check the route table for `○ (Static)` vs `ƒ (Dynamic)` on the split route | Whether the `?section=` split actually restores ISR | Nothing about page content correctness |
-| Hybrid | `HEAD` handler returns 200 on media | `curl -sI '<cms>/api/media/file/<name>?prefix=<t>'` → expect 200 after the fix (currently 404, confirmed by the plan's own methodology note and independently re-confirmed by reading the route file's exports) | The new `HEAD` export fixes the crawler/link-checker 404 | Does not prove Vercel's edge cache actually starts HIT-ing as a result — separate, unmeasured effect |
-| Fully-Automated | `revalidateHooks` wiring present | `grep -l "revalidateHooks" src/collections/Authors.ts src/collections/Corrections.ts src/collections/Newsletters.ts src/collections/MarketSnapshots.ts` — all 4 must match | The 4 previously-unhooked collections now wire the hook, mirroring `Pillars.ts:6` | Does not prove the hook payload/tag shape is correct — that's covered by Fix #7's webhook gates |
+| Hybrid | P15 — static vs dynamic route confirmation | `next build` in brief-asia-web, check route table for `○ (Static)` vs `ƒ (Dynamic)` on the split route | Whether the `?section=` split restores ISR | Nothing about page content correctness |
+| Hybrid | `HEAD` handler returns 200 on media | `curl -sI '<cms>/api/media/file/<name>?prefix=<t>'` → expect 200 after the fix (currently 404 — confirmed live this session: `GET` is exported, `HEAD` is not, in `src/app/(payload)/api/[...slug]/route.ts`) | The new `HEAD` export fixes the crawler/link-checker 404 | Does not prove Vercel's edge cache actually starts HIT-ing as a result |
+| Fully-Automated | `revalidateHooks` wiring present | `grep -l "revalidateHooks" src/collections/Authors.ts src/collections/Corrections.ts src/collections/Newsletters.ts src/collections/MarketSnapshots.ts` — all 4 must match | The 4 previously-unhooked collections now wire the hook | Does not prove the hook payload/tag shape is correct |
 
 **Missing test areas (no coverage possible at any tier within this plan's scope):**
 
 | Area | Why untestable in this plan | Resolution chosen |
 |---|---|---|
-| P10 for Fix #2b (LIST_SELECT field-drop) across WTB/DTW/GCV/WAD | Those 4 repos are not present on this machine | Backlog: `p10-other-reader-verification_NOTE_09-09-26.md` — hard-blocks Fix 2b via E1 until resolved |
-| P8d for Fix #4 across WTB/DTW/GCV/WAD | Same — repos absent | Backlog: same note covers both P10 and P8d (same underlying access gap) — hard-blocks the Phase 3 env-flip step |
-| Fix #1 / Fix #3 automated regression coverage in `brief-asia-web` | No test runner exists in that repo at all | Backlog: `brief-asia-web-test-harness-bootstrap_NOTE_09-09-26.md` — out of scope for this cost-remediation plan |
-| Crawler-control design (Phase 2 conditional branch) | Depends entirely on unrun P2/P2b attribution | Deferred — plan's own Open Questions already tracks this; no new note needed |
+| P10/P8d for Fix #2b/#4 — GCV only | GCV is not present on this machine; the other 4 readers are cleared | Backlog: `p10-other-reader-verification_NOTE_09-09-26.md` (narrowed to GCV) — hard-blocks Fix 2b via E1 and the Phase 3 env-flip |
+| Fix #1/#3 automated regression coverage in `brief-asia-web` | No test runner exists in that repo | Backlog: `brief-asia-web-test-harness-bootstrap_NOTE_09-09-26.md` — out of scope for this plan |
+| Crawler-control design (Phase 2 conditional branch) | Depends entirely on unrun P2/P2b attribution | Deferred — plan's own Open Questions already tracks this |
+| A3's reader-side detection logic (`fetchAllArticleRefs` bail-out) | No test runner in `brief-asia-web` | Enforced from the `apcg-cms` side only (Fully-Automated + Hybrid gates above); if the reader's detection logic itself changes, re-audit |
 
 ---
 
 ### IV. Plan Updates Applied
 
-**None.** This VALIDATE pass's write scope was restricted to the `## Validate Contract` section only (per session instruction) — no edits were made to the plan body (Touchpoints, Phase tables, Blast Radius, etc.). Every fixable concern below is captured as a mandatory Execute-Agent Instruction instead of an inline plan-text edit. If the plan is revised later to formally split Fix #2 into 2a/2b in its own Touchpoints/Phase 1 table, that is a PLAN-mode edit, not something this VALIDATE pass performed.
+**None.** Per session instruction, this VALIDATE pass's write scope was restricted to the `## Validate Contract` section only — no edits were made to the plan body (the `## Additional Contract Locks (A3, A4)` table, `## Reader Fallback Removed`, Touchpoints, Phase tables, or Open Questions). Two corrections found this session are recorded here as findings for a future PLAN-mode edit, not applied inline:
+1. The A3 row's invariant wording ("the `view=refs` branch keeps returning `title`") should be corrected to "the `view=refs` branch keeps NOT returning `title`" — the current wording is inverted relative to the actual required behavior and the reader's own detection logic.
+2. The "dtw-web audit validity caveat" in Open Questions should be updated to note that the specific delete/modify merge-conflict risk it describes is now closed (origin/main is already merged into the local branch, and `payload.config.ts` does not exist in either branch's current history) — the general commit-pinning statement (valid only at `origin/main` tip `383f83d`) should remain as a standing precondition.
 
 ### Execute-agent instructions
 
 | # | Instruction | Trigger condition |
 |---|---|---|
-| E1 | **Hard block.** Do NOT modify `LIST_SELECT` to drop `lastEngine`/`lastEditedBy`/`assignedTo`/`translationStatus` (Fix 2b, the field-drop/byte-saving half) until P10 has been run and recorded for WTB, DTW, GCV, and WAD (or an equivalent grep-based clearance of those 4 repos). If P10 cannot be run in this session, Fix 2b is OUT OF SCOPE — do not implement it. File a backlog note instead (see Section III missing-areas). | Before touching `apcg-cms/src/app/api/public/articles/route.ts:39` |
-| E2 | Implement Fix #2's security half (2a) as `defaultPopulate` scoping on `ContentEngines.ts`, `Users.ts`, `Tenants.ts` collection configs — NOT `depth: 0`, NOT a route-level `select`. `defaultPopulate` is not used anywhere else in this codebase; verify the exact Payload 3.85.1 API shape (via `vc-docs-seeker` or `node_modules/payload` type defs) before writing it — do not guess from training data. | Before editing `[slug]/route.ts` or any of the 3 collection files |
-| E3 | After implementing 2a: run the `depth: 0` grep guard (Section III) AND the inline-image Hybrid/Agent-Probe checks on a real article with an inline image, before marking the security fix complete. | Immediately after E2's edit lands |
-| E4 | Do not begin ANY Phase 2 code change until `## Phase 0 Results` in this plan records real values (or explicit "inconclusive — reason") for P1, P2b, and P3. P2 and P9 being done does NOT satisfy this — the plan's own Phase Completion Rules require all five. | Before any Phase 2 touchpoint edit |
-| E5 | Do not begin Phase 3 work until P8a-d are all run, in order, with real command output pasted into the phase report. Write the redirect shim so its 302 branch is conditional on `process.env.R2_PUBLIC_BASE_URL` being set (mirroring `payload.config.ts:80`'s own conditional) — this makes "unset env var + redeploy" a complete rollback of both the URL-generation change AND the shim's redirect behavior in one step. Deploy the shim, verify it 302s correctly against a real cached URL, THEN flip the env var. Never reverse this order. | Before any Phase 3 touchpoint edit |
-| E6 | Fix #1 (and Fix #3) have zero automated test coverage in `brief-asia-web` (confirmed: no test runner exists in that repo). "Verified" for these fixes means: (a) `npm run typecheck && npm run lint` pass, (b) a live before/after call-count measurement against a real cold render, and (c) an Agent-Probe visual check of the affected UI. Do not report either fix as "tested" on the basis of typecheck/lint alone. | Before marking Fix #1 or Fix #3 CODE COMPLETE |
-| E7 | Fix #5's `unpin-expired` webhook suppression is verified safe for `brief-asia-web` only. Do not generalize this conclusion to WTB/DTW/GCV/WAD without running the equivalent check (does that reader render `pinnedToLatest` off a plain list doc). If that check cannot run this session, keep the change scoped to what's provably safe and record the other 4 as an explicit known-gap in the phase report — do not silently assume they're fine. | Before deploying the `unpin-expired` change |
-| E8 | Line numbers in this plan's Touchpoints table were verified within ±10 lines during VALIDATE (files have drifted slightly since planning). Re-grep each exact target string immediately before editing; do not trust the plan's line numbers as exact. | Every touchpoint edit |
-| E9 | Do not, under any circumstances, revive the TTL-raise idea (see `## ⚠️ INVALIDATED` banner) or schedule a `media.url`/`sizes_*_url` backfill (see "What NOT To Do" #7). This validate pass re-confirms both bans stand — nothing in this contract licenses either. | Standing instruction, all phases |
+| E1 | **Hard block, unchanged in substance, narrower in scope than cycle 0.** P10 has RUN and CLEARED brief-asia-web, wad-web, wtb-web, and dtw-web on all four dropped fields — 0 of 8 refutation attempts succeeded. Do NOT modify `LIST_SELECT` to drop those fields (Fix 2b) until **GCV alone** is also cleared. If GCV cannot be checked this session, Fix 2b remains OUT OF SCOPE. | Before touching `apcg-cms/src/app/api/public/articles/route.ts:39` |
+| E2 | Implement Fix #2a as `defaultPopulate` scoping on `ContentEngines.ts`, `Users.ts`, `Tenants.ts` — NOT `depth: 0`, NOT a route-level `select`. Verify the exact Payload 3.85.1 API shape (via `vc-docs-seeker` or `node_modules/payload` type defs) before writing — do not guess from training data. | Before editing `[slug]/route.ts` or any of the 3 collection files |
+| E3 | After implementing 2a: run the `depth: 0` grep guard AND the byline/author-preservation Hybrid check (Section III, strengthened this cycle) AND the inline-image checks on a real article, before marking the security fix complete. | Immediately after E2's edit lands |
+| E4 | Do not begin ANY Phase 2 code change until `## Phase 0 Results` records real values for P1, P2b, and P3. P2 and P9 alone do NOT satisfy this. | Before any Phase 2 touchpoint edit |
+| E5 | Do not begin Phase 3 work until P8a-d are all run, in order, with real command output pasted into the phase report. Write the redirect shim's 302 branch conditional on `process.env.R2_PUBLIC_BASE_URL` being set, so "unset env var + redeploy" is a complete rollback of both halves. Deploy the shim, verify it 302s correctly, THEN flip the env var. Never reverse this order. | Before any Phase 3 touchpoint edit |
+| E6 | Fix #1 (and Fix #3) have zero automated test coverage in `brief-asia-web`. "Verified" means: (a) typecheck+lint pass, (b) a live before/after call-count measurement, (c) an Agent-Probe visual check. Do not report either fix as "tested" on typecheck/lint alone. | Before marking Fix #1 or Fix #3 CODE COMPLETE |
+| E7 | Fix #5's `unpin-expired` suppression is verified safe for brief-asia-web/wad-web/wtb-web/dtw-web (wtb-web via a standing condition on its `no-store` fetch pattern — re-check if wtb-web ever adds `revalidate` to its home page; re-verified this session that it has not). Do not generalize to **GCV** without running the equivalent check. | Before deploying the `unpin-expired` change |
+| E8 | Line numbers in this plan's Touchpoints table were verified within ±10 lines during the prior VALIDATE pass and re-spot-checked this cycle (`Articles.ts:398`, `route.ts:261`, `[slug]/route.ts:36`, `scoped.ts:68`, `ContentEngines.ts:27/76/77/96` all confirmed exact or within tolerance). Re-grep each exact target string immediately before editing regardless. | Every touchpoint edit |
+| E9 | Do not, under any circumstances, revive the TTL-raise idea or schedule a `media.url`/`sizes_*_url` backfill. This validate pass re-confirms both bans stand. | Standing instruction, all phases |
+| E10 | **New this cycle.** When implementing or reviewing anything touching the `view=refs` branch of `apcg-cms/src/app/api/public/articles/route.ts`, the correct invariant is: the refsView `select` object must NEVER include `title: true`. Do not be misled by the plan body's A3 row wording ("keeps returning title") — that wording is inverted; the Fully-Automated/Hybrid gates in Section III of this contract state the correct direction and are the authoritative check. Flag the plan body wording for correction at the next PLAN-mode touch (see Section IV). | Any edit touching the refsView branch |
+| E11 | **New this cycle.** The risk baseline for every reader-facing contract change (Fix #2b, #4, #5, #1) is HIGHER than earlier passes assumed — all 4 audited readers have no local-Payload fallback and no runtime response validation, so a bad change fails silently at HTTP 200. Treat every Hybrid gate in Section III as mandatory, not optional-if-short-on-time, for any of these fixes. | Before marking any reader-facing fix (2b, 4, 5, 1) CODE COMPLETE |
 
 ### Backlog artifacts to create during durable capture
 
 | Artifact | Location | What it tracks |
 |---|---|---|
-| `p10-other-reader-verification_NOTE_09-09-26.md` | `process/general-plans/backlog/` | Tracks the still-unresolved P10/P8d gap: someone with access to WTB/DTW/GCV/WAD must (a) grep for `lastEngine`/`lastEditedBy`/`assignedTo`/`translationStatus` usage before Fix 2b can ship, and (b) check `next/image`/`remotePatterns` config before Fix #4's env-flip. Blocks: Fix 2b, Phase 3 env-flip step. |
-| `brief-asia-web-test-harness-bootstrap_NOTE_09-09-26.md` | `process/general-plans/backlog/` | Neither `apcg-cms` nor `brief-asia-web` has a test runner. Recommends bootstrapping a minimal `vitest` setup in `brief-asia-web` starting with a `fetch`-mock-based call-count assertion for `getRelatedArticlesCached`, so Fix #1's savings claim gets a real regression lock going forward. Out of scope for this cost-remediation plan itself. |
+| `p10-other-reader-verification_NOTE_09-09-26.md` | `process/general-plans/backlog/` | Narrowed to GCV. brief-asia-web/wad-web/wtb-web/dtw-web audited and CLEARED against origin/main (10-09-26, re-confirmed this cycle). Someone with access to **GCV** must (a) grep for the 4 dropped fields, (b) check `next/image`/`remotePatterns` config. Blocks: Fix 2b, Phase 3 env-flip step. |
+| `brief-asia-web-test-harness-bootstrap_NOTE_09-09-26.md` | `process/general-plans/backlog/` | Neither `apcg-cms` nor `brief-asia-web` has a test runner. Recommends bootstrapping a minimal `vitest` setup starting with a `fetch`-mock-based call-count assertion for `getRelatedArticlesCached`. Out of scope for this plan. |
+| `wad-web-stale-read-time_NOTE_10-09-26.md` (new) | `process/features/` or general backlog, filed in **wad-web's own tracker, not this repo's** | `wad-web@origin/main:src/lib/article-view.ts:344` reads `.body` off list docs for read-time computation; Central dropped `body` from list responses 04/09 (`5639e41`). Confirmed live this session (`computeReadMin((a as {body?: unknown}).body, a.readMin)`). Pre-existing, not attributable to this plan's Fix #2 (which hasn't shipped). This plan does not fix it — the artifact exists only to ensure it isn't lost, and should be created/tracked in `wad-web`'s own process folder, not `apcg-cms`'s. |
 
 ### Known gaps on record
 
-- **P10 (other 4 readers don't consume the 4 dropped fields)** — cannot be run in this environment (repos not present). Fix 2b is hard-blocked (E1), not shipped as a known-gap-accepted risk. Resolution: backlog note above; re-run VALIDATE on Fix 2b once P10 is recorded.
-- **P8d (other 4 readers' `next/image` config)** — same access gap. The Phase 3 env-flip step remains blocked until this runs; Phase 3 prep work (shim writing/testing against P8a-c) may proceed since it's independent of P8d.
-- **No automated regression test for Fix #1/#3's request-volume claims** — `brief-asia-web` has no test runner. Accepted as known-gap for this plan; backlog note above tracks the follow-up.
-- **Payload 3.85.1's exact `defaultPopulate` syntax is unverified against the pinned version** (plan's own Open Question, carried forward) — resolved procedurally via E2 (verify via docs before writing), not accepted as a silent gap.
-- **Crawler-control design (Phase 2 conditional branch)** has no concrete design yet — depends on unrun P2/P2b attribution. Already tracked in the plan's own Open Questions; no new artifact needed, just confirming it's still open.
+- **P10 (GCV)** — RUN 10-09-26 for the other 4 readers (CLEAR). GCV alone remains un-run. Fix 2b is hard-blocked (E1), not shipped as a known-gap-accepted risk.
+- **P8d (GCV)** — RUN for WAD/WTB/DTW (compatible). GCV alone remains the access gap for the Phase 3 env-flip step.
+- **No automated regression test for Fix #1/#3's request-volume claims** — `brief-asia-web` has no test runner. Accepted as known-gap; backlog note tracks the follow-up.
+- **Payload 3.85.1's exact `defaultPopulate` syntax is unverified against the pinned version** (carried forward, resolved procedurally via E2 — not accepted as a silent gap).
+- **Crawler-control design (Phase 2 conditional branch)** has no concrete design yet — depends on unrun P2/P2b attribution.
+- **Concurrent-request race on `resolveReadToken`'s memoization Map** — accepted as known-gap (low real-world risk, read-mostly, short TTL).
+- **A3's reader-side (`brief-asia-web`) detection logic itself has no test coverage** — enforced from the `apcg-cms` side only; accepted, `brief-asia-web` has no test runner.
+- **Retired this cycle (was a CONCERN, now closed, not a residual gap):** the dtw-web merge-conflict caveat is verified stale — `origin/main` is already fully merged into the local branch and `payload.config.ts` exists in neither branch's current tree. The commit-pinning statement itself remains a standing precondition (re-verify if `origin/main` tip moves past `383f83d`).
 
 ### What this coverage does NOT prove
 
-- The grep-based `depth: 0` guard proves the literal string is absent — it does NOT prove some other code path (a different `select`, a future refactor) can't reintroduce the same silent inline-image deletion by a different mechanism.
-- Typecheck/lint gates across both repos prove type-safety and lint-cleanliness only — they prove **zero** runtime behavior, request-count reduction, or byte-saving. Every actual behavioral/performance claim in this plan rests on Hybrid or Agent-Probe tiers, most of which require live CMS access this validate pass did not have.
-- The Hybrid curl/jq checks for Fix 2a prove the *sampled* article/slug tested is clean — they do not prove every article, every locale, every tenant is clean. Same caveat applies to every "one known article" Agent-Probe scenario in this contract.
-- Nothing in this contract proves the September GB/CPU savings projections (108-220 GB range, the ~1.06M-1.7M request cut from Fix #1) will materialize at the stated magnitude — those numbers remain LOW-confidence estimates per the plan itself; P1/P3/P6/P7 (not gating, but sizing) are still unrun.
-- Nothing in this contract verifies Fix #4's rollback in a real production incident — the rollback drill above is staging-only by design; a live production rollback has never been executed or timed.
+- The grep-based `depth: 0`, A3, and A4 guards prove the literal patterns are absent/present in source — they do NOT prove an equivalent regression achieved a different way (a new `select`, a refactor) can't reintroduce the same silent failure.
+- Typecheck/lint gates across both repos prove type-safety and lint-cleanliness only — zero runtime behavior, request-count reduction, or byte-saving.
+- The Hybrid curl/jq checks for Fix 2a (including this cycle's strengthened byline-preservation assertion) prove the *sampled* article/slug tested is clean — not every article, every locale, every tenant.
+- Nothing in this contract proves the September GB/CPU savings projections will materialize at the stated magnitude — P1/P3/P6/P7 remain unrun.
+- Nothing in this contract verifies Fix #4's rollback in a real production incident — the rollback drill is staging-only by design.
+- **New this cycle:** nothing in this contract independently re-runs the full 13-agent audit's own methodology (this VALIDATE pass spot-checked the audit's underlying facts — branch divergence, file contents at `origin/main` — but did not re-derive the audit's per-repo verdicts from scratch). If the audit's own reasoning contained an error not caught by the spot-checks performed here, this contract would not catch it.
+- This contract's A3 correction (E10) fixes the plan's *wording*; it does not add a live regression test in `brief-asia-web` itself (that repo still has no test runner) — the guard is one-sided, enforced only from the `apcg-cms` source.
 
 ### Accepted by
 
-Accepted by: session (single-shot VALIDATE delegation — no separate interactive V5 round-trip occurred within this invocation). The CONDITIONAL items above (Fix #2 split, test-infra gap, Fix #4 shim env-gating) are recommended for human confirmation before EXECUTE begins on Phase 1; the two phase-level BLOCKs (Phase 2, Phase 3) are not waived by this acceptance and remain hard-gated by the plan's own Phase Completion Rules plus execute-agent instructions E4/E5 above.
+Accepted by: session (autonomous PVL cycle 2 re-validate; no separate interactive V5 round-trip occurred within this invocation). The CONDITIONAL items above (Fix #2b/GCV block, test-infra structural gap, raised risk baseline requiring strengthened Hybrid gates on all reader-facing fixes) are recommended for human confirmation before EXECUTE begins on the newly-unblocked Fix 2a; the two phase-level BLOCKs (Phase 2, Phase 3) are not waived by this acceptance and remain hard-gated by the plan's own Phase Completion Rules plus E4/E5.
 
 ---
 
@@ -669,7 +754,7 @@ SESSION GOAL: Remediate apcg-cms's August 2026 Vercel egress/CPU cost spike (2.9
 Charter + umbrella plan: N/A — single general plan, no umbrella/phase-program.
 Autonomy: Per this repo's orchestration.md Autonomy Mode rules. Phase 1 items 2a/#5(partial)/#7/#8 may proceed under standing EXECUTE consent once granted. Phase 2 and Phase 3 remain hard-gated (see Hard stop conditions) — autonomy does not waive plan-encoded temporal gates.
 Hard stop conditions / safety constraints:
-- Do not ship Fix #2b (drop lastEngine/lastEditedBy/assignedTo/translationStatus from GET /api/public/articles) until P10 is run and recorded for WTB, DTW, GCV, WAD — this repo cannot verify it alone.
+- Do not ship Fix #2b (drop lastEngine/lastEditedBy/assignedTo/translationStatus from GET /api/public/articles) until P10 is run and recorded for **GCV** (narrowed 10-09-26 — brief-asia-web/wad-web/wtb-web/dtw-web already cleared via a 13-agent audit against origin/main).
 - Do not start Phase 2 code until `## Phase 0 Results` records P1, P2b, and P3 (P2 and P9 alone are not sufficient per the plan's own Phase Completion Rules).
 - Do not flip `R2_PUBLIC_BASE_URL` (Phase 3) until P8a-d all pass AND the redirect shim is deployed, env-gated, and verified live.
 - Never implement Fix #2's `[slug]` route fix as `depth: 0` — use `defaultPopulate` on ContentEngines/Users/Tenants (see "What NOT To Do" #8 and the Security Finding).
@@ -690,8 +775,13 @@ Execute start: fully-auto commands: `npm run typecheck && npm run lint` in both 
 5. **Next step for a fresh agent picking up mid-execution:**
    - If `## Phase 0 Results` is still all TBD → run Phase 0 (P1, P2, P2b, P3, P9) FIRST. Do not touch Phase 2 code. Phase 1 items may be started in parallel with Phase 0.
    - If Phase 0 Results are filled in → apply the Phase 2 branch logic to pick the priority fix, then proceed to VALIDATE for whichever phase's code changes are queued next.
-   - Before touching Fix #2 or the security finding, re-read the "Security Finding" and "What NOT To Do" #8 sections above — the `depth: 0` trap is easy to reintroduce.
-   - Before touching Fix #4, confirm P8a-d have all passed and the redirect shim is deployed and verified BEFORE flipping the env var — do not reverse this order.
+   - **P10 + P8d update (10-09-26):** brief-asia-web, wad-web, wtb-web, dtw-web are audited and CLEAR against `origin/main` (see `### P10 + P8d` under Phase 0 Results). GCV is the sole remaining gap for Fix 2b (E1) and the Phase 3 env-flip step (P8d) — do not re-run the audit for the other 4 repos, only GCV needs checking now.
+   - Before touching Fix #2 or the security finding, re-read the "Security Finding" and "What NOT To Do" #8 sections above — the `depth: 0` trap is easy to reintroduce. Note: the security leak is confirmed still live as of 10-09-26 (see the verification chain at the end of the Security Finding section) — `defaultPopulate` has not shipped yet.
+   - Before touching Fix #4, confirm P8a-d have all passed (WAD/WTB/DTW already confirmed; GCV outstanding) and the redirect shim is deployed and verified BEFORE flipping the env var — do not reverse this order.
+   - Fix #6 (derivative selection) is DONE upstream in 3 of 4 readers — do not redo it (see Phase 4 table). The separate PNG-conversion sub-item is still open.
+   - wtb-web's Fix #5 safety is a standing condition, not structural — re-check if wtb-web ever adds `revalidate` to its home page (see `### P10 + P8d`).
+   - A new unrelated defect was found in wad-web (stale card read-times since 04/09) — track it in that repo, not here.
+   - dtw-web's audit is only valid at `origin/main` tip `383f83d` — re-run if that repo's `feat/rebrand-phase-4-rendered-copy` branch merges (see Open Questions).
    - Do not, under any circumstances, revive the TTL-raise idea (see banner at top) or schedule a `media.url` backfill (see "What NOT To Do" #7).
 
 ---
