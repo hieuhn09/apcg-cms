@@ -10,7 +10,13 @@ feature: article-video-support
 **Locked SPEC (4th revision):** `process/general-plans/active/article-video-support_10-09-26/article-video-support_SPEC_10-09-26.md` — implemented as written. This plan does not renegotiate scope.
 
 **Date**: 10-09-26
-**Status**: DRAFT — VALIDATE complete, see Validate Contract below
+**Status**: CODE-COMPLETE, merged to `main` in both repos (apcg-cms `49fd663`) — **NOT VERIFIED**.
+Both repos' Fully-Automated gates (typecheck + lint) are confirmed green by an independent EVL run.
+11 of 18 SPEC acceptance criteria are Agent-Probe-only and have not been run against a live
+DB/admin/browser (see `process/general-plans/backlog/backlog.md` item 1 for the manual checklist).
+Per this plan's own Phase Completion Rules below: CODE DONE and VERIFIED are not the same status —
+this plan is archived CODE-COMPLETE/UNVERIFIED, not VERIFIED. Do not treat merged + gates-green as
+"works" until the manual checklist is run.
 **Complexity**: COMPLEX (see classification below)
 **Context loaded:** `process/development-protocols/implementation-standards.md` and `apcg-cms/docs/` (this repo has no `process/context/all-context.md`); `brief-asia-web/process/context/all-context.md` + its `i18n`/`cms`/`tests` groups were consulted during RESEARCH for the reader-side chain.
 
