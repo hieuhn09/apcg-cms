@@ -17,6 +17,7 @@ table but stay empty/hidden for tenants that disabled them — no schema bloat.
 | `authors` | per-tenant | bylines per publication |
 | `pillars` / `sectors` / `tags` | per-tenant | taxonomy differs per site |
 | `media` | per-tenant | R2; localized alt/caption |
+| `videoMedia` | per-tenant + feature `video` | R2; `mimeTypes: ["video/*"]` only, no `imageSizes`; shares `Media`'s upload-integrity hooks via `src/lib/upload-integrity.ts` rather than duplicating them |
 | `newsletters` | per-tenant + feature `newsletters` | |
 | `podcasts` | per-tenant + feature `podcasts` | |
 | `marketSnapshots` / `fxRates` / `trendingBlocks` | per-tenant + feature `marketData` | |
@@ -63,6 +64,21 @@ enforces uniqueness **within a tenant**:
 2. a composite DB index `UNIQUE (tenant_id, slug)` to be added by migration (the
    hard constraint). Add it on `articles`, `pillars`, `tags`, `sectors`,
    `newsletters`, `podcasts` after the first `payload:migrate:create`.
+
+## Optional per-article video (feature `video`, BriefAsia only as of 10-09-26)
+
+`Articles` carries four plain (non-localized) fields — `video` (upload relation to
+`videoMedia`), `videoCaption`, `videoCredit`, `videoDescription` — gated the same
+two ways as the `videoMedia` collection itself: field-level `access` (API) and a
+custom admin Field Component (`src/components/admin/VideoFieldGate.tsx`, UI). A
+video article's `heroImage` becomes required (conditional `validate`, not a
+blanket `required: true`) only when `video` is present. The public API resolves
+video into a self-contained object (`url`, `mimeType`, `posterUrl`, `caption`,
+`credit`, `description`) server-side (`src/lib/article-video.ts`); listing/list
+endpoints exclude all four fields by name. See
+`process/general-plans/completed/article-video-support_10-09-26/` for the full
+design record and `article-video-support_ADOPTION-NOTE_10-09-26.md` for how a
+second tenant adopts it (one `Tenants.features.video` checkbox, no code change).
 
 ## Article workflow statuses
 
