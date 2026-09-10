@@ -28,7 +28,25 @@ import {
 export const VideoMedia: CollectionConfig = {
   slug: "videoMedia",
   admin: { useAsTitle: "filename", group: "Editorial" },
-  access: featureGatedAccess("video", tenantManagedAccess),
+  access: {
+    ...featureGatedAccess("video", tenantManagedAccess),
+    /**
+     * Video bytes are PUBLIC; write access stays tenant- AND feature-scoped.
+     *
+     * Same structural reason as `Media.read` — see that comment for the live
+     * incident. A reader's browser loads video from `<video src>`, which cannot
+     * carry the tenant's Bearer read token, so a tenant-scoped read answers 403
+     * to every anonymous request: the article JSON is perfect and the player is
+     * broken. This bites here whenever bytes are served through Payload's own
+     * `/api/videoMedia/file/<name>` route rather than the R2 public domain.
+     *
+     * Nothing is exposed that was not already public: these are the videos of
+     * published articles, served openly on the reader site. Upload, update and
+     * delete remain restricted to the owning tenant's editors AND to tenants
+     * with the `video` feature enabled.
+     */
+    read: () => true,
+  },
   hooks: {
     beforeChange: [rememberSignedFilename],
     afterChange: [verifyClientUpload],
