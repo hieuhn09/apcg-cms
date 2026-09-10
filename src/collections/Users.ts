@@ -12,6 +12,24 @@ import { isSystemAdmin } from "@/access/helpers";
  */
 export const Users: CollectionConfig = {
   slug: "users",
+  /**
+   * SECURITY — relationship-population allowlist. See the longer note in
+   * `ContentEngines.ts`; the same bypass applies here via
+   * `Articles.lastEditedBy` (a relationship to `users`) plus
+   * `scopedFind`'s `overrideAccess: true` on the public article routes.
+   *
+   * Without this, a public article response carries staff identity and
+   * auth-adjacent fields (email, sessions, login-attempt / reset-token state).
+   * Only the two display fields below are populated into other documents.
+   *
+   * Scope note: `defaultPopulate` applies ONLY to relationship population, not
+   * to direct `find`/`findByID` on `users`, so login and the admin user list
+   * are untouched.
+   */
+  defaultPopulate: {
+    name: true,
+    role: true,
+  },
   auth: {
     tokenExpiration: 60 * 60 * 24 * 7, // 7 days
     cookies: { sameSite: "Lax" },
