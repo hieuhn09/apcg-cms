@@ -40,6 +40,43 @@ export function jsonPublic(request: Request, body: unknown, status: number): Res
   });
 }
 
+/**
+ * How long a resolved (or rejected) read token stays memoized.
+ *
+ * SECURITY TRADE-OFF — read this before changing it. Memoizing the lookup means
+ * token revocation and tenant deactivation are NOT immediate: a token revoked
+ * now keeps working for up to this long, on any serverless instance that
+ * already cached it. That delay is accepted deliberately, in exchange for
+ * removing an uncached `payload.find` on `tenants` from the front of every
+ * public request (~2.96M/month, one DB round-trip each, before any article
+ * query runs). The window is kept short (well under a minute) so the exposure
+ * is bounded and comparable to normal CDN/ISR staleness. If a token is ever
+ * revoked in an emergency, treat this TTL as the propagation floor — redeploy
+ * to clear every instance's cache immediately.
+ */
+const READ_TOKEN_TTL_MS = 30_000;
+
+interface CachedTenant {
+  tenant: TenantDoc | null;
+  expiresAt: number;
+}
+
+/**
+ * Module-level memo, keyed by the token HASH (never the raw token, so the
+ * secret is not held in memory as plaintext beyond the request).
+ *
+ * Negative results are cached too — otherwise a bad-token flood would still hit
+ * the database on every request, which is the exact cost this fix removes.
+ *
+ * KNOWN GAP (accepted in the plan): concurrent requests can race and each run
+ * the same lookup before either writes. That is harmless — the lookup is a
+ * pure read, entries are idempotent, and the loser simply overwrites with an
+ * equivalent value. Deliberately not solved with an in-flight promise map;
+ * this surface is read-mostly with a short TTL and the extra machinery would
+ * cost more than the duplicate reads it prevents.
+ */
+const readTokenCache = new Map<string, CachedTenant>();
+
 /** Resolve the Bearer read token → its tenant (active token + active tenant). */
 export async function resolveReadToken(
   payload: Payload,
@@ -48,6 +85,27 @@ export async function resolveReadToken(
   const raw = bearerToken(request.headers.get("authorization"));
   if (!raw) return null;
   const hash = sha256Hex(raw);
+
+  const now = Date.now();
+  const cached = readTokenCache.get(hash);
+  if (cached && cached.expiresAt > now) return cached.tenant;
+
+  const tenant = await lookupReadToken(payload, hash);
+  readTokenCache.set(hash, { tenant, expiresAt: now + READ_TOKEN_TTL_MS });
+
+  // Drop expired entries opportunistically. Without this the Map grows without
+  // bound on a long-lived instance under a rotating-token or bad-token flood.
+  if (readTokenCache.size > 1_000) {
+    for (const [key, entry] of readTokenCache) {
+      if (entry.expiresAt <= now) readTokenCache.delete(key);
+    }
+  }
+
+  return tenant;
+}
+
+/** Uncached lookup. `hash` is the sha256 of the raw bearer token. */
+async function lookupReadToken(payload: Payload, hash: string): Promise<TenantDoc | null> {
   const res = await payload.find({
     collection: "tenants",
     where: { "readTokens.tokenHash": { equals: hash } },

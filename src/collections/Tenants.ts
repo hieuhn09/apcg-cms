@@ -21,6 +21,37 @@ const localeOptions = LOCALE_CODES.map((code) => ({ label: LOCALE_LABELS[code], 
 
 export const Tenants: CollectionConfig = {
   slug: "tenants",
+  /**
+   * SECURITY — relationship-population scoping. See the longer note in
+   * `ContentEngines.ts` for the bypass mechanism (`overrideAccess: true` in
+   * `scopedFind` defeats `access.read` on populated relationships).
+   *
+   * `Articles.tenant` is a relationship to this collection and the public
+   * `[slug]` route runs at `depth: 2`, so the whole tenant document — including
+   * the hashed `readTokens` array — currently serializes into a public article
+   * response. Dropping `readTokens` closes that.
+   *
+   * Exclude-mode ("denylist") is used here DELIBERATELY, unlike the
+   * include-mode allowlists on `content-engines` and `users`. Reason: the other
+   * two are provably unconsumed by the reader sites (13-agent audit, 0 hits for
+   * `lastEngine` / `lastEditedBy`), whereas the tenant document carries many
+   * fields a reader legitimately renders. An allowlist here risks silently
+   * stripping a consumed field — and the reader sites have no runtime response
+   * validation, so that would fail at HTTP 200 with nothing in the logs.
+   * `readTokens` is the only secret-bearing field group in this collection
+   * (verified by grep for token/secret/key/password/credential).
+   *
+   * MAINTENANCE: because this is a denylist, any NEW secret-bearing field added
+   * to this collection must be added here explicitly.
+   *
+   * Scope note: `defaultPopulate` applies ONLY to relationship population, not
+   * to direct `find`/`findByID`, so `resolveReadToken` (`src/lib/public.ts`,
+   * which reads `readTokens` off a direct find) and `/api/public/site`
+   * (a direct `findByID`) are both unaffected.
+   */
+  defaultPopulate: {
+    readTokens: false,
+  },
   admin: {
     useAsTitle: "name",
     defaultColumns: ["name", "slug", "status", "defaultLanguage"],
