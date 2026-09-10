@@ -6,6 +6,7 @@ import * as migration_20260820_084629_add_content_type from './20260820_084629_a
 import * as migration_20260824_000000_add_exclusive_flag from './20260824_000000_add_exclusive_flag';
 import * as migration_20260904_000000_dtw_dashboards_port from './20260904_000000_dtw_dashboards_port';
 import * as migration_20260910_000000_add_video_support from './20260910_000000_add_video_support';
+import * as migration_20260910_010000_add_video_media_credit_fields from './20260910_010000_add_video_media_credit_fields';
 
 export const migrations = [
   {
@@ -47,5 +48,10 @@ export const migrations = [
     up: migration_20260910_000000_add_video_support.up,
     down: migration_20260910_000000_add_video_support.down,
     name: '20260910_000000_add_video_support'
+  },
+  {
+    up: migration_20260910_010000_add_video_media_credit_fields.up,
+    down: migration_20260910_010000_add_video_media_credit_fields.down,
+    name: '20260910_010000_add_video_media_credit_fields'
   },
 ];

@@ -17,9 +17,10 @@ import {
  * depends on. Keeping video in its own collection means the mimetype blast
  * radius is exactly this file — no existing upload field's `relationTo` widens.
  *
- * Deliberately carries NO bespoke fields beyond `prefix` (caption / credit /
- * description live on the Article, next to the rest of its editorial copy).
- * It is pure file storage.
+ * Carries the same `alt` / `caption` / `credit` trio as `Media`, so a video
+ * dropped mid-body is described exactly like an image dropped mid-body. The
+ * Article's own `videoCaption` / `videoCredit` / `videoDescription` remain
+ * separate — those describe the HERO video slot, not the uploaded document.
  *
  * Upload integrity (presigned-key verification, per-tenant key prefixing) is
  * IMPORTED from `@/lib/upload-integrity`, shared byte-for-byte with `Media` —
@@ -28,7 +29,25 @@ import {
 export const VideoMedia: CollectionConfig = {
   slug: "videoMedia",
   admin: { useAsTitle: "filename", group: "Editorial" },
-  access: featureGatedAccess("video", tenantManagedAccess),
+  access: {
+    ...featureGatedAccess("video", tenantManagedAccess),
+    /**
+     * Video bytes are PUBLIC; write access stays tenant- AND feature-scoped.
+     *
+     * Same structural reason as `Media.read` — see that comment for the live
+     * incident. A reader's browser loads video from `<video src>`, which cannot
+     * carry the tenant's Bearer read token, so a tenant-scoped read answers 403
+     * to every anonymous request: the article JSON is perfect and the player is
+     * broken. This bites here whenever bytes are served through Payload's own
+     * `/api/videoMedia/file/<name>` route rather than the R2 public domain.
+     *
+     * Nothing is exposed that was not already public: these are the videos of
+     * published articles, served openly on the reader site. Upload, update and
+     * delete remain restricted to the owning tenant's editors AND to tenants
+     * with the `video` feature enabled.
+     */
+    read: () => true,
+  },
   hooks: {
     beforeChange: [rememberSignedFilename],
     afterChange: [verifyClientUpload],
@@ -39,6 +58,13 @@ export const VideoMedia: CollectionConfig = {
     mimeTypes: ["video/*"],
   },
   fields: [
+    // Same three fields as `Media`, same order, same localization split: a
+    // mid-body video needs alt / caption / credit for exactly the reasons a
+    // mid-body image does. `credit` stays UNlocalized to match Media — a
+    // videographer's name is not translated.
+    { name: "alt", type: "text", required: true, localized: true, admin: { description: "Alt text — required (WCAG 2.1 AA)." } },
+    { name: "caption", type: "text", localized: true },
+    { name: "credit", type: "text", admin: { description: "Videographer / source credit." } },
     {
       // Same shape as Media.prefix, same shared hooks: declared here rather
       // than left to storage-s3's field injection so the column exists whether
