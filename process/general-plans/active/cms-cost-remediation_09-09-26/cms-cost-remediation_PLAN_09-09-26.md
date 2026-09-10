@@ -69,6 +69,42 @@ Replacement for the TTL raise is **Fix #1** (Phase 2, collapse fan-out) — a di
 
 ---
 
+## Gzip Passthrough — VIABLE (found 10-09-26, becomes Phase 2 priority #1)
+
+See `Touchpoints` (GZIP row) and Phase 2 table for the shipping item. Full detail:
+
+- Feasibility probe on branch `probe/gzip-public-api` (`7384b1f`, one file: `src/lib/public.ts`): gzip-compress `jsonPublic()` at level 6 when the request accepts gzip and body ≥ 1024 B; set `Content-Encoding: gzip` + `Vary: Origin, Accept-Encoding`.
+- `GET /api/public/articles?limit=20`: preview gzip wire 12,627 B vs preview identity 107,183 B; production identity 107,463 B; production edge-gzip wire 13,152 B (**8.49× reduction**).
+- **Byte-identical pass-through proven:** `gzipSync(identity_body, {level:6})` → 12,627 B, sha256 prefix `2361d14c64b9f1f3`; preview wire bytes → same size, same sha, `Buffer.equals` true including the gzip header. Not double-encoded. Brotli discriminator (production returns `br` for `Accept-Encoding: br, gzip`, preview returns `gzip`) confirms the edge deferred to the function-set encoding instead of transcoding.
+- Reader sites need **no change** — Node `fetch` decompresses transparently (verified in probe).
+- CPU cost: 0.61 ms/request at level 6 ≈ $0.20-0.51/month across 2.96M requests. Level 6 recommended over L9 (+0.2% ratio for +20% CPU) or L4 (saves ~$0.13 CPU, gives up ~$5 transfer).
+- **Cost estimate (medium-high confidence):** Vercel's pricing doc defines Fast Origin Transfer outgoing as "bytes sent as the HTTP Response (Headers & Body)" — the function's emitted bytes. Emitted bytes drop 8.49×. On the $96.48 August FOT line: expect roughly **$96.48 → $11-13**. sin1 FOT rate is $0.27/GB with no free allowance.
+- **Mandatory post-deploy verification gate** (cannot be run earlier): within hours of production deploy, Vercel Observability per-route bytes for `/api/public/articles` must fall from ~100 KB/request toward ~13 KB/request. If it does not, the metering assumption is wrong — revert (one-commit revert, no data impact). See `## Verification Evidence`.
+- Ranked **Phase 2 priority #1**, ahead of Fix #1 (fan-out collapse): CMS-only, one file, no reader coordination, no GCV dependency, no API-contract change. Ships regardless of the Phase 2 branch-logic outcome (see Phase 2).
+- Full detail and raw measurements: `gzip-passthrough_FEASIBILITY_10-09-26.md` (companion artifact, this task folder).
+
+## Gzip's Effect on Fix 2b's Value (found 10-09-26)
+
+Measured on real production data (50 DTW docs): the fields Fix 2b would drop (`tenant` 978 B/doc, `translationStatus` 307 B/doc, `lastEngine`/`lastEditedBy`/`assignedTo`) are the MOST repetitive content in the response, so gzip already collapses them almost for free (`tenant` × 50 = 48,951 B raw → 826 B gzipped).
+
+| | raw | gzipped |
+|---|---|---|
+| current | 269,135 B | 28,275 B |
+| after dropping the 5 fields | 197,135 B | 24,558 B |
+| reduction | 26.8% | **13.1%** |
+
+On the $96.48 baseline: gzip alone → ~$10.14; gzip + field-drop → ~$8.80. **Fix 2b's cost value after gzip is ~$1.34/month.** Its remaining justification is data hygiene (not emitting internal fields on a public API) and the PII/secret leak closure (see `## Security Finding`) — those stand on their own; do not over-prioritise 2b on cost grounds going forward. Fix 2b stays blocked on GCV as before (see `E1`).
+
+**P4 is now ANSWERED:** `translationStatus` DOES populate (307 B/doc, all 50 sampled DTW docs).
+
+**New finding:** `article.tenant` is read by **no reader** — confirmed by grep of all four reader repos at `origin/main`; the only hits anywhere are the unrelated `tenant?: string` claim type declared independently in each repo's `api/revalidate/route.ts`.
+
+## Same-Region FOT Reconciliation (found 10-09-26, INFERRED — medium-high confidence)
+
+Vercel's 2024-07-15 changelog states, verbatim: "all data transfer **between edge regions and the origin location** is now automatically compressed." All five projects — apcg-cms and all four readers — pin `regions: ["sin1"]` in `vercel.json`. Reader→CMS calls are therefore same-region: no cross-region edge→origin hop exists to be compressed, and the function's raw emitted bytes are what is metered — consistent with the bill (2.96M × 107 KB ≈ 299 GB ≈ the observed 296.9 GB per-route figure; the compressed-changelog model would predict ~37 GB and does not reconcile).
+
+**Marked INFERRED, medium-high confidence:** three independent lines converge (the changelog's explicit cross-region scoping, the same-region `regions` pin on all five projects, and the bill reconciling only against uncompressed bytes) but no single doc sentence states the same-region exception explicitly. The post-deploy Observability check above (gzip section) is what would empirically confirm or refute this inference.
+
 ## What Is Already Fixed (with CORRECTED impact — do not trust the original commit messages' framing)
 
 | Commit | Date | Change | Corrected impact |
@@ -82,7 +118,7 @@ Replacement for the TTL raise is **Fix #1** (Phase 2, collapse fan-out) — a di
 
 | # | Do NOT | Why |
 |---|---|---|
-| 1 | Add `Cache-Control` / `s-maxage` to `apcg-cms/src/lib/public.ts:36-41` | Vercel CDN refuses to cache any request carrying an `Authorization` header (every reader call sends one); `s-maxage` without `CDN-Cache-Control` is stripped anyway. Ships clean, changes nothing. |
+| 1 | Add `Cache-Control` / `s-maxage` to `apcg-cms/src/lib/public.ts:36-41` (or move the tenant into the URL path and drop `Authorization`, to make the route edge-cacheable) | **Confirmed 10-09-26 by docs + empirical test.** Clause (a): Vercel CDN refuses to cache any request carrying an `Authorization` header — confirmed both by Vercel's own docs (`/docs/caching/cdn-cache`, listed as an unconditional cacheability precondition, stricter than RFC 9111 §3.5) and empirically (production media route probe: with `Authorization` → `x-vercel-cache: BYPASS` three consecutive times; without → `MISS` then `HIT`). Clause (b), reworded: `s-maxage` **is** honoured by Vercel's edge cache (confirmed on a separate route, `s-maxage=300` → `HIT`, `age: 183`) but is **stripped from the client-facing header** — irrelevant here because the Authorization exclusion fires first, so `Vary: Authorization` is moot (the request never reaches the cache-key stage). **New:** moving the tenant into the URL and dropping `Authorization` to unlock caching would open a cache-served auth bypass — a cache hit never re-runs the function's token check. |
 | 2 | Move the read token into the URL path/query to make the JSON API CDN-cacheable | Leaks the read secret into logs/cache keys/Referer headers; needs a 5-repo coordinated contract change + token rotation; `jsonPublic` sets `Vary: Origin` while cached `Access-Control-Allow-Origin` is pinned to whichever origin warmed the entry → intermittent CORS failures on 4 of 5 sites; risks serving one tenant's payload to another until every tenant key is distinct. This was a deliberate, already-documented decision. |
 | 3 | Remove `cache: "no-store"` from `central-api.ts:57` to "repair" the cache | Documented no-op for the outer `unstable_cache` layer — doesn't touch the layer that's actually storing the result. |
 | 4 | Raise `export const revalidate` on any reader page | `revalidateTag` purges the Data Cache; `unstable_cache` tags don't reliably propagate to the Full Route Cache the way `fetch` tags do. Produces genuinely 30-minute-stale articles/corrections/takedowns on a news site. |
@@ -137,6 +173,7 @@ This does not change any fix's design in this plan — it raises the bar for how
 
 | Repo | File | Fix # | Change |
 |---|---|---|---|
+| `apcg-cms` | `src/lib/public.ts` (`jsonPublic()`) | GZIP | **Phase 2 priority #1.** Gzip-compress `jsonPublic()` responses (Node `zlib.gzipSync`, level 6, when `Accept-Encoding` includes gzip and body ≥1024 B); set `Content-Encoding: gzip` + `Vary: Origin, Accept-Encoding`. Proven VIABLE on branch `probe/gzip-public-api` (commit `7384b1f`) — byte-identical pass-through confirmed (sha256 match, `Buffer.equals` true). |
 | `brief-asia-web` | `src/lib/cms-client.central.ts:496-500`, `:544-552` | 1 | Collapse related-articles fan-out (4-10 calls → 2-3, then → 1 via new endpoint) |
 | `apcg-cms` | `src/app/api/public/articles/route.ts:39` | 2 | Extend `LIST_SELECT` to drop `translationStatus`, `lastEngine`, `lastEditedBy`, `assignedTo` |
 | `apcg-cms` | `src/app/api/public/articles/[slug]/route.ts:36` | 2 (security) | `defaultPopulate` scoping on `content-engines`/`users`/`tenants` — NOT `depth: 0` |
@@ -192,6 +229,7 @@ Neither field below is in Fix 2b's drop set today, so Fix 2b as specified is saf
 | P2b (same log window, extended) | Agent-Probe | Confirms P2 stability across the window, not a single-day artifact |
 | P3 curl real bytes, gzip vs identity, Fast Origin vs Fast Data Transfer | Hybrid (requires live CMS_READ_TOKEN + prod/staging CMS) | Pins the 108-220 GB range to a point estimate |
 | P9 `curl -sI` media route twice, check `Set-Cookie`/`Vary`/`x-vercel-cache` | Hybrid (requires live CMS) | Confirms whether `7125ab0` media caching commit is actually working |
+| GZIP post-deploy Observability check: `/api/public/articles` per-route bytes drop from ~100 KB/req toward ~13 KB/req within hours of prod deploy | Hybrid (requires live Vercel Observability access post-deploy) | Confirms the FOT-metering assumption behind the gzip Fast Origin Transfer saving estimate; if it does not fall, revert (one-commit revert, no data impact) |
 | P4 `jq '.docs[0].translationStatus'` + DB count | Hybrid (requires DB access) | Confirms whether Fix #2's larger estimate (183-220 GB) applies |
 | P7 avg relationship branch count on `articles_rels` | Hybrid (requires DB access) | Confirms Fix #1's fan-out multiplier arithmetic |
 | P8a-d R2 domain/derivative/prefix/reader-config checks | Hybrid (requires live R2 + 4 other repos) | Gates Fix #4 go/no-go — ALL FOUR mandatory before env flip |
@@ -255,9 +293,9 @@ _(to be filled in by the executing agent/session — do not proceed to Phase 2 u
 
 **P2b — NOT RUN.** User-Agent facet across the full August window still pending. **Still worth running:** it decides whether the 650k article renders are humans or crawlers, and therefore whether crawler control must ship alongside Fix #1.
 
-**P3 — NOT RUN.** Requires `CMS_READ_TOKEN`. Still needed to pin the September GB projection (currently 108-220 GB, LOW confidence).
+**P3 — RUN 10-09-26 (via gzip feasibility probe, see `gzip-passthrough_FEASIBILITY_10-09-26.md`).** `GET /api/public/articles?limit=20`: **107,463 B identity / 12,578 B gzip.** Metric confirmed as Fast Origin Transfer on **uncompressed (identity) bytes** — this pins the pre-gzip September projection close to the identity figure, not the 108-220 GB synthetic-model range. See Finding 4 (below) for the same-region reconciliation of why FOT meters raw emitted bytes rather than the compressed changelog figure.
 
-**Gate status: PARTIALLY MET — the arbitrating measurement (P2) is complete and Fix #1 ordering is locked. P1/P2b/P3 remain open and must be recorded before Phase 2 work is considered fully unblocked.**
+**Gate status: PARTIALLY MET — the arbitrating measurement (P2) is complete and Fix #1 ordering is locked; P3 is now also RUN (10-09-26, via the gzip feasibility probe). P1 and P2b remain open and must be recorded before Phase 2 work is considered fully unblocked.**
 
 - `r` (fraction of 2.96M that is TTL-invariant cold-key traffic): still TBD — P2's ratio arbitrates the *dominant cause*, not the precise `r` fraction; P1/P2b refine it further.
 
@@ -301,13 +339,15 @@ These do not depend on the P1/P2/P3/P9 measurement outcome — their correctness
 | `unpin-expired` webhook suppression | 5 (partial — this line only) | `apcg-cms` | Low-medium — verified safe for brief-asia-web (`route.ts:139-142` enforces at read time); **NOT yet verified for other 4 readers** | P10 clears the generalization |
 | Memoize `resolveReadToken` | 8 | `apcg-cms` | Low — deliberate security trade-off: revocation/deactivation delayed by TTL (use 30-60s, document it) | none |
 
-**Arithmetic for Fix #2:** `lastEngine` + `lastEditedBy` alone model at ~874 B/row (~13% of post-fix row). `translationStatus`, if populated (19 rows in the sample), models at ~11.6 KB/row — potentially a **larger cut than `5639e41` itself**. Applied to a 108-220 GB September baseline: somewhere between 14 GB and 120 GB saved.
+**Arithmetic for Fix #2:** `lastEngine` + `lastEditedBy` alone model at ~874 B/row (~13% of post-fix row). `translationStatus`, if populated (19 rows in the sample), models at ~11.6 KB/row — potentially a **larger cut than `5639e41` itself**. Applied to a 108-220 GB September baseline: somewhere between 14 GB and 120 GB saved. **Superseded 10-09-26 by the gzip finding above:** `translationStatus` is now confirmed to populate (P4 answered — 307 B/doc across all 50 sampled DTW docs), but once gzip ships, Fix 2b's raw/gzipped delta measured on real production data is only 26.8% raw / **13.1% gzipped**, worth roughly **$1.34/month** on the $96.48 baseline — not the 14-120 GB range estimated pre-gzip. Fix 2b's remaining justification is data hygiene + the PII/secret leak (Fix 2a), not this cost arithmetic.
 
 ---
 
 ## Phase 2 — Conditioned on Phase 0 Results (DO NOT START before Phase 0 exit condition is met)
 
 Branch logic — select based on Phase 0 Results:
+
+**Gzip ships regardless of Phase 0 branch outcome** — it is CMS-only, VIABLE (see Touchpoints, GZIP row), and does not depend on `r` or any fan-out/crawler/churn causal story. It ranks #1 in the Phase 2 table above independent of the branch chosen below.
 
 ```
 IF P1 shows limit=24-without-page dominates
@@ -331,6 +371,7 @@ DEFAULT (if Phase 0 is inconclusive after best effort):
 
 | Item | Fix # | Repo | Change | Arithmetic | Risk | Precondition |
 |---|---|---|---|---|---|---|
+| **Gzip-compress `jsonPublic()` responses (PRIORITY #1 — VIABLE, code exists)** | GZIP | `apcg-cms` | `src/lib/public.ts` — gzip at level 6 when `Accept-Encoding` includes gzip and body ≥1024 B; `Content-Encoding: gzip` + `Vary: Origin, Accept-Encoding`. Proven on `probe/gzip-public-api` (`7384b1f`): 12,627 B gzip wire vs 107,183 B identity (8.49× reduction) on `GET /api/public/articles?limit=20`, byte-identical decompressed body (sha256 match). CPU cost 0.61 ms/req ≈ $0.20-0.51/month at 2.96M req. | Estimated $96.48 → ~$11-13/month on the August Fast Origin Transfer line (medium-high confidence — Vercel's FOT metric is defined as emitted response bytes; see Finding 4 for the same-region reconciliation). Mandatory post-deploy Observability verification gate (see Verification Evidence) — revert (one commit) if bytes don't fall as predicted. | **Low** — one file, no reader coordination, no GCV dependency, no API-contract change; readers need no change (Node `fetch` decompresses transparently, verified in probe) | None — CMS-only, ships independently of Phase 0 branch logic |
 | Collapse related-articles fan-out | 1 | `brief-asia-web` | Cheap interim: cap tag branches 4→1, drop 2 filler calls (4-10 calls → 2-3 per cold render). Proper fix: Central-side `?related_to=<id>` endpoint or single multi-taxonomy OR query | If article renders are ~50% of 2.96M and average ~7 list calls, removing 5 cuts ~1.06M requests (~36%) / ~26 CPU-hours. If 80% of renders, cuts ~1.7M. Multiplier verified from source; share is not (this is exactly what P1/P2 settle) | Low-medium — related rail editorial quality changes; fillers exist to avoid under-filled rail | **P1** (confirms via `limit=24` share) |
 | Gate + cache search | 3 | `brief-asia-web` | Min length 3, debounce 400ms, `limit` 40→12, wrap in `unstable_cache` keyed on normalized query at 60s | Unknown request volume; `apcg-cms/src/app/api/public/articles/route.ts:107-137` runs 4 unindexed `LIKE` scans per uncached `?q=` call — a 10-char typing session currently costs 6-10 uncached 40-doc queries | Very low — half a day of work | **P1** (tells you if `q=` is 1% or 20% of 2.96M) |
 | Crawler control (robots/sitemap tuning) | — | `brief-asia-web` | Not designed yet — depends on P2 attribution results | — | TBD | **P2/P2b** |
@@ -408,6 +449,7 @@ This is a separate defect with its own fix, **pre-existing and NOT attributable 
 
 ## Open Questions / Harness Gaps
 
+- **This plan's `## Validate Contract` (cycle 2, dated 10-09-26) predates the gzip touchpoint** (Finding added same day, after the contract was written). VALIDATE must be re-run for the gzip touchpoint (`src/lib/public.ts` / `probe/gzip-public-api`) before it is treated as CODE COMPLETE / ready for merge — it has not gone through a PVL pass yet.
 - **Newly surfaced, previously unanalysed reader-side cost surface: reader HTML is never CDN-cached.** `https://www.briefasia.com/` responds with `cache-control: private, no-cache, no-store, max-age=0, must-revalidate` — the homepage HTML is not CDN-cached at all, so every homepage visit runs a reader-side function render. (Note: bare `https://briefasia.com` 308-redirects to `https://www.briefasia.com`.) **Not** part of the Central cost figures (that's CMS-side origin transfer), but may be a material Vercel cost on the reader projects. Open question: does this contradict `export const revalidate = 60` on the homepage, and is it caused by `middleware.ts` matching, a Dynamic API, or auth/session usage? **P15** (`next build` route table — already in this plan for Fix #9) would settle it.
 - **`process/context/all-context.md` does not exist.** This repo's agent harness was never bootstrapped (`process/context/` holds only `generated-skills-catalog.json`). Context discovery could not follow the documented routing tables. This is a known gap, not a blocker for this plan — noted here per instruction, not resolved (do not run `vc-setup` as part of this plan).
 - **Crawler-control fix (Phase 2, conditional branch) has no concrete design yet** — it depends entirely on P2/P2b attribution results, which have not been run as of this plan's writing.
@@ -782,6 +824,7 @@ Execute start: fully-auto commands: `npm run typecheck && npm run lint` in both 
    - wtb-web's Fix #5 safety is a standing condition, not structural — re-check if wtb-web ever adds `revalidate` to its home page (see `### P10 + P8d`).
    - A new unrelated defect was found in wad-web (stale card read-times since 04/09) — track it in that repo, not here.
    - dtw-web's audit is only valid at `origin/main` tip `383f83d` — re-run if that repo's `feat/rebrand-phase-4-rendered-copy` branch merges (see Open Questions).
+   - **Gzip passthrough (found 10-09-26) is VIABLE and is Phase 2 priority #1.** Code already exists on branch `probe/gzip-public-api` (commit `7384b1f`, one file: `src/lib/public.ts`). It is CMS-only, no reader coordination, no GCV dependency. Next step for this touchpoint specifically: run VALIDATE (it has not gone through PVL yet — the existing `## Validate Contract` predates this finding), then merge. Do not skip the mandatory post-deploy Observability verification gate (see `## Verification Evidence`).
    - Do not, under any circumstances, revive the TTL-raise idea (see banner at top) or schedule a `media.url` backfill (see "What NOT To Do" #7).
 
 ---
