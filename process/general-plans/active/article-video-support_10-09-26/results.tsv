@@ -1,2 +1,3 @@
 iteration	timestamp	gaps_found	fail_count	concern_count	applied	saturation_status	loop_status	notes
 0	2026-09-10T06:32:58Z	5	2	3	0	ACTIVE	baseline	outer-pvl first pass; 2 FAIL (tenants migration gap, FEATURE_COLLECTIONS exhaustiveness) fixed in plan text during VALIDATE; 3 CONCERN remain, each with a mandated in-plan fallback
+1	2026-09-10T07:27:52Z	2	0	2	0	SATURATED	HALTED_SUCCESS	EVL confirmation run by independent vc-tester: all 4 gates real exit-0; all 8 structural claims verified against source/diffs/precedent; 2 residual known-gaps require live DB (migration never executed; siblingData merge on partial API update untested, fail-open)
