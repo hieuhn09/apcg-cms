@@ -40,6 +40,25 @@ This plan turns an already-completed 17-agent adversarial verification workflow 
 - **Phase 3** is CODE COMPLETE only after P8a-d pass AND the redirect shim is verified live before the env flip.
 - A phase is VERIFIED only after user confirmation of runtime behavior (dashboards/logs/curl output), not merely after code lands — mirrors this repo's `CODE DONE` vs `VERIFIED` distinction.
 
+---
+
+## Current Execution State
+
+**Last updated:** 2026-09-10 (UPDATE PROCESS pass — no code touched this pass)
+
+| Field | Status |
+|---|---|
+| Phase 0 (measure) | 🚧 **PARTIALLY MET.** P2, P9, P3 RUN and recorded. P1 (query-string facet) and P2b (User-Agent facet, full-window) still NOT RUN. Gate-arbitrating measurement (P2) is done — Fix #1 ordering is locked — but the formal exit condition (all 5) is not yet satisfied. |
+| Phase 1 (Fix 2a, 5-partial, 7, 8) | ✅ **DONE, code-complete.** Merged to `main` at `0ae9fa3` (10/09 11:37). Verified live on 50 production DTW docs: `lastEngine` keys narrowed to `[engineType,id,name,status]`, `tenant` has no `readTokens`. Hybrid runtime gates for Fix 2a were NOT RUN pre-deploy (structurally impossible then) — now superseded by the live production verification above. |
+| Phase 2 item — GZIP (`jsonPublic()`) | ✅ **DONE, production-verified.** Merged to `main` at `0ecc6bb` (10/09 ~16:45). EVL iter 6 HALTED_SUCCESS (local + live preview). Production spot-check: `Accept-Encoding: br, gzip` now returns `gzip` (was `br`) — pass-through confirmed on the live edge. **E13 (Vercel Observability per-route bytes ~100 KB → ~13 KB/request) is the one remaining verification gate — not yet run. Revert path: `git revert 0ecc6bb`.** |
+| Phase 2 items — Fix #1 (fan-out collapse), Fix #3 (search), crawler-control | 🚧 **BLOCKED** on P1/P2b (Phase 0 not fully met). Fix 2b (`LIST_SELECT` field-drop) additionally blocked on GCV audit (E1); post-gzip cost value is only ~$1.34/mo, hygiene/PII-closure value stands. |
+| Phase 3 (R2 cutover) | 🚧 **BLOCKED.** P8a-d not run; no R2 domain attached; `R2_PUBLIC_BASE_URL` not flipped. |
+| Phase 4 (cleanup) | Not started (Fix #6 derivative-selection already done upstream in 3/4 readers — see Phase 4 table; PNG-conversion sub-item and `revalidateHooks` wiring still open). |
+| E10 (A3 body wording) | ✅ **RESOLVED this pass** — see `## Additional Contract Locks` row A3. |
+| New defect (out-of-plan) | DTW tenant `frontendUrl` rot found and fixed by the user 10-09-26 — see `## Defect Found: DTW frontendUrl Pointed at a Dead Domain` below. |
+| Task-folder debt | Two cloud-agent PRs (#11, #12, branch `claude/tender-ptolemy-njgwwt`) landed on `main` mid-loop; contract locks (E1/A3/A4/depth:0) survived and were re-verified, but by luck, not by a guard — see follow-up below. |
+
+**Next action for a fresh session:** check E13 (Observability bytes) first — it is time-sensitive and has a one-commit revert if it fails. Then Phase 0's P1/P2b. Then Fix #1, gated on P1/P2b. Do not start Fix 2b or Phase 3 — both remain GCV/P8-blocked.
 
 ---
 
@@ -210,7 +229,7 @@ Neither field below is in Fix 2b's drop set today, so Fix 2b as specified is saf
 
 | ID | Must remain true | Evidence | Silent failure if violated |
 |---|---|---|---|
-| A3 | The `view=refs` branch keeps returning `title` | `brief-asia-web@origin/main:src/lib/central-api.ts:179` probes `"title" in docs[0]` | `fetchAllArticleRefs` bails with a `console.warn`; sitemap silently truncates to one page. Reader-invisible; surfaces weeks later as an SEO indexation drop |
+| A3 | The `view=refs` branch's `select` must NEVER include `title` (i.e. `refsView` responses stay slug+dates-only) | `brief-asia-web@origin/main:src/lib/central-api.ts:177` checks `"title" in docs[0]` as the guard's trip condition | If `title` ever appears on a `refsView` doc, the reader concludes Central is ignoring `view=refs` and returning full docs — `fetchAllArticleRefs` bails with a `console.warn` after page 1 and the sitemap silently truncates. Reader-invisible; surfaces weeks later as an SEO indexation drop |
 | A4 | `pinnedToLatest` **and** `pinnedUntil` stay as keys on list docs | `wtb-web@origin/main:src/lib/pin.ts:17-18` reads both off list docs from `cms-client.central.ts:143` | `activePin` returns null; homepage hero and top-of-Latest fall back to the newest Destinations article. An editor pins a story and it simply does not appear, with no error to report |
 
 ## Blast Radius
@@ -424,6 +443,24 @@ DEFAULT (if Phase 0 is inconclusive after best effort):
 
 This is a separate defect with its own fix, **pre-existing and NOT attributable to Change A** (this plan's Fix #2 field-drop hasn't shipped yet). Fix belongs in `wad-web`, not `apcg-cms` — track it there, not as a Phase item in this plan.
 
+## Defect Found: DTW `frontendUrl` Pointed at a Dead Domain (found + fixed by user, 10-09-26)
+
+**Root cause.** Tenant `dtw`'s `frontendUrl` was still `https://dailytechwire.com` — a domain abandoned in the rebrand to opentechwire. Every request `apcg-cms`'s revalidate webhook made to that URL hit Vercel's `DEPLOYMENT_NOT_FOUND` error page instead of the reader.
+
+**Why it was invisible until now.** Before Fix #7 (this plan, `src/hooks/revalidate.ts`) landed, the webhook call's response was never checked (`!res.ok` was not inspected) — a failed webhook logged as a success. Every DTW publish since the rebrand silently failed to bust the reader's cache; DTW's content freshness has been relying on the 300s/60s TTL floor alone, not on the invalidation path this plan's Fix #5/#7 work assumes is live.
+
+**How it surfaced.** Fix #7 made webhook failures visible (logs `!res.ok` with status + body), and post-deploy health probes on the production merge prompted a direct check of DTW's tenant config.
+
+**Resolution (done by the user, not this session, 17:04 local / `updatedAt: 2026-09-10T10:04:18Z`):** `frontendUrl` changed to `https://opentechwire.com`. Note: the bare domain 308-redirects to `https://www.opentechwire.com`, which preserves the POST method, and `www.opentechwire.com/api/revalidate` responds `400 missing_token` for an unsigned POST — i.e. the endpoint is alive and reachable through the redirect.
+
+**Follow-up (not yet done, low effort):** audit the other three tenants' (`brief-asia`, `wtb`, `wad`) `frontendUrl` values for the same class of rot — a stale domain would fail the exact same way and would have been just as invisible before Fix #7. Optionally, set `dtw`'s `frontendUrl` to the `www` form directly to drop the 308 hop (cosmetic, not a correctness issue since POST survives the redirect).
+
+## Follow-up: Guard Comments for Contract Locks (found 10-09-26, not yet done — code change, next EXECUTE)
+
+Two cloud-agent PRs (#11, #12, branch `claude/tender-ptolemy-njgwwt`) landed on `main` mid-loop during this plan's PVL/EVL cycles, each carrying its own migration (already applied via their own deploys). PR #11 extended `LIST_SELECT` in `articles/route.ts` (four `video*: false` keys) and added a `video` spread on the `[slug]` route. E1/A3/A4/`depth:0` were re-verified intact on the merged tree — but that survival was luck: the other agent had no way to know these contract locks existed, since nothing in `articles/route.ts` names them.
+
+**Follow-up (code change, schedule for the next EXECUTE touching this file):** add a short guard comment directly above `LIST_SELECT` in `src/app/api/public/articles/route.ts` and above the `refsView` `select` object naming E1 (LIST_SELECT is exclusion-mode, never add a field without checking Fix 2b's block list), A3 (refsView select must never include `title`), and A4 (`pinnedToLatest`/`pinnedUntil` must remain list keys) — so a future agent editing this file in isolation sees the invariant instead of relying on a plan file it may never read.
+
 ## Preconditions Reference Table (full P-numbering, cross-referenced to synthesis)
 
 | ID | What | Feeds |
@@ -527,7 +564,7 @@ Signals present: S2 (public API surface, transport-layer this time, not schema) 
 |---|---|---|
 | Re-confirmed, unchanged: neither `apcg-cms` nor `brief-asia-web` has a test runner. `apcg-cms/package.json` scripts list confirmed this session: only `lint` (`next lint`) and `typecheck` (`tsc --noEmit`); no jest/vitest/playwright script or config. | CONCERN (structural, unfixable within this plan's scope, unchanged from cycles 0-2) | Unchanged: all gzip behavioral gates are Hybrid/Agent-Probe. See Section III. |
 | **`npm run typecheck && npm run lint` re-run live this session on the current tree (post PR #11 merge, post gzip diff): both PASS.** Lint: 0 warnings in any touched file (`src/lib/public.ts` clean); all warnings are in `src/migrations/*` (pre-existing, unrelated). | ✅ PASS (freshly re-run, not assumed from the prior EVL cycle) | Carry into Section III as the Fully-Automated gate for this cycle |
-| E10 (A3 body wording inverted) — **still open, not fixed by this cycle's supplement.** Per session instruction, this is not this cycle's job; flagging again per instruction so it is not lost, and it does not block the gzip ship decision (it concerns the plan body's prose, not the refsView `select` object, which is independently confirmed correct above). | CONCERN (carried forward, unchanged in substance from cycle 2) | Standing instruction E10 (unchanged) — fix at next PLAN-mode touch of the plan body |
+| E10 (A3 body wording inverted) — **RESOLVED 10-09-26 (UPDATE PROCESS pass).** The `## Additional Contract Locks` A3 row previously said "the `view=refs` branch keeps returning `title`" — inverted. Corrected to the true invariant: `refsView` `select` must NEVER include `title`; the reader's guard (`central-api.ts:177`) trips (bails after page 1, `console.warn`) exactly when `title` unexpectedly appears, which would mean Central started ignoring `view=refs`. No code change — plan-body prose only; the `refsView` `select` object itself was already correct (confirmed PASS above). | RESOLVED (was CONCERN, carried since cycle 2) | None — closed. See plan body `## Additional Contract Locks`, row A3. |
 
 **Breaking Changes**
 
@@ -535,7 +572,7 @@ Signals present: S2 (public API surface, transport-layer this time, not schema) 
 |---|---|---|
 | **Gzip is transport-only — re-confirmed no JSON contract change.** See Infra findings above (Vary merge, payload equivalence). No `Public Contracts` section entry needs updating for the gzip item's response *shape*; only the wire encoding changes, and only for callers that opt in via `Accept-Encoding`. | ✅ PASS | No action; note for a future PLAN-mode touch that the `## Public Contracts` section could optionally mention the new `Content-Encoding`/`Vary` behavior for completeness, but it is not a contract-breaking change |
 | **PR #11's `LIST_SELECT` extension and `[slug]` video spread re-verified as non-breaking for this plan's existing locks.** Neither addition touches `lastEngine`/`lastEditedBy`/`assignedTo`/`translationStatus` (Fix 2b's set), `title` (A3), or `pinnedToLatest`/`pinnedUntil` (A4). The new `video` key on the `[slug]` response is additive — no reader currently expects its absence, and readers ignore unknown keys (standard `{ ...doc, video }` spread, no destructuring elsewhere in this codepath that would break on an extra field). | ✅ PASS (new finding this cycle, not previously assessed since PR #11 landed after cycle 1) | No action |
-| Fix #2b/GCV block (E1), A3 wording defect (E10), and the raised reader-risk baseline are unchanged from cycle 2 — not re-litigated here, out of this cycle's scope. | CONCERN (carried forward, unchanged) | See cycle 2's findings verbatim; no new evidence gathered this cycle |
+| Fix #2b/GCV block (E1) and the raised reader-risk baseline are unchanged from cycle 2 — not re-litigated here, out of this cycle's scope. A3 wording defect (E10) was RESOLVED 10-09-26 in a later UPDATE PROCESS pass (plan-body prose fix only, see `## Additional Contract Locks` row A3) — no longer a standing concern. | CONCERN (GCV/raised-risk-baseline carried forward, unchanged); E10 RESOLVED | See cycle 2's findings verbatim for GCV/raised-risk; E10 closed, no further action |
 
 **Security Surface**
 
@@ -632,7 +669,7 @@ Signals present: S2 (public API surface, transport-layer this time, not schema) 
 
 ### IV. Plan Updates Applied
 
-**None.** Per session instruction, this VALIDATE pass's write scope is restricted to the `## Validate Contract` section only — no edits were made to the plan body. Two items are flagged here for a future PLAN-mode touch, in addition to the two carried forward from cycle 2 (Section IV of the superseded contract, both still unresolved — the A3 wording inversion, E10; and the now-stale dtw-web merge-conflict caveat, already downgraded to closed in cycle 2's own text):
+**None (at the time this contract was written).** Per session instruction, this VALIDATE pass's write scope was restricted to the `## Validate Contract` section only — no plan-body edits were made during that PVL cycle. Two items were flagged here for a future PLAN-mode touch, in addition to the two carried forward from cycle 2 (Section IV of the superseded contract, both then unresolved — the A3 wording inversion, E10; and the now-stale dtw-web merge-conflict caveat, already downgraded to closed in cycle 2's own text). **Update (10-09-26, UPDATE PROCESS pass): E10 (A3 wording inversion) has since been fixed directly in the plan body** — see `## Additional Contract Locks` row A3 and the E10 row above. Item 2 below (contract-reference staleness in the Autonomous Goal Block / Resume sections) remains open.
 
 1. **New this cycle:** the plan body's `## Phase 0 Results` section already correctly shows P3 as RUN, but this cycle's superseded contract (cycle 2) still said "P1/P2b/P3 still NOT RUN" in its per-phase gate table — that line was already stale the day it was written (the gzip supplement landed the same session). This new contract corrects it (see Per-Phase Gate table above); no plan-body edit is needed since the plan body itself was already correct.
 2. **New this cycle:** the plan's `## Autonomous Goal Block` and `## Resume and Execution Handoff` sections still reference "Validate contract: inline in this plan file... (Gate: CONDITIONAL, generated-by: outer-pvl, dated 09-09-26)" — the cycle-0 date. This is now two contracts stale (cycles 1, 2, and this one all postdate it). Per this session's write-scope restriction (`## Validate Contract` section only), these are not updated here — flag for the next PLAN-mode touch to refresh both sections' contract references and the gzip-specific "Next step" language (the gzip item is now validated, not merely "found VIABLE").
@@ -695,21 +732,23 @@ Execute start: fully-auto commands: `npm run typecheck && npm run lint` in both 
 
 ## Resume and Execution Handoff
 
-1. **Selected plan file path:** `process/general-plans/active/cms-cost-remediation_09-09-26/cms-cost-remediation_PLAN_09-09-26.md` (this file).
-2. **Last completed phase or step:** PLAN written 09-09-26, supplemented same day with Phase 0 partial results. P2 and P9 have been RUN (decisive/confirming); P1, P2b, P3 are NOT RUN. Phase 0 gate status: PARTIALLY MET (see `## Phase 0 Results`). No code change yet.
-3. **Validate-contract status:** pending — VALIDATE has not run.
-4. **Supporting context files loaded during planning:** the 141-line corrected synthesis (path in header); this repo's `brief-content-type_PLAN_20-08-26.md` (read only for house plan-format conventions, unrelated subject); `process/development-protocols/plan-lifecycle.md` and `implementation-standards.md` (referenced per task instructions — not independently re-quoted here, see those files directly for house style rules on plan lifecycle and commit hygiene).
-5. **Next step for a fresh agent picking up mid-execution:**
-   - If `## Phase 0 Results` is still all TBD → run Phase 0 (P1, P2, P2b, P3, P9) FIRST. Do not touch Phase 2 code. Phase 1 items may be started in parallel with Phase 0.
-   - If Phase 0 Results are filled in → apply the Phase 2 branch logic to pick the priority fix, then proceed to VALIDATE for whichever phase's code changes are queued next.
+1. **Selected plan file path:** `process/general-plans/active/cms-cost-remediation_09-09-26/cms-cost-remediation_PLAN_09-09-26.md` (this file). Task folder also holds `results.tsv` (PVL/EVL iterations 0-6), two PVL iteration reports, the Phase 1 EXECUTE report (`cms-cost-remediation_REPORT_10-09-26.md`), the gzip EVL note (`cms-cost-remediation-evl-gzip_NOTE_10-09-26.md`), the gzip feasibility artifact (`gzip-passthrough_FEASIBILITY_10-09-26.md`), and this pass's closeout packet (`cms-cost-remediation_CLOSEOUT_10-09-26.md`).
+2. **Last completed phase or step (as of 10-09-26 UPDATE PROCESS pass):** Phase 1 shipped and production-verified (`0ae9fa3`). Gzip touchpoint shipped and production-verified (`0ecc6bb`), pending only the E13 Observability confirmation. See `## Current Execution State` above for the authoritative per-phase status table — read that first, it supersedes the historical PLAN-mode summary below.
+3. **Validate-contract status:** present, PVL cycle 3 (`Gate: CONDITIONAL`, `generated-by: outer-pvl`, dated 2026-09-10) — see `## Validate Contract`. EVL confirmed all gates green for both the Phase 1 and gzip touchpoints (`results.tsv` iterations 3 and 6, both `HALTED_SUCCESS`).
+4. **Supporting context files loaded during planning:** the 141-line corrected synthesis (path in header); this repo's `brief-content-type_PLAN_20-08-26.md` (read only for house plan-format conventions, unrelated subject); `process/development-protocols/plan-lifecycle.md` and `implementation-standards.md` (referenced per task instructions — not independently re-quoted here, see those files directly for house style rules on plan lifecycle and commit hygiene). **Note:** `process/context/all-context.md` still does not exist in this repo (harness never bootstrapped) — this is a known, unresolved gap, not something to fix as part of this plan.
+5. **Next step for a fresh agent picking up mid-execution — check in this order:**
+   - **Tonight/soon: E13.** Read Vercel Observability's per-route bytes for `/api/public/articles`. Expect a fall from ~100 KB/request toward ~13 KB/request. If it does NOT fall as predicted: `git revert 0ecc6bb` (one commit, no data impact) — do not attempt to "fix forward" the metering assumption first.
+   - **Then: Phase 0's remaining two measurements, P1 and P2b** (query-string facet and full-August-window User-Agent facet on `/api/public/articles` in Vercel Logs). Both are Agent-Probe/dashboard-read tier, not gating anything already shipped — they gate Fix #1/#3 only.
+   - **Then: Fix #1** (collapse related-articles fan-out, `brief-asia-web/src/lib/cms-client.central.ts:496-500,544-552`) — once P1/P2b confirm the fan-out share, per the Phase 2 branch logic.
+   - **Optional, low-effort, not gating anything:** audit `brief-asia`/`wtb`/`wad` tenants' `frontendUrl` values for the same rot found on `dtw` (see `## Defect Found: DTW frontendUrl...`). Add guard comments above `LIST_SELECT` and the `refsView` `select` in `articles/route.ts` naming E1/A3/A4 (see the guard-comment follow-up above) the next time that file is touched for any reason.
    - **P10 + P8d update (10-09-26):** brief-asia-web, wad-web, wtb-web, dtw-web are audited and CLEAR against `origin/main` (see `### P10 + P8d` under Phase 0 Results). GCV is the sole remaining gap for Fix 2b (E1) and the Phase 3 env-flip step (P8d) — do not re-run the audit for the other 4 repos, only GCV needs checking now.
-   - Before touching Fix #2 or the security finding, re-read the "Security Finding" and "What NOT To Do" #8 sections above — the `depth: 0` trap is easy to reintroduce. Note: the security leak is confirmed still live as of 10-09-26 (see the verification chain at the end of the Security Finding section) — `defaultPopulate` has not shipped yet.
+   - Fix 2a (`defaultPopulate` security fix) is DONE and production-verified — do not redo it. Fix 2b (`LIST_SELECT` field-drop) remains blocked on GCV; post-gzip its cost value is only ~$1.34/mo, so prioritize the hygiene/PII-closure rationale over cost when deciding whether to unblock early.
    - Before touching Fix #4, confirm P8a-d have all passed (WAD/WTB/DTW already confirmed; GCV outstanding) and the redirect shim is deployed and verified BEFORE flipping the env var — do not reverse this order.
    - Fix #6 (derivative selection) is DONE upstream in 3 of 4 readers — do not redo it (see Phase 4 table). The separate PNG-conversion sub-item is still open.
    - wtb-web's Fix #5 safety is a standing condition, not structural — re-check if wtb-web ever adds `revalidate` to its home page (see `### P10 + P8d`).
    - A new unrelated defect was found in wad-web (stale card read-times since 04/09) — track it in that repo, not here.
    - dtw-web's audit is only valid at `origin/main` tip `383f83d` — re-run if that repo's `feat/rebrand-phase-4-rendered-copy` branch merges (see Open Questions).
-   - **Gzip passthrough (found 10-09-26) is VIABLE and is Phase 2 priority #1.** Code already exists on branch `probe/gzip-public-api` (commit `7384b1f`, one file: `src/lib/public.ts`). It is CMS-only, no reader coordination, no GCV dependency. Next step for this touchpoint specifically: run VALIDATE (it has not gone through PVL yet — the existing `## Validate Contract` predates this finding), then merge. Do not skip the mandatory post-deploy Observability verification gate (see `## Verification Evidence`).
+   - Two cloud-agent PRs (#11, #12) landed on `main` mid-loop and were re-verified non-interfering with E1/A3/A4/depth:0 — see the guard-comment follow-up above for the durable fix (a code comment, not yet applied).
    - Do not, under any circumstances, revive the TTL-raise idea (see banner at top) or schedule a `media.url` backfill (see "What NOT To Do" #7).
 
 ---
