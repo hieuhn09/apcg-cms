@@ -44,21 +44,21 @@ This plan turns an already-completed 17-agent adversarial verification workflow 
 
 ## Current Execution State
 
-**Last updated:** 2026-09-10 (UPDATE PROCESS pass — no code touched this pass)
+**Last updated:** 2026-09-11 (UPDATE PROCESS pass — no code touched this pass; GCV audit recorded, P10/P8d closed 5/5, E1 LIFTED)
 
 | Field | Status |
 |---|---|
 | Phase 0 (measure) | 🚧 **PARTIALLY MET.** P2, P9, P3 RUN and recorded. P1 (query-string facet) and P2b (User-Agent facet, full-window) still NOT RUN. Gate-arbitrating measurement (P2) is done — Fix #1 ordering is locked — but the formal exit condition (all 5) is not yet satisfied. |
 | Phase 1 (Fix 2a, 5-partial, 7, 8) | ✅ **DONE, code-complete.** Merged to `main` at `0ae9fa3` (10/09 11:37). Verified live on 50 production DTW docs: `lastEngine` keys narrowed to `[engineType,id,name,status]`, `tenant` has no `readTokens`. Hybrid runtime gates for Fix 2a were NOT RUN pre-deploy (structurally impossible then) — now superseded by the live production verification above. |
 | Phase 2 item — GZIP (`jsonPublic()`) | ✅ **DONE, production-verified.** Merged to `main` at `0ecc6bb` (10/09 ~16:45). EVL iter 6 HALTED_SUCCESS (local + live preview). Production spot-check: `Accept-Encoding: br, gzip` now returns `gzip` (was `br`) — pass-through confirmed on the live edge. **E13 (Vercel Observability per-route bytes ~100 KB → ~13 KB/request) is the one remaining verification gate — not yet run. Revert path: `git revert 0ecc6bb`.** |
-| Phase 2 items — Fix #1 (fan-out collapse), Fix #3 (search), crawler-control | 🚧 **BLOCKED** on P1/P2b (Phase 0 not fully met). Fix 2b (`LIST_SELECT` field-drop) additionally blocked on GCV audit (E1); post-gzip cost value is only ~$1.34/mo, hygiene/PII-closure value stands. |
+| Phase 2 items — Fix #1 (fan-out collapse), Fix #3 (search), crawler-control | 🚧 **BLOCKED** on P1/P2b (Phase 0 not fully met). Fix 2b (`LIST_SELECT` field-drop) — **E1 LIFTED 2026-09-11 (GCV audited and cleared, P10/P8d now 5/5 CLOSED) — UNBLOCKED, ready for EXECUTE.** Post-gzip cost value is only ~$1.34/mo; hygiene/PII-closure value is the primary justification. |
 | Phase 3 (R2 cutover) | 🚧 **BLOCKED.** P8a-d not run; no R2 domain attached; `R2_PUBLIC_BASE_URL` not flipped. |
 | Phase 4 (cleanup) | Not started (Fix #6 derivative-selection already done upstream in 3/4 readers — see Phase 4 table; PNG-conversion sub-item and `revalidateHooks` wiring still open). |
 | E10 (A3 body wording) | ✅ **RESOLVED this pass** — see `## Additional Contract Locks` row A3. |
 | New defect (out-of-plan) | DTW tenant `frontendUrl` rot found and fixed by the user 10-09-26 — see `## Defect Found: DTW frontendUrl Pointed at a Dead Domain` below. |
 | Task-folder debt | Two cloud-agent PRs (#11, #12, branch `claude/tender-ptolemy-njgwwt`) landed on `main` mid-loop; contract locks (E1/A3/A4/depth:0) survived and were re-verified, but by luck, not by a guard — see follow-up below. |
 
-**Next action for a fresh session:** check E13 (Observability bytes) first — it is time-sensitive and has a one-commit revert if it fails. Then Phase 0's P1/P2b. Then Fix #1, gated on P1/P2b. Do not start Fix 2b or Phase 3 — both remain GCV/P8-blocked.
+**Next action for a fresh session:** check E13 (Observability bytes) first — it is time-sensitive and has a one-commit revert if it fails. Then Phase 0's P1/P2b. Then Fix #1, gated on P1/P2b. **Fix 2b is now UNBLOCKED (E1 lifted 2026-09-11) — ready for EXECUTE independent of P1/P2b.** Phase 3 remains blocked (P8a-c not run; P8d alone does not clear Phase 3).
 
 ---
 
@@ -112,7 +112,7 @@ Measured on real production data (50 DTW docs): the fields Fix 2b would drop (`t
 | after dropping the 5 fields | 197,135 B | 24,558 B |
 | reduction | 26.8% | **13.1%** |
 
-On the $96.48 baseline: gzip alone → ~$10.14; gzip + field-drop → ~$8.80. **Fix 2b's cost value after gzip is ~$1.34/month.** Its remaining justification is data hygiene (not emitting internal fields on a public API) and the PII/secret leak closure (see `## Security Finding`) — those stand on their own; do not over-prioritise 2b on cost grounds going forward. Fix 2b stays blocked on GCV as before (see `E1`).
+On the $96.48 baseline: gzip alone → ~$10.14; gzip + field-drop → ~$8.80. **Fix 2b's cost value after gzip is ~$1.34/month.** Its remaining justification is data hygiene (not emitting internal fields on a public API) and the PII/secret leak closure (see `## Security Finding`) — those stand on their own; do not over-prioritise 2b on cost grounds going forward. **`E1` LIFTED 2026-09-11 — GCV audited and cleared; Fix 2b may now proceed under the Validate Contract (see `## Validate Contract` → Execute-agent instructions).**
 
 **P4 is now ANSWERED:** `translationStatus` DOES populate (307 B/doc, all 50 sampled DTW docs).
 
@@ -184,7 +184,7 @@ This does not change any fix's design in this plan — it raises the bar for how
 
 **Production hosts (confirmed by measurement, record for reuse):** CMS production host is `apcg-cms.vercel.app`; brief-asia tenant prefix is `brief-asia` (with hyphen); reader canonical host is `www.briefasia.com` (bare `briefasia.com` 308-redirects to it).
 
-**Unverified generalization warning:** every "×5" multiplier in every estimate in this plan (and in the source synthesis) is **unverified**. Only `brief-asia-web` was read in the underlying research. **UPDATE 10-09-26:** three of the four other reader sites — **WAD, WTB, DTW** — have since been audited against `origin/main` (see `### P10 + P8d — RUN 10-09-26` under Phase 0 Results) and are CLEAR on every field this plan touches. **GCV remains uninspected — it is not on this machine** and is now the only outstanding generalization gap. Precondition **P10** is RUN for 3 of 4 repos; GCV is the sole remaining blocker for any fix that assumes "all five sites behave like brief-asia-web."
+**Unverified generalization warning:** every "×5" multiplier in every estimate in this plan (and in the source synthesis) is **unverified**. Only `brief-asia-web` was read in the underlying research. **UPDATE 10-09-26:** three of the four other reader sites — **WAD, WTB, DTW** — were audited against `origin/main` (see `### P10 + P8d — RUN 10-09-26` under Phase 0 Results) and are CLEAR on every field this plan touches. **UPDATE 2026-09-11: GCV has now also been audited against `origin/main` (tip `32d93bf`) and is CLEAR — see `### P10 + P8d` under Phase 0 Results. Precondition P10 (and P8d) is now RUN and CLEAR for all 5 of 5 reader sites — CLOSED.**
 
 ---
 
@@ -318,11 +318,11 @@ _(to be filled in by the executing agent/session — do not proceed to Phase 2 u
 
 - `r` (fraction of 2.96M that is TTL-invariant cold-key traffic): still TBD — P2's ratio arbitrates the *dominant cause*, not the precise `r` fraction; P1/P2b refine it further.
 
-### P10 + P8d — RUN 10-09-26 (13-agent audit against origin/main)
+### P10 + P8d — CLOSED 5/5 (13-agent audit 10-09-26 + GCV audit 2026-09-11, both against origin/main)
 
 **Method note (important):** the local checkouts of the other reader repos were stale by 29 / 10 / 27 / 5 commits respectively (three had uncommitted work), so this audit read `origin/main` only — via `git grep origin/main` and `git show origin/main:<file>` — and mutated no working tree. An earlier shallow pass over the stale local trees produced a partly wrong answer (see the wtb-web correction below); that is why the method matters and why this audit re-ran against `origin/main` specifically.
 
-Repos audited: `brief-asia-web`, `wad-web`, `wtb-web`, `dtw-web` (all present at `/home/hieunc/Code/`). **GCV was NOT audited — it is not on this machine.** Every repo's clearance was attacked by two independent reviewers; **0 of 8 refutation attempts succeeded.**
+Repos audited (10-09-26): `brief-asia-web`, `wad-web`, `wtb-web`, `dtw-web` (all present at `/home/hieunc/Code/`), each clearance attacked by two independent reviewers — **0 of 8 refutation attempts succeeded.** **GCV audited separately on 2026-09-11** (see `### GCV Audit` below) — all 5 of 5 reader sites are now CLEAR.
 
 **Result — all four audited readers are CLEAR on all four Change-A fields** (`lastEngine`, `lastEditedBy`, `assignedTo`, `translationStatus`). Zero hits tree-wide at `origin/main`, case-insensitive, snake_case, generated `payload-types.ts` and harness dirs included. Every indirect vector was independently closed: no object spread of an article doc into a typed consumer, no `for...in`, no variable-key access on article docs, and **no runtime schema validation anywhere** (no zod / valibot / yup / ajv / superstruct in any of the four).
 
@@ -330,7 +330,7 @@ Per-change verdicts:
 
 | Change | Verdict | Blocker |
 |---|---|---|
-| A — drop `lastEngine`/`lastEditedBy`/`assignedTo`/`translationStatus` keys from list | GO for the 4 audited | **GCV only** |
+| A — drop `lastEngine`/`lastEditedBy`/`assignedTo`/`translationStatus` keys from list | **GO — all 5 of 5 audited (GCV cleared 2026-09-11)** | none |
 | B — `defaultPopulate` sanitization (security) | **GO — no blocker** | none |
 | C — `unpin-expired` stops firing the webhook | GO | standing condition on wtb-web (see below) |
 | D — R2 media URLs | GO | confirm the R2 rewrite covers `sizes.*.url` |
@@ -340,6 +340,27 @@ Per-change verdicts:
 **Standing condition on Fix #5 (wtb-web only) — Change-C safety is contingent, not structural.** brief-asia, wad and dtw obtain pins via `flag: "pinnedToLatest"`, so Central's query-time `pinnedUntil` enforcement governs — structurally safe regardless of caching. **wtb-web never sends the flag**; it pulls a raw list and picks the pin in memory. It survives only because `src/lib/pin.ts` re-checks `pinnedUntil` at render time **and** every Central fetch is `cache:"no-store"`, keeping those pages dynamic. That margin is one line of config: adding `export const revalidate = N` to wtb-web's home page (three existing precedents in that repo) would freeze `Date.now()` at generation time and hold an expired pin for the whole window with nothing left to bust it. Do not treat wtb-web's Change-C clearance as permanent — re-check if wtb-web ever adds `revalidate` to its home page.
 
 **dtw-web audit validity caveat.** The dtw-web clearance above is valid **only for `origin/main` at tip `383f83d`**. The local checkout sits on `feat/rebrand-phase-4-rendered-copy`, 15 commits ahead, containing commits that MODIFY `payload.config.ts` — a file `origin/main` DELETED. Merging produces a delete/modify conflict that, resolved carelessly, would **resurrect the local Payload** and void this audit. See Open Questions below.
+
+### GCV Audit — RUN 2026-09-11 (orchestrator, against origin/main)
+
+`gcv-web` was cloned to `/home/hieunc/Code/gcv-web` on 2026-09-11 for this audit; local checkout was clean and level with `origin/main`, tip `32d93bf`. Production domain `https://www.globalchicvoyage.com`; health probe live: `probe.ok: true`, articleId 9836, cmsSource `central`, 186 ms. GCV has the same reader shape as the other four (`src/lib/cms-client.central.ts`, `src/lib/central-api.ts`, `src/app/api/revalidate/route.ts`, `src/app/api/health/cms/route.ts`).
+
+| Check | Result |
+|---|---|
+| `lastEngine` / `lastEditedBy` / `assignedTo` / `translationStatus` / `article.tenant` | **0 hits** in `src/` excluding generated `payload-types.ts` |
+| Case-insensitive + snake_case variants | 0 hits |
+| Bracket access (`["tenant"]` etc.) | 0 hits |
+| Generic walkers | only `absolutizeMediaUrls()` (keyed on `url`/`thumbnailURL`, no dropped key) and `localizedText()` (walks a `{en,vi,id}` locale map, not an article doc) |
+| Article docs persisted to GCV's own DB | no — only `articleId` is stored (bookmarks, views) |
+| Type-level declaration of the five fields | none — no `tsc` breakage when they vanish |
+| Runtime schema validator (zod/valibot/yup/ajv/superstruct) | none — a dropped key yields `undefined`, never a throw |
+| `next/image` real import / `images.remotePatterns` (P8d) | 0 / none → **P8d CLEAR** |
+| Pin retrieval (Fix #5 / Change-C) | `flag: "pinnedToLatest"` → Central enforces `pinnedUntil` at query time → **structurally safe, same as brief-asia/wad/dtw** — GCV is NOT a wtb-web-style standing-condition case |
+| Embedded Payload | deleted at `origin/main` → pure Central, no fallback (same raised-risk baseline as the other four) |
+
+**Method note:** `git grep` / `git show` against `origin/main` only, matching the earlier 4-repo audit's indirect-vector checks. Depth: executed inline by the orchestrator rather than by a 13-agent refutation panel — recorded as a scope note, not a gap.
+
+**Verdict: GCV is CLEAR on all fields this plan touches. P10 and P8d are now CLOSED 5/5.** `E1` (Fix 2b's GCV hard-block) is LIFTED. GCV joins the structurally-safe Fix #5 list (`flag: "pinnedToLatest"`) — wtb-web remains the sole standing-condition exception (see above).
 
 ### Methodology note (read before re-running P9)
 
@@ -353,12 +374,12 @@ These do not depend on the P1/P2/P3/P9 measurement outcome — their correctness
 
 | Item | Fix # | Repo | Risk | Precondition |
 |---|---|---|---|---|
-| Extend `LIST_SELECT` (+ security fix for `[slug]` route via `defaultPopulate`) | 2 | `apcg-cms` | **Very low** — grep of both reader files (`cms-client.central.ts`, `central-api.ts`) confirms zero references to the four dropped fields | P4 sizes it; P10 confirms other 4 readers also don't consume those fields |
+| Extend `LIST_SELECT` (+ security fix for `[slug]` route via `defaultPopulate`) | 2 | `apcg-cms` | **Very low** — grep of both reader files (`cms-client.central.ts`, `central-api.ts`) confirms zero references to the four dropped fields | P4 sizes it; **P10 now CLOSED 5/5 (GCV audited 2026-09-11) — no longer a blocker** |
 | `res.ok` + timeout in revalidate webhook | 7 | `apcg-cms` | Low — observability-only change, not a cost fix on its own | none — do alongside anything else |
 | `unpin-expired` webhook suppression | 5 (partial — this line only) | `apcg-cms` | Low-medium — verified safe for brief-asia-web (`route.ts:139-142` enforces at read time); **NOT yet verified for other 4 readers** | P10 clears the generalization |
 | Memoize `resolveReadToken` | 8 | `apcg-cms` | Low — deliberate security trade-off: revocation/deactivation delayed by TTL (use 30-60s, document it) | none |
 
-**Arithmetic for Fix #2:** `lastEngine` + `lastEditedBy` alone model at ~874 B/row (~13% of post-fix row). `translationStatus`, if populated (19 rows in the sample), models at ~11.6 KB/row — potentially a **larger cut than `5639e41` itself**. Applied to a 108-220 GB September baseline: somewhere between 14 GB and 120 GB saved. **Superseded 10-09-26 by the gzip finding above:** `translationStatus` is now confirmed to populate (P4 answered — 307 B/doc across all 50 sampled DTW docs), but once gzip ships, Fix 2b's raw/gzipped delta measured on real production data is only 26.8% raw / **13.1% gzipped**, worth roughly **$1.34/month** on the $96.48 baseline — not the 14-120 GB range estimated pre-gzip. Fix 2b's remaining justification is data hygiene + the PII/secret leak (Fix 2a), not this cost arithmetic.
+**Arithmetic for Fix #2:** `lastEngine` + `lastEditedBy` alone model at ~874 B/row (~13% of post-fix row). `translationStatus`, if populated (19 rows in the sample), models at ~11.6 KB/row — potentially a **larger cut than `5639e41` itself**. Applied to a 108-220 GB September baseline: somewhere between 14 GB and 120 GB saved. **Superseded 10-09-26 by the gzip finding above:** `translationStatus` is now confirmed to populate (P4 answered — 307 B/doc across all 50 sampled DTW docs), but once gzip ships, Fix 2b's raw/gzipped delta measured on real production data is only 26.8% raw / **13.1% gzipped**, worth roughly **$1.34/month** on the $96.48 baseline — not the 14-120 GB range estimated pre-gzip. Fix 2b's remaining justification is data hygiene + the PII/secret leak (Fix 2a), not this cost arithmetic. **UNBLOCKED 2026-09-11: E1 (GCV audit) LIFTED — Fix 2b is ready for EXECUTE.** Concrete change: extend `LIST_SELECT` in `src/app/api/public/articles/route.ts` with `tenant: false, translationStatus: false, lastEngine: false, lastEditedBy: false, assignedTo: false` alongside the existing `body`/`video*` exclusions. Contract locks A3/A4 unaffected — `title` is not in the `refsView` select, and `pinnedToLatest`/`pinnedUntil` are not in this drop set.
 
 ---
 
@@ -475,7 +496,7 @@ Two cloud-agent PRs (#11, #12, branch `claude/tender-ptolemy-njgwwt`) landed on 
 | P7 | Related fan-out branch count (avg `articles_rels` per parent) | Fix #1 arithmetic multiplier |
 | P8a-d | R2 domain/derivative/prefix/reader-config | Fix #4 go/no-go, ALL mandatory |
 | P9 | Is `7125ab0`'s media caching actually working? | Phase 0 gate |
-| P10 | Do the other 4 readers match brief-asia-web? | **RUN 10-09-26 for brief-asia-web, wad-web, wtb-web, dtw-web (CLEAR, 13-agent audit against origin/main).** GCV not on this machine — still open, now the sole blocker for Fix 2b and the Phase 3 env-flip. |
+| P10 | Do the other readers match brief-asia-web? | **CLOSED 5/5 — RUN for brief-asia-web, wad-web, wtb-web, dtw-web (10-09-26, 13-agent audit) and gcv-web (2026-09-11, orchestrator audit against `origin/main` tip `32d93bf`).** All five CLEAR. No longer a blocker for Fix 2b (E1 LIFTED). P8d (GCV's `next/image`/media-config check) also CLEAR — see `### P10 + P8d`. |
 | P11 | Real nav-pillar count per tenant | Corrects homepage fan-out arithmetic (repo constant was wrong) |
 | P12 | Webhook chain health (200/401/503 across readers) | Confirms Fix #7 targets a real, currently-invisible failure mode |
 | P13 | Is `/api/public/views` in use? | Separate, unmeasured route — `postView` has no caller in brief-asia-web |
@@ -572,7 +593,7 @@ Signals present: S2 (public API surface, transport-layer this time, not schema) 
 |---|---|---|
 | **Gzip is transport-only — re-confirmed no JSON contract change.** See Infra findings above (Vary merge, payload equivalence). No `Public Contracts` section entry needs updating for the gzip item's response *shape*; only the wire encoding changes, and only for callers that opt in via `Accept-Encoding`. | ✅ PASS | No action; note for a future PLAN-mode touch that the `## Public Contracts` section could optionally mention the new `Content-Encoding`/`Vary` behavior for completeness, but it is not a contract-breaking change |
 | **PR #11's `LIST_SELECT` extension and `[slug]` video spread re-verified as non-breaking for this plan's existing locks.** Neither addition touches `lastEngine`/`lastEditedBy`/`assignedTo`/`translationStatus` (Fix 2b's set), `title` (A3), or `pinnedToLatest`/`pinnedUntil` (A4). The new `video` key on the `[slug]` response is additive — no reader currently expects its absence, and readers ignore unknown keys (standard `{ ...doc, video }` spread, no destructuring elsewhere in this codepath that would break on an extra field). | ✅ PASS (new finding this cycle, not previously assessed since PR #11 landed after cycle 1) | No action |
-| Fix #2b/GCV block (E1) and the raised reader-risk baseline are unchanged from cycle 2 — not re-litigated here, out of this cycle's scope. A3 wording defect (E10) was RESOLVED 10-09-26 in a later UPDATE PROCESS pass (plan-body prose fix only, see `## Additional Contract Locks` row A3) — no longer a standing concern. | CONCERN (GCV/raised-risk-baseline carried forward, unchanged); E10 RESOLVED | See cycle 2's findings verbatim for GCV/raised-risk; E10 closed, no further action |
+| Fix #2b/GCV block (E1) is unchanged from cycle 2 as of this contract's writing (2026-09-10); the raised reader-risk baseline is unchanged and out of this cycle's scope. A3 wording defect (E10) was RESOLVED 10-09-26 in a later UPDATE PROCESS pass (plan-body prose fix only, see `## Additional Contract Locks` row A3) — no longer a standing concern. **PLAN-SUPPLEMENT UPDATE (2026-09-11): E1 LIFTED — GCV audited and cleared (see `### GCV Audit` under Phase 0 Results). Fix 2b is UNBLOCKED.** | E1 LIFTED (was CONCERN, now resolved); raised-risk-baseline CONCERN carried forward, unchanged; E10 RESOLVED | See `### GCV Audit` for the closing evidence; raised-risk-baseline: see cycle 2's findings verbatim; E10 closed, no further action |
 
 **Security Surface**
 
@@ -676,7 +697,11 @@ Signals present: S2 (public API surface, transport-layer this time, not schema) 
 
 ### Execute-agent instructions
 
-Carried forward unchanged from cycle 2 (not reproduced verbatim here to avoid drift — see the superseded cycle-2 contract in this plan's git history / the immediately-preceding version of this section for the full text): **E1–E11 all still apply exactly as written.** E1 (Fix 2b GCV hard-block) and E9 (never revive TTL-raise / media.url backfill) are the two most load-bearing for anyone resuming this plan. New this cycle:
+Carried forward unchanged from cycle 2 (not reproduced verbatim here to avoid drift — see the superseded cycle-2 contract in this plan's git history / the immediately-preceding version of this section for the full text): **E2–E11 all still apply exactly as written.** E9 (never revive TTL-raise / media.url backfill) remains the most load-bearing for anyone resuming this plan.
+
+**E1 UPDATE (2026-09-11): LIFTED.** E1 originally read "blocked until GCV alone is also cleared." GCV has now been audited and cleared (see `### GCV Audit` under Phase 0 Results, P10/P8d CLOSED 5/5) — **Fix 2b may proceed under this contract.** Concrete change: extend `LIST_SELECT` in `apcg-cms/src/app/api/public/articles/route.ts` with `tenant: false, translationStatus: false, lastEngine: false, lastEditedBy: false, assignedTo: false` alongside the existing `body`/`video*` exclusions. Contract locks A3/A4 are unaffected by this change: A3's `refsView` `select` does not include `title` and is untouched; A4's `pinnedToLatest`/`pinnedUntil` are not in this drop set. Verification: re-run the Section III `Fix #2` gates (response no longer contains the dropped fields) against the extended `LIST_SELECT` once shipped.
+
+New this cycle:
 
 | # | Instruction | Trigger condition |
 |---|---|---|
@@ -718,13 +743,13 @@ SESSION GOAL: Remediate apcg-cms's August 2026 Vercel egress/CPU cost spike (2.9
 Charter + umbrella plan: N/A — single general plan, no umbrella/phase-program.
 Autonomy: Per this repo's orchestration.md Autonomy Mode rules. Phase 1 items 2a/#5(partial)/#7/#8 may proceed under standing EXECUTE consent once granted. Phase 2 and Phase 3 remain hard-gated (see Hard stop conditions) — autonomy does not waive plan-encoded temporal gates.
 Hard stop conditions / safety constraints:
-- Do not ship Fix #2b (drop lastEngine/lastEditedBy/assignedTo/translationStatus from GET /api/public/articles) until P10 is run and recorded for **GCV** (narrowed 10-09-26 — brief-asia-web/wad-web/wtb-web/dtw-web already cleared via a 13-agent audit against origin/main).
+- ~~Do not ship Fix #2b until P10 is run and recorded for GCV~~ — **CLOSED 2026-09-11: GCV audited and cleared (P10/P8d 5/5 CLOSED, E1 LIFTED). Fix 2b is unblocked.**
 - Do not start Phase 2 code until `## Phase 0 Results` records P1, P2b, and P3 (P2 and P9 alone are not sufficient per the plan's own Phase Completion Rules).
 - Do not flip `R2_PUBLIC_BASE_URL` (Phase 3) until P8a-d all pass AND the redirect shim is deployed, env-gated, and verified live.
 - Never implement Fix #2's `[slug]` route fix as `depth: 0` — use `defaultPopulate` on ContentEngines/Users/Tenants (see "What NOT To Do" #8 and the Security Finding).
 - Never revive the TTL-raise (60s→1800s) idea — see `## ⚠️ INVALIDATED` banner.
 - Never schedule a `media.url`/`sizes_*_url` backfill — see "What NOT To Do" #7.
-Next phase: EXECUTE — Phase 1 items Fix #2a (defaultPopulate security fix), Fix #7 (res.ok/timeout), Fix #5-partial (unpin-expired suppression, brief-asia-web only), Fix #8 (resolveReadToken memoization). Run Phase 0's remaining measurements (P1, P2b, P3) in parallel.
+Next phase: EXECUTE — Phase 1 items Fix #2a/#7/#5-partial/#8 already shipped (see `## Current Execution State`). **Next unblocked code step: Fix 2b (`LIST_SELECT` field-drop, E1 LIFTED 2026-09-11 — see `## Validate Contract` → Execute-agent instructions).** Run Phase 0's remaining measurements (P1, P2b) in parallel; P3 already RUN.
 Validate contract: inline in this plan file, `## Validate Contract` section (Gate: CONDITIONAL, generated-by: outer-pvl, dated 09-09-26).
 Execute start: fully-auto commands: `npm run typecheck && npm run lint` in both `apcg-cms` and `brief-asia-web` after each Phase 1 edit | e2e spec: none exists (no test runner in either repo — see Test Coverage dimension finding) | probe scenario: curl+jq checks against live CMS for Fix 2a (see Section III Test Coverage Plan) | high-risk pack: yes — Fix #2 (public API + PII) and Fix #4 (deploy/gateway) both qualify per `vc-risk-evidence-pack`'s 6 high-risk classes; required before either is treated as finalize-ready.
 
@@ -733,7 +758,7 @@ Execute start: fully-auto commands: `npm run typecheck && npm run lint` in both 
 ## Resume and Execution Handoff
 
 1. **Selected plan file path:** `process/general-plans/active/cms-cost-remediation_09-09-26/cms-cost-remediation_PLAN_09-09-26.md` (this file). Task folder also holds `results.tsv` (PVL/EVL iterations 0-6), two PVL iteration reports, the Phase 1 EXECUTE report (`cms-cost-remediation_REPORT_10-09-26.md`), the gzip EVL note (`cms-cost-remediation-evl-gzip_NOTE_10-09-26.md`), the gzip feasibility artifact (`gzip-passthrough_FEASIBILITY_10-09-26.md`), and this pass's closeout packet (`cms-cost-remediation_CLOSEOUT_10-09-26.md`).
-2. **Last completed phase or step (as of 10-09-26 UPDATE PROCESS pass):** Phase 1 shipped and production-verified (`0ae9fa3`). Gzip touchpoint shipped and production-verified (`0ecc6bb`), pending only the E13 Observability confirmation. See `## Current Execution State` above for the authoritative per-phase status table — read that first, it supersedes the historical PLAN-mode summary below.
+2. **Last completed phase or step (as of 2026-09-11 UPDATE PROCESS pass):** Phase 1 shipped and production-verified (`0ae9fa3`). Gzip touchpoint shipped and production-verified (`0ecc6bb`), pending only the E13 Observability confirmation. **P10/P8d closed 5/5 (GCV audited 2026-09-11); E1 LIFTED; Fix 2b is unblocked and ready for EXECUTE.** See `## Current Execution State` above for the authoritative per-phase status table — read that first, it supersedes the historical PLAN-mode summary below.
 3. **Validate-contract status:** present, PVL cycle 3 (`Gate: CONDITIONAL`, `generated-by: outer-pvl`, dated 2026-09-10) — see `## Validate Contract`. EVL confirmed all gates green for both the Phase 1 and gzip touchpoints (`results.tsv` iterations 3 and 6, both `HALTED_SUCCESS`).
 4. **Supporting context files loaded during planning:** the 141-line corrected synthesis (path in header); this repo's `brief-content-type_PLAN_20-08-26.md` (read only for house plan-format conventions, unrelated subject); `process/development-protocols/plan-lifecycle.md` and `implementation-standards.md` (referenced per task instructions — not independently re-quoted here, see those files directly for house style rules on plan lifecycle and commit hygiene). **Note:** `process/context/all-context.md` still does not exist in this repo (harness never bootstrapped) — this is a known, unresolved gap, not something to fix as part of this plan.
 5. **Next step for a fresh agent picking up mid-execution — check in this order:**
@@ -741,9 +766,9 @@ Execute start: fully-auto commands: `npm run typecheck && npm run lint` in both 
    - **Then: Phase 0's remaining two measurements, P1 and P2b** (query-string facet and full-August-window User-Agent facet on `/api/public/articles` in Vercel Logs). Both are Agent-Probe/dashboard-read tier, not gating anything already shipped — they gate Fix #1/#3 only.
    - **Then: Fix #1** (collapse related-articles fan-out, `brief-asia-web/src/lib/cms-client.central.ts:496-500,544-552`) — once P1/P2b confirm the fan-out share, per the Phase 2 branch logic.
    - **Optional, low-effort, not gating anything:** audit `brief-asia`/`wtb`/`wad` tenants' `frontendUrl` values for the same rot found on `dtw` (see `## Defect Found: DTW frontendUrl...`). Add guard comments above `LIST_SELECT` and the `refsView` `select` in `articles/route.ts` naming E1/A3/A4 (see the guard-comment follow-up above) the next time that file is touched for any reason.
-   - **P10 + P8d update (10-09-26):** brief-asia-web, wad-web, wtb-web, dtw-web are audited and CLEAR against `origin/main` (see `### P10 + P8d` under Phase 0 Results). GCV is the sole remaining gap for Fix 2b (E1) and the Phase 3 env-flip step (P8d) — do not re-run the audit for the other 4 repos, only GCV needs checking now.
-   - Fix 2a (`defaultPopulate` security fix) is DONE and production-verified — do not redo it. Fix 2b (`LIST_SELECT` field-drop) remains blocked on GCV; post-gzip its cost value is only ~$1.34/mo, so prioritize the hygiene/PII-closure rationale over cost when deciding whether to unblock early.
-   - Before touching Fix #4, confirm P8a-d have all passed (WAD/WTB/DTW already confirmed; GCV outstanding) and the redirect shim is deployed and verified BEFORE flipping the env var — do not reverse this order.
+   - **P10 + P8d — CLOSED 5/5 (2026-09-11):** brief-asia-web, wad-web, wtb-web, dtw-web (10-09-26, 13-agent audit) and gcv-web (2026-09-11, orchestrator audit against `origin/main` tip `32d93bf`) are all audited and CLEAR (see `### P10 + P8d` and `### GCV Audit` under Phase 0 Results). Do not re-run this audit for any of the 5 repos unless a caveat below applies (dtw-web merge-conflict caveat still stands).
+   - Fix 2a (`defaultPopulate` security fix) is DONE and production-verified — do not redo it. **Fix 2b (`LIST_SELECT` field-drop) is UNBLOCKED (E1 LIFTED 2026-09-11, GCV cleared) — ready for EXECUTE.** Post-gzip its cost value is only ~$1.34/mo, so lead with the hygiene/PII-closure rationale, not the cost figure, when shipping it. Concrete change: extend `LIST_SELECT` in `src/app/api/public/articles/route.ts` with `tenant: false, translationStatus: false, lastEngine: false, lastEditedBy: false, assignedTo: false` alongside the existing `body`/`video*` exclusions.
+   - Before touching Fix #4, confirm P8a-d have all passed. **P8d is now CLEAR for all 5 readers (GCV cleared 2026-09-11).** P8a-c (R2 domain/derivative/prefix checks) are still NOT RUN and remain the actual Phase 3 blocker. Deploy and verify the redirect shim BEFORE flipping the env var — do not reverse this order.
    - Fix #6 (derivative selection) is DONE upstream in 3 of 4 readers — do not redo it (see Phase 4 table). The separate PNG-conversion sub-item is still open.
    - wtb-web's Fix #5 safety is a standing condition, not structural — re-check if wtb-web ever adds `revalidate` to its home page (see `### P10 + P8d`).
    - A new unrelated defect was found in wad-web (stale card read-times since 04/09) — track it in that repo, not here.
