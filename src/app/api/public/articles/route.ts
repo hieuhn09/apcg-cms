@@ -43,12 +43,33 @@ import type { Where } from "payload";
 // never gains a video field) — a card cannot render what never arrives. Each
 // field must be named individually; excluding `video` does not cascade to the
 // other three.
+//
+// `tenant`, `translationStatus`, `lastEngine`, `lastEditedBy`, `assignedTo`
+// join the exclusion list too (Fix 2b). `tenant` is implied by the read token
+// that scoped the request — every row was repeating the same ~1 KB populated
+// tenant object that the caller already knows. The other four are editorial /
+// engine bookkeeping (translation state, which engine last wrote the row, which
+// staff user last edited or is assigned) that no reader renders. All five
+// reader sites were audited clean at origin/main on 2026-09-10/11: none reads
+// any of these off a list doc. This is the hygiene half of the internal-field
+// leak; the security half (what a populated relationship is allowed to
+// contain) is already handled by `defaultPopulate` on the collections.
+//
+// Contract locks that live next to this constant: keep this select in
+// exclusion mode (`false` only — never `true`) so new reader-contract fields
+// keep flowing; never drop `pinnedToLatest` / `pinnedUntil` (wtb-web reads both
+// off list docs); and the `refsView` select below must never gain `title`.
 const LIST_SELECT = {
   body: false,
   video: false,
   videoCaption: false,
   videoCredit: false,
   videoDescription: false,
+  tenant: false,
+  translationStatus: false,
+  lastEngine: false,
+  lastEditedBy: false,
+  assignedTo: false,
 } as const;
 
 export function OPTIONS(request: Request) {
