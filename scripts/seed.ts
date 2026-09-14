@@ -250,10 +250,15 @@ const TENANTS: TenantFixture[] = [
     defaultLanguage: "en",
     // EN-only v1 (positioning brief promises multi-language later; keep the door open by adding codes here when it happens).
     supportedLanguages: ["en"],
-    features: { articles: true, newsletters: true, podcasts: true, marketData: false, sponsorSlots: false, wireDrops: false, corrections: true, translations: false, dashboards: false },
+    // `podcasts` is OFF: the podcast section is hidden on the reader behind this
+    // flag. The fixture must stay false or a reseed silently re-enables it.
+    features: { articles: true, newsletters: true, podcasts: false, marketData: false, sponsorSlots: false, wireDrops: false, corrections: true, translations: false, dashboards: false },
     autoPublishEngineDrafts: true,
     // GCV visual rule: "never a colour per section" — every pillar carries the clay accent.
     pillars: [
+      // GCV Exclusive PILLAR (hand-curated, engine-blocked). NOT BriefAsia's
+      // unrelated `Articles.exclusive` disclosure boolean.
+      { slug: "exclusive", title: "Exclusive", heading: "Exclusive", color: "var(--gcv-clay)", icon: "feather", order: 0, description: "Reporting you will not read elsewhere: commissioned, hand-curated and published only by our editors." },
       { slug: "trends-inspiration", title: "Trends & Inspiration", heading: "Trends & Inspiration", color: "var(--gcv-clay)", icon: "trend-up", order: 1, description: "Where taste in travel is moving and why: the behaviours, ideas and desires shaping the season ahead." },
       { slug: "style-culture", title: "Style & Culture", heading: "Style & Culture", color: "var(--gcv-clay)", icon: "star", order: 2, description: "The aesthetics of the journey: craft, fashion, art, ritual and the cultures that shape how the world travels well." },
       { slug: "destinations", title: "Destinations", heading: "Destinations", color: "var(--gcv-clay)", icon: "globe", order: 3, description: "The case for a place, written from inside it, with Asia as home ground." },
