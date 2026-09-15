@@ -120,7 +120,7 @@ export const MANAGED_COLLECTIONS = {
       { name: "show", label: "Show", type: "text" },
       { name: "episode", label: "Episode #", type: "text", placeholder: "018" },
       { name: "host", label: "Host", type: "text" },
-      { name: "audioUrl", label: "Audio URL", type: "text" },
+      { name: "youtubeUrl", label: "YouTube URL", type: "text", required: true, placeholder: "https://youtube.com/watch?v=..." },
       { name: "description", label: "Description", type: "textarea" },
     ],
   },
