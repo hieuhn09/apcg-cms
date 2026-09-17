@@ -205,7 +205,7 @@ const TENANTS: TenantFixture[] = [
   },
   {
     slug: "dtw",
-    name: "DailyTechWire",
+    name: "Opentechwire",
     defaultLanguage: "en",
     supportedLanguages: ["en", "vi", "id"],
     features: { articles: true, newsletters: true, podcasts: true, marketData: false, sponsorSlots: true, wireDrops: true, corrections: true, translations: true, dashboards: true },
