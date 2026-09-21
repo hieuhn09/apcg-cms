@@ -180,12 +180,32 @@ function pad(v: unknown, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s.padEnd(n);
 }
 
+/** Local slug normaliser — the legacy `section` kicker is free text ("Luxury",
+ *  "luxury ", "Luxury Travel"), so it can only be compared to a sub-section slug
+ *  after both sides are folded the same way. Deliberately local: this script
+ *  must not grow a dependency for one string comparison. */
+function slugify(v: string): string {
+  return v
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 interface ArticleRow {
   id: string | number;
   slug?: string | null;
   title?: string | null;
   pillar?: unknown;
   subSection?: unknown;
+  /** Deprecated free-text kicker (src/collections/Articles.ts, `section`). Still
+   *  one of the three values the reader matches a section chip against, so a
+   *  stale value here keeps a moved article under its old chip. */
+  section?: string | null;
+  /** Array rows of `{ pillar, subSection }`. Read as `unknown` because Payload
+   *  returns each relationship as an id OR an expanded doc depending on depth. */
+  secondarySections?: unknown;
   _status?: string | null;
   workflowStatus?: string | null;
 }
@@ -448,7 +468,69 @@ async function main() {
           note = "no proposed sub-section — subSection cleared";
         }
 
-        if (sameId(before.pillar, newPillarId) && sameId(before.subSection, newSubId)) {
+        /** The slug actually landed on, or null when subSection was cleared. */
+        const newSubSlug = newSubId === null ? null : subSlug;
+
+        /* ── Residue purge ────────────────────────────────────────────────
+           Moving the primary pair alone does NOT move the article on the
+           reader. The reader decides whether an article belongs under a
+           section chip with a three-way OR (brief-asia-web
+           src/components/pillar/pillar-content.tsx): it matches if the section
+           slug equals (1) the subSection of the assignment for that pillar —
+           INCLUDING rows contributed by `secondarySections`, (2) the primary
+           `subSection`, or (3) the deprecated free-text `section` kicker. Two
+           of those three live outside the pair this script used to write, so a
+           correctly-moved article was still dragged back under its OLD chip by
+           whichever residue remained.
+
+           Stale pairs to purge: the decision's own `current` view first (what
+           the audit actually observed), plus the DB `before` pair so a re-run
+           after the primary already moved still finds leftover rows. */
+        type Pair = { pillar: string | number | null; subSection: string | number | null };
+        const stalePairs: Pair[] = [];
+        const pushStale = (pillar: string | number | null, subSection: string | number | null) => {
+          if (pillar == null && subSection == null) return;
+          if (stalePairs.some((x) => sameId(x.pillar, pillar) && sameId(x.subSection, subSection))) return;
+          stalePairs.push({ pillar, subSection });
+        };
+
+        const sourcePillarId = d.current?.category ? (pillarIdBySlug.get(d.current.category) ?? null) : null;
+        const sourceSubId =
+          sourcePillarId != null && d.current?.subPillar
+            ? (subIdByPillarAndSlug.get(`${String(sourcePillarId)}::${d.current.subPillar}`) ?? null)
+            : null;
+        if (sourcePillarId != null && sourceSubId != null) pushStale(sourcePillarId, sourceSubId);
+        pushStale(before.pillar, before.subSection);
+
+        /* Drop ONLY secondary rows matching a stale pair on BOTH components. A
+           cross-post to a genuinely different pillar is editorial intent, not
+           residue — every surviving row is passed through as the ORIGINAL object
+           so nothing else about it is rewritten. */
+        const rawSecondary = Array.isArray(article.secondarySections) ? article.secondarySections : [];
+        const keptSecondary = rawSecondary.filter((rowValue) => {
+          const r = rowValue as { pillar?: unknown; subSection?: unknown } | null;
+          const rowPillar = relId(r?.pillar);
+          const rowSub = relId(r?.subSection);
+          return !stalePairs.some((sp) => sameId(sp.pillar, rowPillar) && sameId(sp.subSection, rowSub));
+        });
+        const droppedSecondary = rawSecondary.length - keptSecondary.length;
+
+        /* The legacy kicker is only cleared when it DISAGREES with where the
+           article is landing — a `section` that already reads as the new
+           sub-section is describing the move's destination, not its origin. */
+        const currentSection = typeof article.section === "string" ? article.section.trim() : "";
+        const clearSection = currentSection.length > 0 && slugify(currentSection) !== slugify(newSubSlug ?? "");
+
+        /* The no-op test now includes residue. Keyed on the primary pair ALONE
+           it returned early on exactly the articles this fix exists for: a
+           re-run finds the primary already at target, declares "nothing to do",
+           and leaves the secondary row and the legacy kicker in place forever. */
+        if (
+          sameId(before.pillar, newPillarId) &&
+          sameId(before.subSection, newSubId) &&
+          droppedSecondary === 0 &&
+          !clearSection
+        ) {
           record(d, {
             outcome: "no-op",
             matchedBy,
@@ -459,22 +541,23 @@ async function main() {
           continue;
         }
 
-        /* Secondary sections are NOT written by this script — only the primary
-           pillar/subSection pair is. A decision carrying extra sections is still
-           applied (its primary move is real); the unapplied remainder is reported
-           on the row so the operator can see exactly what was left behind. */
-        const proposedSections = d.proposed?.sections ?? null;
-        if (Array.isArray(proposedSections) && proposedSections.length > 1) {
-          const secondary = proposedSections.filter((s) => s !== categorySlug);
-          if (secondary.length > 0) {
-            const sectionsNote = `secondary sections not applied (unsupported): ${JSON.stringify(secondary)}`;
-            note = note ? `${note}; ${sectionsNote}` : sectionsNote;
-          }
-        }
-
         // pillar + subSection ALWAYS travel together — Articles.subSection's
-        // validate rejects a sub-section owned by a different pillar.
+        // validate rejects a sub-section owned by a different pillar. They are
+        // written unconditionally (an already-at-target pair re-writes to the
+        // identical value) to keep the single-update invariant above intact;
+        // the residue keys are added only when there is residue to clear.
         data = { pillar: newPillarId, subSection: newSubId };
+        if (droppedSecondary > 0) data.secondarySections = keptSecondary;
+        if (clearSection) data.section = null;
+
+        if (clearSection) {
+          const sectionNote = `cleared legacy section "${currentSection}"`;
+          note = note ? `${note}; ${sectionNote}` : sectionNote;
+        }
+        if (droppedSecondary > 0) {
+          const droppedNote = `dropped ${droppedSecondary} stale secondary section row${droppedSecondary === 1 ? "" : "s"}`;
+          note = note ? `${note}; ${droppedNote}` : droppedNote;
+        }
         after = {
           pillar: newPillarId,
           subSection: newSubId,
