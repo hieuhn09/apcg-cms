@@ -91,6 +91,44 @@ export const syncNativePublish: CollectionBeforeValidateHook = ({ data, original
   return data;
 };
 
+/**
+ * Native Unpublish → workflowStatus sync. The mirror of syncNativePublish.
+ *
+ * Public visibility is workflowStatus alone, so clicking Unpublish (which only
+ * lowers `_status`) previously left the article live on the site. A HUMAN
+ * clicking Unpublish on a LIVE article means "take this off the site", so
+ * workflowStatus follows down to "hidden" — the status that exists precisely
+ * to mean "was live, now isn't, content is complete" (vs "draft" = never
+ * finished, "archived" = terminal).
+ *
+ * The trigger is deliberately gated on the STORED workflowStatus being
+ * "published", not on an `_status` transition: the console actions set
+ * workflowStatus and `_status` together, so a bare `_status: "draft"` gate
+ * would rewrite an "approved" console save to "hidden".
+ *
+ * Carve-outs mirror syncNativePublish: an explicit workflowStatus change in
+ * the same save wins, and non-human writes (engine/cron/translation, no
+ * req.user) are untouched. "scheduled" cannot be the stored value here, so the
+ * publish-scheduled cron's transition is unreachable by this hook.
+ *
+ * Runs BEFORE enforceStatusAuthority, so a contributor without publish rights
+ * is rejected by the authority gate exactly as they are on the Publish side.
+ */
+export const syncNativeUnpublish: CollectionBeforeValidateHook = ({ data, originalDoc, req }) => {
+  if (!data || !req.user) return data;
+  if ((data as { _status?: string })._status !== "draft") return data;
+
+  const stored = originalDoc?.workflowStatus as ArticleStatus | undefined;
+  if (stored !== "published") return data;
+
+  const incoming = data.workflowStatus as ArticleStatus | undefined;
+  // Explicit change in the same save wins (console + Workflow-tab edits).
+  if (incoming !== undefined && incoming !== stored) return data;
+
+  data.workflowStatus = "hidden";
+  return data;
+};
+
 export const enforceStatusAuthority: CollectionBeforeValidateHook = ({
   data,
   originalDoc,
