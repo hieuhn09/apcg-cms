@@ -162,7 +162,7 @@ const TENANTS: TenantFixture[] = [
       // Technology
       { slug: "ai", title: "AI", titleVi: "AI", pillarSlug: "technology", order: 1 },
       { slug: "startups", title: "Startups", titleVi: "Startup", pillarSlug: "technology", order: 2 },
-      { slug: "dev", title: "Dev", titleVi: "Lập trình", pillarSlug: "technology", order: 3 },
+      { slug: "dev", title: "Chips", titleVi: "Bán dẫn", pillarSlug: "technology", order: 3 },
       { slug: "products", title: "Products", titleVi: "Sản phẩm", pillarSlug: "technology", order: 4 },
       { slug: "policy", title: "Policy", titleVi: "Chính sách", pillarSlug: "technology", order: 5 },
       // Real Estate
