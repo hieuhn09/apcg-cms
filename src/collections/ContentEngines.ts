@@ -17,6 +17,34 @@ import { ENGINE_ACTIONS, ENGINE_TYPES } from "@/lib/constants";
  */
 export const ContentEngines: CollectionConfig = {
   slug: "content-engines",
+  /**
+   * SECURITY — relationship-population allowlist.
+   *
+   * `Articles.lastEngine` is a relationship to this collection, and the public
+   * article routes populate relationships (`depth: 1` on the list route,
+   * `depth: 2` on `[slug]`) through `scopedFind`, which passes
+   * `overrideAccess: true`. That bypasses `access.read` above, so without this
+   * allowlist every holder of a tenant read token receives `tokenHash`,
+   * `tokenPrefix` and `lastSeenIp` in plain text on a public endpoint.
+   *
+   * `defaultPopulate` is the `select` Payload applies whenever a relationship
+   * is POPULATED into another document (payload 3.85.1:
+   * `dist/fields/hooks/afterRead/relationshipPopulationPromise.js` uses
+   * `relatedCollection.config.defaultPopulate`). It does NOT affect direct
+   * `find`/`findByID` calls on this collection, so the admin panel and
+   * `src/lib/engine-auth.ts` are unaffected.
+   *
+   * Include-mode (allowlist) is deliberate: any field added to this collection
+   * in future is excluded by default rather than silently exposed. Do NOT
+   * "fix" this with `depth: 0` on the routes — that would stop lexical `upload`
+   * nodes inside `body` from populating and silently delete every inline image
+   * on all reader sites.
+   */
+  defaultPopulate: {
+    name: true,
+    engineType: true,
+    status: true,
+  },
   admin: {
     useAsTitle: "name",
     defaultColumns: ["name", "engineType", "status", "tokenPrefix", "lastSeenAt"],

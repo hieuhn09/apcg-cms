@@ -40,7 +40,7 @@ import { getPayload } from "payload";
 import config from "@payload-config";
 import { authenticateEngine } from "@/lib/engine-auth";
 import { scopedCreate, scopedUpdate, scopedFind } from "@/lib/scoped";
-import { toContentTypeValue } from "@/lib/constants";
+import { toContentTypeValue, ENGINE_BLOCKED_PILLARS } from "@/lib/constants";
 import { featureEnabled } from "@/lib/tenant";
 import { markdownToLexical } from "@/lib/markdown";
 import { logActivity } from "@/lib/activity";
@@ -151,6 +151,18 @@ export async function POST(request: Request): Promise<Response> {
   const engineDraftId = isNonEmptyString(body.engineDraftId) ? body.engineDraftId.trim() : null;
   const publishedAt = isNonEmptyString(body.publishedAt) ? body.publishedAt : new Date().toISOString();
   const expectedVersion = typeof body.expectedVersion === "number" ? body.expectedVersion : null;
+
+  // 3b. Engine-blocked pillar gate. Placed AFTER auth + tenant/pillar resolution
+  // (so it leaks nothing to an unauthenticated caller) and BEFORE the
+  // idempotency lookup below — so it also blocks the engine UPDATING an article
+  // it created earlier in a now-blocked pillar, not just creating new ones.
+  //
+  // NOTE: `exclusive` here is GCV's hand-curated PILLAR slug, unrelated to
+  // BriefAsia's `Articles.exclusive` disclosure boolean.
+  if (ENGINE_BLOCKED_PILLARS[tenant.slug as string]?.includes(pillarSlugStr)) {
+    await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { reason: `pillar not writable by engine: ${pillarSlugStr}` } });
+    return json({ ok: false, status: "unprocessable", reason: `pillar not writable by engine: ${pillarSlugStr}` }, 422);
+  }
 
   try {
     // 4. Idempotency lookup (per tenant) by engineDraftId, then engineSourceUrl.

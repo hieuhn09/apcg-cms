@@ -68,3 +68,19 @@ export function supportedLanguages(tenant: TenantDoc | null): string[] {
   if (list.length) return list;
   return tenant.defaultLanguage ? [tenant.defaultLanguage] : [];
 }
+
+/**
+ * Single-record feature check: is `key` enabled for THIS tenant id?
+ *
+ * `featureGate()` (src/access/features.ts) is shaped for row-list filtering and
+ * cannot answer a single-doc field-access question, so field access functions
+ * compose the two existing primitives here instead of re-implementing the
+ * lookup. Returns false for an unresolvable tenant — fail closed.
+ */
+export async function tenantHasFeature(
+  payload: Payload,
+  tenantId: number | string,
+  key: FeatureKey,
+): Promise<boolean> {
+  return featureEnabled(await findTenantById(payload, tenantId), key);
+}

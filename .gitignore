@@ -34,5 +34,7 @@ src/payload-types.ts
 /media/
 .vibecode-backup*/
 
-# Claude Code hook telemetry (local runtime log, rewritten every session)
+# Harness hook logs (generated at runtime, never tracked)
 .claude/hooks/.logs/
+.vercel
+.env*

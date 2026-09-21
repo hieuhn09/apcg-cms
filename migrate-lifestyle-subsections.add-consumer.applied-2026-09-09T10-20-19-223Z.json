@@ -1,0 +1,23 @@
+{
+  "appliedAt": "2026-09-09T10:20:19.223Z",
+  "subcommand": "add-consumer",
+  "tenant": {
+    "slug": "brief-asia",
+    "id": 1
+  },
+  "pillar": {
+    "slug": "lifestyle",
+    "id": 6
+  },
+  "outcome": "applied",
+  "detail": "created sub-section \"consumer\" (id 70) at order 3",
+  "before": null,
+  "after": {
+    "id": 70,
+    "slug": "consumer",
+    "title": "Consumer",
+    "pillar": 6,
+    "order": 3,
+    "tenant": 1
+  }
+}

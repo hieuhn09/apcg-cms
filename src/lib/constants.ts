@@ -18,8 +18,19 @@ export const FEATURE_KEYS = [
   "translations",
   "dashboards", // FundingRows / AiLeaderboardRows (DTW dashboards)
   "citiesMap", // Cities (WTB "The Map" / /place directory)
+  "video", // VideoMedia + the Articles video fields (short-form article video)
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
+
+// ── Pillars the content engine may NOT write into ───────────────────────────
+// Tenant-slug-keyed so the same pillar slug on a DIFFERENT tenant is unaffected.
+// Hardcoded on purpose: a code constant cannot be accidentally un-ticked by an
+// admin, and this needs no schema field / migration.
+//
+// NOTE: GCV's `exclusive` here is a PILLAR slug (the hand-curated Exclusive
+// pillar) — it is NOT and must never be confused with BriefAsia's unrelated
+// `Articles.exclusive` disclosure boolean.
+export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = { gcv: ["exclusive"] };
 
 // ── Top-level user role (global identity) ───────────────────────────────────
 // Tenant-scoped roles live on TenantMemberships, not here.
@@ -168,4 +179,5 @@ export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   translations: ["translationJobs"],
   dashboards: ["fundingRows", "aiLeaderboardRows"],
   citiesMap: ["cities"],
+  video: ["videoMedia"],
 };

@@ -130,7 +130,7 @@ const TENANTS: TenantFixture[] = [
       { slug: "technology", title: "Technology", titleVi: "Công nghệ", titleId: "Teknologi", heading: "Technology", color: "var(--technology)", icon: "spark", order: 3, description: "AI, startups, platforms, chips, developer tools, product-market shifts, and technology regulation." },
       { slug: "real-estate", title: "Real Estate", titleVi: "Bất động sản", titleId: "Properti", heading: "Real Estate", color: "var(--real-estate)", icon: "product", order: 4, description: "Homes, offices, hotels, proptech, land, city development, and infrastructure across Asian property markets." },
       { slug: "travel-dining", title: "Travel & Dining", titleVi: "Du lịch & Ẩm thực", titleId: "Travel & Dining", heading: "Travel & Dining", color: "var(--travel-dining)", icon: "globe", order: 5, description: "Premium travel, destination intelligence, hotels, retreats, restaurants, and regional spending shifts." },
-      { slug: "lifestyle", title: "Lifestyle", titleVi: "Phong cách sống", titleId: "Gaya Hidup", heading: "Lifestyle", color: "var(--lifestyle)", icon: "star", order: 6, description: "Luxury, fashion, art, culture, health, wellness, and Asia's changing consumer class." },
+      { slug: "lifestyle", title: "Lifestyle", titleVi: "Phong cách sống", titleId: "Gaya Hidup", heading: "Lifestyle", color: "var(--lifestyle)", icon: "star", order: 6, description: "Luxury, fashion, consumer, culture, health, wellness, and Asia's changing consumer class." },
       { slug: "sustainability", title: "Sustainability", titleVi: "Bền vững", titleId: "Keberlanjutan", heading: "Sustainability", color: "var(--sustainability)", icon: "trend-up", order: 7, description: "Green finance, energy transition, climate policy, mobility, nature, and circular economy." },
       { slug: "perspectives", title: "Perspectives", titleVi: "Góc nhìn", titleId: "Perspektif", heading: "Perspectives", color: "var(--perspectives)", icon: "feather", order: 8, description: "Opinion, founder stories, analysis, interviews, and essays explaining the forces shaping Asia." },
     ],
@@ -162,7 +162,7 @@ const TENANTS: TenantFixture[] = [
       // Technology
       { slug: "ai", title: "AI", titleVi: "AI", pillarSlug: "technology", order: 1 },
       { slug: "startups", title: "Startups", titleVi: "Startup", pillarSlug: "technology", order: 2 },
-      { slug: "dev", title: "Dev", titleVi: "Lập trình", pillarSlug: "technology", order: 3 },
+      { slug: "dev", title: "Chips", titleVi: "Bán dẫn", pillarSlug: "technology", order: 3 },
       { slug: "products", title: "Products", titleVi: "Sản phẩm", pillarSlug: "technology", order: 4 },
       { slug: "policy", title: "Policy", titleVi: "Chính sách", pillarSlug: "technology", order: 5 },
       // Real Estate
@@ -180,7 +180,7 @@ const TENANTS: TenantFixture[] = [
       // Lifestyle
       { slug: "luxury", title: "Luxury", titleVi: "Xa xỉ", pillarSlug: "lifestyle", order: 1 },
       { slug: "fashion", title: "Fashion", titleVi: "Thời trang", pillarSlug: "lifestyle", order: 2 },
-      { slug: "art", title: "Art", titleVi: "Nghệ thuật", pillarSlug: "lifestyle", order: 3 },
+      { slug: "consumer", title: "Consumer", titleVi: "Tiêu dùng", pillarSlug: "lifestyle", order: 3 },
       { slug: "culture", title: "Culture", titleVi: "Văn hóa", pillarSlug: "lifestyle", order: 4 },
       { slug: "health", title: "Health", titleVi: "Sức khỏe", pillarSlug: "lifestyle", order: 5 },
       // Sustainability
@@ -205,7 +205,7 @@ const TENANTS: TenantFixture[] = [
   },
   {
     slug: "dtw",
-    name: "DailyTechWire",
+    name: "Opentechwire",
     defaultLanguage: "en",
     supportedLanguages: ["en", "vi", "id"],
     features: { articles: true, newsletters: true, podcasts: true, marketData: false, sponsorSlots: true, wireDrops: true, corrections: true, translations: true, dashboards: true },
@@ -250,10 +250,15 @@ const TENANTS: TenantFixture[] = [
     defaultLanguage: "en",
     // EN-only v1 (positioning brief promises multi-language later; keep the door open by adding codes here when it happens).
     supportedLanguages: ["en"],
-    features: { articles: true, newsletters: true, podcasts: true, marketData: false, sponsorSlots: false, wireDrops: false, corrections: true, translations: false, dashboards: false },
+    // `podcasts` is OFF: the podcast section is hidden on the reader behind this
+    // flag. The fixture must stay false or a reseed silently re-enables it.
+    features: { articles: true, newsletters: true, podcasts: false, marketData: false, sponsorSlots: false, wireDrops: false, corrections: true, translations: false, dashboards: false },
     autoPublishEngineDrafts: true,
     // GCV visual rule: "never a colour per section" — every pillar carries the clay accent.
     pillars: [
+      // GCV Exclusive PILLAR (hand-curated, engine-blocked). NOT BriefAsia's
+      // unrelated `Articles.exclusive` disclosure boolean.
+      { slug: "exclusive", title: "Exclusive", heading: "Exclusive", color: "var(--gcv-clay)", icon: "feather", order: 0, description: "Reporting you will not read elsewhere: commissioned, hand-curated and published only by our editors." },
       { slug: "trends-inspiration", title: "Trends & Inspiration", heading: "Trends & Inspiration", color: "var(--gcv-clay)", icon: "trend-up", order: 1, description: "Where taste in travel is moving and why: the behaviours, ideas and desires shaping the season ahead." },
       { slug: "style-culture", title: "Style & Culture", heading: "Style & Culture", color: "var(--gcv-clay)", icon: "star", order: 2, description: "The aesthetics of the journey: craft, fashion, art, ritual and the cultures that shape how the world travels well." },
       { slug: "destinations", title: "Destinations", heading: "Destinations", color: "var(--gcv-clay)", icon: "globe", order: 3, description: "The case for a place, written from inside it, with Asia as home ground." },

@@ -22,9 +22,12 @@ import { toId } from "@/access/helpers";
  *
  * The update runs with `context.systemWrite` so articleBookkeeping skips its
  * version bump / lastEditedBy stamp — this sweep is metadata-only, nobody
- * edited the article. Cache invalidation is NOT done here: `payload.update`
- * fires the Articles afterChange hook, which posts the signed revalidate
- * webhook to the owning tenant's frontend (src/hooks/revalidate.ts).
+ * edited the article. It also runs with `context.disableRevalidate` so the
+ * Articles afterChange hook does NOT post the signed revalidate webhook
+ * (src/hooks/revalidate.ts): readers are already covered by the read-time
+ * expiry filter, so busting their caches hourly for an invisible change was
+ * pure cost. See the inline note on the update call for the per-reader scope
+ * this was verified against.
  */
 
 interface ExpiredPin {
@@ -85,8 +88,27 @@ export async function GET(request: Request): Promise<Response> {
         overrideAccess: true,
         // systemWrite: bookkeeping (version/lastEditedBy) không đổi;
         // skipTranslationEnqueue: unpin không đổi nội dung nên không việc gì
-        // phải chạy vòng enqueue dịch (dù nó idempotent). Revalidate vẫn chạy.
-        context: { systemWrite: true, skipTranslationEnqueue: true },
+        // phải chạy vòng enqueue dịch (dù nó idempotent).
+        //
+        // disableRevalidate: this sweep is admin hygiene only. `pinnedUntil` is
+        // enforced at READ time — src/app/api/public/articles/route.ts filters
+        // expired pins out of `?flag=pinnedToLatest` — so readers never see the
+        // stale flag and have nothing to be busted for. Firing the webhook here
+        // dropped every reader's whole `articles:all` cache once an hour for a
+        // change no reader can observe.
+        //
+        // SCOPE (plan E7): verified safe for brief-asia-web, wad-web, wtb-web
+        // and dtw-web only. brief-asia/wad/dtw request pins with
+        // `flag=pinnedToLatest`, so Central's query-time expiry governs.
+        // wtb-web instead pulls a raw list and picks the pin in memory; it is
+        // safe only because it re-checks `pinnedUntil` at render time AND every
+        // Central fetch is `cache: "no-store"`. That margin is one line wide —
+        // if wtb-web ever adds `export const revalidate` to its home page, an
+        // expired pin would freeze for the whole window with nothing left to
+        // bust it. Re-check this before assuming it still holds.
+        // GCV is NOT audited (not available to the auditing session) — do not
+        // generalize this suppression to it without running the same check.
+        context: { systemWrite: true, skipTranslationEnqueue: true, disableRevalidate: true },
         data: { pinnedToLatest: false, pinnedUntil: null },
         // Draft-safe sweep: `payload.update` base-merges from the LATEST
         // version. When the article has a pending draft on top of its live

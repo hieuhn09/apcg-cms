@@ -8,6 +8,7 @@ import { resolveReadToken, jsonPublic, preflight } from "@/lib/public";
 import { scopedFind } from "@/lib/scoped";
 import { featureEnabled, supportedLanguages } from "@/lib/tenant";
 import { clampLocale } from "@/lib/locales";
+import { resolveArticleVideo } from "@/lib/article-video";
 
 export function OPTIONS(request: Request) {
   return preflight(request);
@@ -38,5 +39,10 @@ export async function GET(
 
   const doc = result.docs[0];
   if (!doc) return jsonPublic(request, { ok: false, status: "not_found" }, 404);
-  return jsonPublic(request, { doc }, 200);
+
+  // Resolve `video` server-side into a flat, ready-to-render object (or null).
+  // The reader does no lookups and no branching: depth:2 above already
+  // populated both the video and the hero image used as its poster.
+  const responseDoc = { ...doc, video: resolveArticleVideo(doc) };
+  return jsonPublic(request, { doc: responseDoc }, 200);
 }
