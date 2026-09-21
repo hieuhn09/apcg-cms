@@ -9,6 +9,7 @@ import {
   articleActivity,
   enforceStatusAuthority,
   syncNativePublish,
+  syncNativeUnpublish,
 } from "@/hooks/article-workflow";
 import { enqueueTranslations } from "@/hooks/translation";
 import {
@@ -78,9 +79,11 @@ export const Articles: CollectionConfig = {
     readVersions: featureGatedReadVersions("articles"),
   },
   hooks: {
-    // Order matters: syncNativePublish may raise workflowStatus to "published";
-    // enforceStatusAuthority must then judge that raised value.
-    beforeValidate: [syncNativePublish, enforceStatusAuthority],
+    // Order matters: syncNativePublish may raise workflowStatus to "published"
+    // and syncNativeUnpublish may lower it to "hidden" (their triggers are
+    // disjoint — `_status` published vs draft); enforceStatusAuthority must
+    // then judge the resulting value.
+    beforeValidate: [syncNativePublish, syncNativeUnpublish, enforceStatusAuthority],
     beforeChange: [articleBookkeeping],
     afterChange: [revalidate, articleActivity, enqueueTranslations],
     afterDelete: [afterDelete],
@@ -164,7 +167,7 @@ export const Articles: CollectionConfig = {
               defaultValue: "draft",
               index: true,
               options: ARTICLE_STATUSES.map((s) => ({ label: s.replace(/_/g, " "), value: s })),
-              admin: { description: "Editorial lifecycle. Publish authority is role-gated (contributors without publish rights are limited to draft / pending review)." },
+              admin: { description: "Editorial lifecycle. Publish authority is role-gated (contributors without publish rights are limited to draft / pending review). Changing this select only takes effect on the public site when you click Publish — Save Draft stores it as a draft revision only." },
             },
             {
               name: "publishedAt",
