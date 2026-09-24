@@ -119,6 +119,37 @@ export const ContentEngines: CollectionConfig = {
       options: ENGINE_ACTIONS.map((a) => ({ label: a, value: a })),
       admin: { description: "Operations this engine may perform." },
     },
+    /**
+     * hubRead — grants the READ-ONLY cross-tenant `/api/hub/*` routes (APCGHub
+     * P4 / CMS-1). Deliberately a separate boolean rather than a new value in
+     * `ENGINE_ACTIONS`:
+     *
+     *   - `ENGINE_ACTIONS` is consumed in THREE places, not two: the
+     *     `EngineAction` type (constants.ts:101), the `allowedActions` select
+     *     options above, AND `src/app/(console)/console/engines/engine-form.tsx`
+     *     (:4 import, :95 `.map()` → one `<input type="checkbox">` per value),
+     *     whose submit path (`console/engines/actions.ts:48,73`) REPLACES the
+     *     whole array with the ticked set. Adding a value there would grow a new
+     *     checkbox on `/console/engines` for every existing engine — a change to
+     *     the Console, which the APCGHub umbrella constraint #7 forbids.
+     *   - This field, by contrast, is never rendered by the hand-written Console
+     *     form and is never named in its partial-update payloads, so it is
+     *     invisible to and untouched by `/console`. It DOES appear in the Payload
+     *     `/admin` panel (auto-generated from this config) — accepted on purpose:
+     *     `/admin` is not `/console`.
+     *
+     * Grants read only. It never widens write access: `authenticateEngine()`
+     * (the intake/translation path) does not read this field at all.
+     */
+    {
+      name: "hubRead",
+      type: "checkbox",
+      defaultValue: false,
+      admin: {
+        description:
+          "Allow this engine to use the read-only cross-tenant /api/hub/* routes (reads every tenant in Allowed publications in one call). Does not grant any write.",
+      },
+    },
     { name: "rateLimitPerMin", type: "number", admin: { description: "Optional. Empty = unlimited." } },
     { name: "lastSeenAt", type: "date", admin: { readOnly: true } },
     { name: "lastSeenIp", type: "text", admin: { readOnly: true } },
