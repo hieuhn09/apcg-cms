@@ -3,14 +3,14 @@ name: context:all-integrations
 description: "API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint"
 keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub
 related: [context:all-database]
-date: 23-09-26
+date: 24-09-26
 metadata:
   read_when: "API contract questions, auth/authorization design, engine intake, cross-tenant read design, or anything bridging into this CMS from outside"
 ---
 
 # Integrations Context
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24 (APCGHub P4 / CMS-1 — `ENGINE_ACTIONS` 3-consumer citation completed with `actions.ts:48,73`)
 
 This is the canonical API-surface and auth context entrypoint for **apcg-cms** (Central CMS).
 
@@ -227,9 +227,18 @@ narrow. Everything stated above about `authenticateEngine()`, `resolveReadToken(
 **Which of options (a)/(b)/(c) above was taken:** essentially (a), but WITHOUT the change to
 `engine-auth.ts` that option (a) assumed was unavoidable — the multi-tenant branch lives in a new
 file, so the single-tenant write path keeps its invariant. The capability is also NOT a new
-`ENGINE_ACTIONS` value: that array is consumed in three places, the third being the hand-written
-Console form (`src/app/(console)/console/engines/engine-form.tsx:4,95` → a checkbox per value, whose
-submit path replaces the whole array), so adding to it would have changed `/console`.
+`ENGINE_ACTIONS` value: that array is consumed in **three** places (`src/lib/constants.ts:91-101`
+type + the array itself; `ContentEngines.ts:119` Payload admin select options; and, easy to miss
+with a `grep --include=*.ts` that filters out `.tsx`, the hand-written Console form —
+`src/app/(console)/console/engines/engine-form.tsx:4,95` renders one checkbox per `ENGINE_ACTIONS`
+value, and its submit path (`src/app/(console)/console/engines/actions.ts:48,73`,
+`createEngineAction`/`updateEngineAction`) writes `allowedActions` by **replacing the whole array**
+with whatever is checked) — so adding a value to `ENGINE_ACTIONS` would have both grown `/console`'s
+checkbox list AND changed what every existing engine's next Console save persists. This is why CMS-1
+added a dedicated `ContentEngines.hubRead` checkbox field instead (`ContentEngines.ts`) — outside
+`ENGINE_ACTIONS` entirely, so it does not appear on `/console` (verified: the form lists named
+`<Field>`s by hand, does not enumerate collection fields dynamically) even though it does appear on
+Payload's own `/admin` (a different surface, not covered by the "don't change console" constraint).
 
 **What is still missing** (the gap above is still the right description for all of it):
 

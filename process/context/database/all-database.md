@@ -3,14 +3,14 @@ name: context:all-database
 description: "Payload collections, Postgres schema/migrations, the tenant/engine data model, and the two data-access lanes (Payload Local API vs Console's read-only Drizzle) — database context group entrypoint"
 keywords: database, schema, migration, migrations, postgres, drizzle, payload, collection, collections, tenant, tenants, multi-tenant, articles, workflow status, content type, console, dashboard, drizzle-kit
 related: [context:all-integrations]
-date: 23-09-26
+date: 24-09-26
 metadata:
   read_when: "schema/collection changes, migrations, tenant data model, or the console's Drizzle read layer"
 ---
 
 # Database Context
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
 
 This is the canonical database context entrypoint for **apcg-cms** (Central CMS).
 
@@ -155,7 +155,12 @@ with its own hashed token (`tokenHash` via `hashToken()`, `src/lib/crypto.ts`), 
 `ENGINE_ACTIONS`, `src/lib/constants.ts:91-101`: `create_article`, `update_article`,
 `create_translation`, `update_translation`, `upload_media`, `create_podcast`,
 `update_market_data`, `import`). No shared all-powerful credential exists — suspending one engine
-(`status: suspended|revoked`) never affects another. `rawToken` is a `virtual` field: paste a fresh
+(`status: suspended|revoked`) never affects another. A separate boolean field, **`hubRead`**
+(checkbox, `defaultValue:false`, migration `20260924_000000_add_content_engines_hub_read` — see
+§Migrations pitfall #3 for why this is NOT just another `ENGINE_ACTIONS` value), gates the
+cross-tenant hub read path (`authenticateHubEngine()`, see
+`process/context/integrations/all-integrations.md` §Cross-tenant reads) — deliberately kept outside
+`allowedActions` so it does not surface on `/console/engines`' hand-written checkbox form. `rawToken` is a `virtual` field: paste a fresh
 token, the `beforeChange` hook hashes it and clears the plaintext; it is shown to a human exactly
 once. `defaultPopulate` here is an **allow-list** (`{name,engineType,status}`, `ContentEngines.ts:43-47`)
 — see the `integrations` group for why this matters on public routes (`Articles.lastEngine`
@@ -262,8 +267,8 @@ on the bearer-token (engine / public-read-token) side.
 ## Migrations
 
 `src/migrations/` — Payload's Postgres migration format (paired `<timestamp>_<name>.ts` +
-matching `.json`), 8 migrations as of this scan (`20260702_231336_initial_schema` through
-`20260915_000000_add_podcast_youtube_fields`), run via `npm run payload:migrate`
+matching `.json`), 9 migrations as of 2026-09-24 (`20260702_231336_initial_schema` through
+`20260924_000000_add_content_engines_hub_read`), run via `npm run payload:migrate`
 (`payload migrate`) / created via `npm run payload:migrate:create`. `payload.config.ts:148`:
 `migrationDir` points here.
 
@@ -281,6 +286,49 @@ no migration file is created or needed for that flow, per `docker-compose.yml`'s
 `DATABASE_URL` (pooled) vs `DATABASE_DIRECT_URL` (direct) — the direct URL is required for DDL
 (migrations); the pooled one serves ordinary runtime queries. Both point at the same Supabase
 Postgres instance in deployed environments.
+
+### ⚠️ Five migration pitfalls found the hard way (APCGHub P4 / CMS-1, 24-09-26) — read before writing a new migration
+
+1. **`payload migrate:create` will regenerate history it shouldn't, because the `.json` snapshot
+   trail stopped.** The newest committed `.json` snapshot is
+   `20260820_084629_add_content_type.json` — every migration authored *after* that date
+   (`20260824_000000_add_exclusive_flag.ts` onward, including the `hub_read` migration) was
+   **hand-written, with no matching `.json`**. Running `payload migrate:create` today would diff
+   the live schema against the stale `20260820` snapshot and try to regenerate every change made
+   since — producing "column already exists" failures against production. **Write new migrations by
+   hand**, copying the shape of the most recent hand-written one
+   (`20260824_000000_add_exclusive_flag.ts`), not by running `migrate:create`.
+2. **Adding a field to a collection that some query reads without a `select` clause breaks that
+   query the instant the column is missing, for every caller, with no graceful fallback.**
+   `authenticateEngine()` (`src/lib/engine-auth.ts:55-61`) queries `content-engines` with no
+   `select` — Payload's generated SQL reads every column in the collection config, including a
+   brand-new one that has no migration applied yet. Verified directly: on a DB with 13 migrations
+   applied (no `hub_read` column) calling `authenticateEngine()` throws at the SELECT itself —
+   `CAUSE: error: column content_engines.hub_read does not exist` — **before any auth/permission
+   check runs**. A collection field addition is not "additive and safe" from every caller's
+   perspective; check whether anything queries that collection without an explicit `select` before
+   assuming a missing migration merely means "the new field reads as undefined."
+3. **`ENGINE_ACTIONS` (`src/lib/constants.ts:91-101`) looks like a plain enum but is stored as a
+   Postgres enum type (`enum_content_engines_allowed_actions`, created in
+   `initial_schema`) — adding a new allowed value needs a migration too**, not just an array literal
+   edit; the DB will reject a value the enum type doesn't know about. This is a separate concern
+   from the `/console` UI-surface issue documented in
+   `process/context/integrations/all-integrations.md` §Cross-tenant reads.
+4. **Preview and Production share one database, and `scripts/migrate-prod.mjs` skips migrations on
+   any `VERCEL_ENV` other than `production`.** A Preview deployment with code that reads a new
+   column will query that column against the **same** DB Production uses — if the migration hasn't
+   been applied yet (via a Production deploy, or a deliberate manual
+   `npm run payload:migrate`), the Preview build's runtime queries fail exactly like pitfall #2
+   above. Concretely: schema changes cannot be verified live on Preview *before* merging — the
+   practical order is **merge → Production deploy applies the migration → then verify**, not the
+   usual "verify on Preview, then merge."
+5. **The Payload migrate CLI discovers migrations by reading `migrationDir` off disk, not by
+   reading `src/migrations/index.ts`.** Removing a migration's entry from `index.ts` does **not**
+   stop the CLI from applying the file — it still applies anything sitting in the directory. To
+   genuinely exclude a migration from a run (e.g. for a disprove/red-green test), move the file
+   **out of** `src/migrations/` entirely, don't just unregister it in `index.ts`. Also:
+   `payload migrate:down` rolls back an entire **batch** at once — running it on a DB where every
+   migration applied in one shot will roll back everything, not just the most recent file.
 
 ---
 

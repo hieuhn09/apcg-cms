@@ -3,14 +3,14 @@ name: context:all-tests
 description: "Verification quick-start for apcg-cms — there is no automated test framework here; the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified."
 keywords: test, tests, testing, verify, verification, typecheck, lint, gate, validate-contract, evl, pvl, ci
 related: [context:all-database, context:all-integrations]
-date: 23-09-26
+date: 24-09-26
 metadata:
   read_when: "running verification after implementation, deciding what a validate-contract's test gates should be, or debugging a failing typecheck/lint"
 ---
 
 # apcg-cms — All Tests
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24 (APCGHub P4 / CMS-1 — `npm run build` promoted to mandatory gate; `PAYLOAD_DB_PUSH=true` migration-hiding trap; `scripts/hub-probe.ts`; Docker/seed/port pitfalls; unfiltered-grep lesson)
 
 Attach this file first when the task involves testing, verification, or gate design.
 
@@ -83,8 +83,24 @@ iteration reports (`cms-cost-remediation-pvl-iteration-*.md`, `results.tsv`).
 
 1. `npm run typecheck` — cheapest, catches the most common class of break
 2. `npm run lint` — cheap, style/best-practice only, non-blocking for deploy
-3. manual/live verification scoped to exactly what changed — the only tier that can confirm
-   *behavior*, not just that the code compiles and lints
+3. **`npm run build` — MANDATORY gate for any code change, not optional/nice-to-have.** Added to
+   this ordering 24-09-26 after `npm run typecheck` + `npm run lint` both passed clean on a change
+   that then failed Vercel Preview's build (APCGHub P4 / CMS-1). `next build` runs Next's own
+   generated-route type-checking (`.next/types/app/**`, picked up by `tsconfig.json`'s `include`)
+   and pre-render/import-map steps that `tsc --noEmit` alone does not reach — this is the tier that
+   would have caught a bad route export or import-map issue if the CMS-1 Preview failure had turned
+   out to be code-caused (it did not — see the note below).
+   **⚠️ A green `npm run build` on your machine does NOT prove the Vercel build is green.** In the
+   CMS-1 case, `npm run build` passed locally under both DB conditions tried (with and without the
+   new column), yet the Vercel Preview deployment still failed with no code-side cause found — the
+   two most likely local hypotheses (a stray non-handler export from the new route; the build
+   touching a DB column that didn't exist yet) were each directly disproved by a controlled local
+   rebuild. Likely cause: something in the Vercel *environment* itself (env vars, R2/import-map
+   differences, resource limits, a transient infra issue) — not reproducible offline. Treat a green
+   local `npm run build` as necessary, not sufficient; a real Vercel deployment status or its logs
+   are the only actual proof.
+4. manual/live verification scoped to exactly what changed — the only tier that can confirm
+   *behavior*, not just that the code compiles, lints, and builds
 
 ## Commands
 
@@ -92,8 +108,9 @@ iteration reports (`cms-cost-remediation-pvl-iteration-*.md`, `results.tsv`).
 |---|---|---|
 | `npm run typecheck` | `tsc --noEmit`, whole repo | strict; no partial/package-scoped variant |
 | `npm run lint` | `next lint` (flat config, `eslint.config.mjs`) | not a deploy gate |
-| `npm run build` | `payload generate:importmap && next build` | closest thing to an integration check — a bad Payload config or an import cycle can fail here even when `typecheck` passed clean |
+| `npm run build` | `payload generate:importmap && next build` | **MANDATORY gate as of 24-09-26** (see §Default Verification Order #3) — closest thing to an integration check; a bad Payload config, an import cycle, or a Next route-typing issue can fail here even when `typecheck` passed clean. Green locally ≠ green on Vercel. |
 | `npm run db:status` | `tsx scripts/db-status.ts` | quick live DB-connectivity/migration-state check — closest thing to a smoke test |
+| `npx tsx scripts/hub-probe.ts --setup / --check / --paging` | one-shot data-layer probe for the `/api/hub/*` route family (added APCGHub P4 / CMS-1, kept in `scripts/` for reuse by future CMS-N hub routes) | requires the Docker Postgres local stack running (see §Debugging Quick Reference); `--setup` seeds two `ContentEngines` fixture rows + articles and prints a fresh test token (never hardcode a token in code/plan/report); `--check` runs the read/leak/filter assertions; `--paging` runs mutation-based red/green checks on `scopedFindMultiTenant`'s pagination invariants. Not a general test runner — scoped to this one route family. |
 
 There is no `npm test`. Do not add one to a plan's test-gate list without first adding an actual
 test framework as its own, explicitly-scoped piece of work — that is a real, separate project, not
@@ -115,6 +132,43 @@ a one-line addition.
 - **`src/payload-types.ts` can go stale**: if a collection's fields change, regenerate it
   (`npm run payload:generate-types`) before trusting `typecheck` — a stale generated-types file can
   make `typecheck` pass against types that no longer match the real schema.
+- **`PAYLOAD_DB_PUSH=true` silently hides missing migrations.** `.env.docker.example:18` turns it on
+  for local dev, which makes Payload sync the live collection config straight onto the schema on
+  boot — including any brand-new field, with no migration file needed. This means a bootable,
+  fully-working local dev server is **not evidence** that the corresponding migration exists or is
+  correct: verified directly (APCGHub P4 / CMS-1) that a route/probe suite passing 19/19 and 17/17
+  under `PUSH=true` completely failed to notice production would be missing the column entirely.
+  **Any test of a schema change must additionally be run with `PAYLOAD_DB_PUSH=false` plus the real
+  migration applied**, matching how `vercel-build`/`migrate-prod.mjs` actually runs in deployed
+  environments — `PUSH=true` alone is not a valid verification of a schema change.
+- **Docker daemon may need a manual start in this sandbox**: if `docker compose up -d` fails because
+  the daemon isn't running, `sudo -n dockerd &` (non-interactive) was the working fix in this
+  environment (24-09-26); daemon state may differ session to session.
+- **Local dev server port is 3508, not 3000.** `docker-compose.yml`'s own comment and
+  `.env.docker.example` both say `localhost:3000` — this is a pre-existing documentation error;
+  the real port comes from `package.json`'s `next dev -p 3508`. Don't trust the compose-file comment
+  for the URL; check `package.json` or pass the base URL explicitly to any script that calls the
+  local server (e.g. `scripts/hub-probe.ts` reads `HUB_PROBE_BASE`).
+- **`scripts/seed.ts` dies partway through, at the Podcasts fixture** (`ValidationError: The
+  following field is invalid: Youtube Url`, thrown from `scripts/seed.ts:348`) — a pre-existing bug
+  unrelated to any specific feature work, confirmed to still reproduce 24-09-26. It seeds tenants
+  first, so a `db:seed` run still leaves you with a **partial** tenant set (2 of the 4 tenants the
+  fixture data declares: `brief-asia`, `dtw` — not `world-travel-brief`/`gcv`, and NEVER `wad` since
+  the fixture doesn't declare it at all) rather than failing cleanly with zero data. Any local test
+  that assumes "N tenants seeded" must verify the actual count after seeding, not trust the fixture
+  file's declared count. Also note: local seed tenant slugs (`brief-asia`, `world-travel-brief`) do
+  **not** match the slugs the `content-engine` repo's intake clients use in production
+  (`briefasia`, `wtb`) — don't assume local seed data is a faithful mirror of production tenant
+  naming.
+- **A `grep`/consumption-point check with a file-extension filter is a conditional result, not an
+  absolute fact about the codebase.** A prior pass concluded `ENGINE_ACTIONS` had "exactly 2"
+  consumption points using `grep --include=*.ts`, which silently excluded `.tsx` — the real count
+  was 3, the third being a `.tsx` Console form (see
+  `process/context/integrations/all-integrations.md` §Cross-tenant reads). When citing a grep result
+  as evidence in a plan/report, **state the exact command run, including any filter flags** — a
+  reader needs to know the scope of what was actually checked, not just the conclusion. Prefer
+  running consumption-point checks with no extension filter (`grep -rn "SYMBOL" src/`) as the
+  default, and only narrow afterward if the unfiltered result is too noisy to read.
 
 ## Known Gaps
 
