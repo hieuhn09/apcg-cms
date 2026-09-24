@@ -325,7 +325,7 @@ async function paging() {
   // Global ground truth (publishedAt only — two tenants share dates, so ids tie).
   const truth = (
     await payload.find({ collection: "articles", limit: 100, depth: 0, sort: "-publishedAt", overrideAccess: true })
-  ).docs.map((d) => (d as { publishedAt: string }).publishedAt);
+  ).docs.map((d) => (d as unknown as { publishedAt: string }).publishedAt);
   console.log(`[paging] total=${truth.length}, maxOverFetch=3 → reachable=3`);
 
   const p1 = await find(1, 2, 3);
