@@ -16,14 +16,31 @@
  *           status   CSV of workflowStatus values (default: all).
  *           limit    default 50, hard ceiling 200.
  *           page     1-based.
- *           sort     `-publishedAt` (default) or `publishedAt`.
+ *           sort     `-publishedAt` (default) | `publishedAt` | `-views` | `views`.
+ *                    Anything else silently falls back to `-publishedAt`
+ *                    (CMS-1 contract). Every sort ends in `id`, so offset
+ *                    pages never repeat or skip a row.
+ *           q        search, case-insensitive substring of title OR dek OR slug
+ *                    (locale `en`), 2-200 chars after trim; `%` `_` `\` are
+ *                    literal characters (escaped before the ILIKE).
+ *           pillar   CSV of pillar slugs (max 20, `^[A-Za-z0-9_-]{1,64}$`);
+ *                    resolved to ids PER TENANT, primary pillar only. A slug a
+ *                    tenant does not have simply yields 0 rows there.
+ *
+ * Empty/absent tenants|pillar|kinds means ALL allowed — callers must never send
+ * an empty scope by accident (Hub-1 lesson D0).
+ *
+ * LOCALE: fixed `en` for every localized field (title, slug, dek, pillar.title);
+ * an article that only exists in another locale comes back with `title: null`.
  *
  * VISIBILITY CONTRACT — filters `workflowStatus`, NEVER `_status`. About 3,300
  * live articles sit on `_status: "draft"` + `workflowStatus: "published"`
  * (import-created, never natively Published); an `_status` filter would hide
  * most of every publication's archive. See `scoped.ts:36-51`.
  *
- * WRITES: none. This route only reads.
+ * WRITES: none in this route. `authenticateHubEngine` (as in CMS-1) updates the
+ * engine's lastSeenAt/lastSeenIp and writes ActivityLog on auth failures; this
+ * route adds ActivityLog rows only for `engine_tenant_denied` / `integration_error`.
  */
 
 import { getPayload } from "payload";
@@ -36,6 +53,8 @@ import {
   HUB_MAX_REACHABLE,
   HubPageOutOfRangeError,
 } from "@/lib/hub-scoped";
+import { scopedFind } from "@/lib/scoped";
+import { parseHubQ, parseHubSort, parsePillarSlugs } from "@/lib/hub-query";
 import { json } from "@/lib/http";
 import { logActivity } from "@/lib/activity";
 import { ARTICLE_STATUSES } from "@/lib/constants";
@@ -66,6 +85,11 @@ const HUB_ARTICLE_SELECT = {
   publishedAt: true,
   contentType: true,
   lastEditedBy: true,
+  views: true,
+  // `pillar` is populated at depth 1 into a Pillars document (text/number fields
+  // only; its own `tenant` stays an id at that depth) and reduced to
+  // `{slug, title}` by the sanitizer below. `dek` is searched but NOT selected.
+  pillar: true,
 } as const;
 
 /** One article as this route emits it. */
@@ -78,6 +102,9 @@ export interface HubArticle {
   contentType: string | null;
   tenant: { slug: string };
   lastEditedBy: { name: string | null; role: string | null } | null;
+  /** Cumulative counter. `null` when the DB holds NULL — not coerced to 0. */
+  views: number | null;
+  pillar: { slug: string | null; title: string | null } | null;
 }
 
 function str(v: unknown): string | null {
@@ -97,7 +124,8 @@ function str(v: unknown): string | null {
  * FIELDS EMITTED (the complete list — nothing else can reach the wire, because
  * this function builds a fresh object and never spreads the source doc):
  *   id, title, slug, workflowStatus, publishedAt, contentType,
- *   tenant.slug, lastEditedBy.name, lastEditedBy.role
+ *   tenant.slug, lastEditedBy.name, lastEditedBy.role, views,
+ *   pillar.slug, pillar.title
  *
  * SENSITIVE FIELDS CHECKED AGAINST THAT LIST, each absent by construction:
  *   Tenants.readTokens        — `tenant` is never populated; only a slug string
@@ -121,6 +149,13 @@ export function sanitizeHubArticle(doc: Record<string, unknown>, tenantSlug: str
         }
       : null;
 
+  // An unpopulated relation (id only, e.g. the pillar was deleted) ⇒ null.
+  const p = doc.pillar;
+  const pillar =
+    p && typeof p === "object"
+      ? { slug: str((p as Record<string, unknown>).slug), title: str((p as Record<string, unknown>).title) }
+      : null;
+
   return {
     id: doc.id as number | string,
     title: str(doc.title),
@@ -130,6 +165,8 @@ export function sanitizeHubArticle(doc: Record<string, unknown>, tenantSlug: str
     contentType: str(doc.contentType),
     tenant: { slug: tenantSlug },
     lastEditedBy,
+    views: typeof doc.views === "number" ? doc.views : null,
+    pillar,
   };
 }
 
@@ -188,7 +225,19 @@ export async function GET(request: Request): Promise<Response> {
   if ((page - 1) * limit >= HUB_MAX_REACHABLE) {
     return json(pageOutOfRange(HUB_MAX_REACHABLE), 400);
   }
-  const sort = url.searchParams.get("sort") === "publishedAt" ? "publishedAt" : "-publishedAt";
+  const sort = parseHubSort(url.searchParams.get("sort"));
+
+  // Every parameter is validated BEFORE any articles/pillars query runs.
+  const q = parseHubQ(url.searchParams.get("q"));
+  if (!q.ok) return json({ ok: false, status: "bad_request", reason: q.reason }, 400);
+  const pillarParam = parsePillarSlugs(url.searchParams.get("pillar"));
+  if (!pillarParam.ok) {
+    return json(
+      { ok: false, status: "bad_request", reason: pillarParam.reason, ...(pillarParam.values ? { values: pillarParam.values } : {}) },
+      400,
+    );
+  }
+  const pillarSlugs = pillarParam.slugs;
 
   // workflowStatus filter. Unrecognised values are rejected rather than ignored:
   // unlike the public feeds (where a typo must not blank a homepage), a hub queue
@@ -206,7 +255,71 @@ export async function GET(request: Request): Promise<Response> {
     if (wanted.length) and.push({ workflowStatus: { in: wanted } });
   }
 
+  // Search: title OR dek OR slug (the same three fields as the CMS admin's
+  // `listSearchableFields`). `contains` keeps the phrase whole (`like` would split
+  // on spaces); the value is pre-escaped because Payload does not escape it.
+  if (q.escaped != null) {
+    and.push({
+      or: [{ title: { contains: q.escaped } }, { dek: { contains: q.escaped } }, { slug: { contains: q.escaped } }],
+    });
+  }
+
+  const slugById = new Map(tenants.map((t) => [String(t.id), t.slug]));
+  const echo = { sort: sort.public, q: q.q, pillar: pillarSlugs };
+
   try {
+    if (pillarSlugs.length) {
+      // Resolve slug → id separately for EACH tenant (the tenant filter stays in
+      // `scopedFind`); ids are global primary keys, so one merged list is safe.
+      // `limit: 100` is explicit (Payload's default is 10) and ≥ the 20-slug cap;
+      // slug uniqueness is only a hook (`uniqueWithinTenant`), not a DB constraint.
+      const lookups = await Promise.all(
+        tenants.map((t) =>
+          scopedFind({
+            payload,
+            collection: "pillars",
+            tenantId: t.id,
+            where: { slug: { in: pillarSlugs } },
+            select: { slug: true },
+            depth: 0,
+            limit: 100,
+          }),
+        ),
+      );
+      const pillarIds: (number | string)[] = [];
+      lookups.forEach((res, i) => {
+        if (res.totalDocs > res.docs.length) {
+          payload.logger.warn(
+            `[hub/articles] pillar slug lookup truncated for tenant ${tenants[i]?.slug}: ${res.docs.length}/${res.totalDocs}`,
+          );
+        }
+        for (const d of res.docs as unknown as { id: number | string }[]) pillarIds.push(d.id);
+      });
+
+      // No tenant has any of these slugs: answer 0 rows without querying
+      // articles (and without sending Drizzle an empty `in`).
+      if (pillarIds.length === 0) {
+        return json(
+          {
+            ok: true,
+            articles: [],
+            totalDocs: 0,
+            page,
+            limit,
+            totalPages: 0,
+            hasNextPage: false,
+            truncated: false,
+            reachable: 0,
+            tenants: tenants.map((t) => t.slug),
+            totalsByTenant: tenants.map((t) => ({ tenant: t.slug, totalDocs: 0 })),
+            ...echo,
+          },
+          200,
+        );
+      }
+      and.push({ pillar: { in: pillarIds } });
+    }
+
     const res = await scopedFindMultiTenant({
       payload,
       collection: "articles",
@@ -214,15 +327,16 @@ export async function GET(request: Request): Promise<Response> {
       where: and.length ? { and } : undefined,
       limit,
       page,
-      sort,
+      sort: sort.keys,
+      locale: "en",
       // depth 1 populates `lastEditedBy` into `{name, role}` via the Users
-      // collection's own `defaultPopulate`. Nothing else in the select is a
-      // relationship, so depth 1 cannot reach any other collection.
+      // collection's own `defaultPopulate`, and `pillar` into a Pillars doc
+      // (reduced to {slug, title} by the sanitizer). No other relationship is
+      // selected, so depth 1 cannot reach any other collection.
       depth: 1,
       select: HUB_ARTICLE_SELECT,
     });
 
-    const slugById = new Map(tenants.map((t) => [String(t.id), t.slug]));
     const articles = (res.docs as Record<string, unknown>[]).map((doc) =>
       sanitizeHubArticle(doc, slugById.get(String(doc[HUB_TENANT_ID_KEY])) ?? ""),
     );
@@ -245,6 +359,7 @@ export async function GET(request: Request): Promise<Response> {
           tenant: slugById.get(String(t.tenantId)) ?? "",
           totalDocs: t.totalDocs,
         })),
+        ...echo,
       },
       200,
     );

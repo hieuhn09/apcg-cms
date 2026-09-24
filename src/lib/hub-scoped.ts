@@ -50,8 +50,12 @@ export interface MultiTenantFindArgs {
   where?: Where;
   limit: number;
   page: number;
-  /** Sort key, Payload syntax (`-publishedAt`). The same key is used to merge. */
-  sort?: string;
+  /** Sort key(s), Payload syntax (`-publishedAt` or `["-views","-publishedAt","-id"]`).
+   *  The SAME list is sent to every per-tenant query and used by the merge, so the
+   *  two can never disagree. End the list with `id`/`-id` for a total order. */
+  sort?: string | string[];
+  /** Locale for localized fields. Hub routes pass `"en"` explicitly. */
+  locale?: string;
   depth?: number;
   select?: Parameters<Payload["find"]>[0]["select"];
   /** Hard ceiling on rows pulled PER TENANT, guarding deep paging. */
@@ -90,23 +94,52 @@ export class HubPageOutOfRangeError extends Error {
   }
 }
 
-/** Read one sort key ("-publishedAt") into a comparator over plain docs. */
-function comparatorFor(sort: string | undefined) {
-  const key = (sort ?? "-publishedAt").replace(/^-/, "");
-  const desc = (sort ?? "-publishedAt").startsWith("-");
+/**
+ * Build the in-memory merge comparator for one or more sort keys, matching the
+ * order Postgres produces for the same keys.
+ *
+ * WHY THE NULL RULE: `@payloadcms/drizzle` builds ORDER BY with plain
+ * `asc()`/`desc()` (buildOrderBy.js — no NULLS FIRST/LAST anywhere), and
+ * Postgres puts NULL FIRST under DESC and LAST under ASC. Each per-tenant query
+ * is therefore cut at its own top-N in THAT order; if the merge ordered NULLs
+ * differently (the CMS-1 version put them last in both directions), a tenant
+ * with many NULL rows would return only NULL rows, the merge would push them
+ * down, and that tenant's dated rows would be missing from page 1. So: a
+ * descending key puts NULL first, an ascending key puts NULL last.
+ *
+ * WHY MULTIPLE KEYS: Payload silently appends `-createdAt` to the SQL order,
+ * which is not unique, and the old merge had no tiebreak at all — the two sides
+ * could disagree on ties. Callers pass a list ending in `id` (the primary key),
+ * so both sides share one total order.
+ *
+ * Numbers compare numerically; anything else as strings (`publishedAt` is an
+ * ISO timestamp in one fixed format from both DB and Payload, so string order
+ * is time order).
+ */
+export function comparatorFor(sort: string | string[] | undefined) {
+  const keys = (Array.isArray(sort) ? sort : [sort ?? "-publishedAt"]).map((k) => ({
+    field: k.replace(/^-/, ""),
+    desc: k.startsWith("-"),
+  }));
   return (a: Record<string, unknown>, b: Record<string, unknown>): number => {
-    const av = a[key];
-    const bv = b[key];
-    // Missing values sort last in both directions — a null publishedAt must not
-    // jump to the top of a "newest first" list.
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    const as = typeof av === "number" ? av : String(av);
-    const bs = typeof bv === "number" ? bv : String(bv);
-    if (as === bs) return 0;
-    const cmp = as < bs ? -1 : 1;
-    return desc ? -cmp : cmp;
+    for (const { field, desc } of keys) {
+      const av = a[field];
+      const bv = b[field];
+      const an = av == null;
+      const bn = bv == null;
+      if (an && bn) continue;
+      if (an) return desc ? -1 : 1;
+      if (bn) return desc ? 1 : -1;
+      let cmp: number;
+      if (typeof av === "number" && typeof bv === "number") cmp = av === bv ? 0 : av < bv ? -1 : 1;
+      else {
+        const as = String(av);
+        const bs = String(bv);
+        cmp = as === bs ? 0 : as < bs ? -1 : 1;
+      }
+      if (cmp !== 0) return desc ? -cmp : cmp;
+    }
+    return 0;
   };
 }
 
@@ -121,6 +154,7 @@ export async function scopedFindMultiTenant<T = Record<string, unknown>>(
     limit,
     page,
     sort = "-publishedAt",
+    locale,
     depth,
     select,
     maxOverFetch = HUB_MAX_REACHABLE,
@@ -148,6 +182,7 @@ export async function scopedFindMultiTenant<T = Record<string, unknown>>(
         limit: perTenant,
         page: 1,
         sort,
+        locale,
         depth,
         select,
       }),

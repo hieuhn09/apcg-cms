@@ -267,6 +267,23 @@ const TENANTS: TenantFixture[] = [
     ],
     sectors: [],
   },
+  {
+    // Dev-only fixture so local probes see all five publications. Production
+    // WAD config lives in the Central CMS DB, not here — do not treat this as
+    // the source of truth for its features or taxonomy.
+    slug: "wad",
+    name: "WorldArchiDesign",
+    defaultLanguage: "en",
+    supportedLanguages: ["en"],
+    features: { articles: true, corrections: true },
+    autoPublishEngineDrafts: true,
+    pillars: [
+      { slug: "architecture", title: "Architecture", heading: "Architecture", color: "var(--wad-ink)", icon: "product", order: 1, description: "Dev fixture pillar." },
+      { slug: "interiors", title: "Interiors", heading: "Interiors", color: "var(--wad-ink)", icon: "star", order: 2, description: "Dev fixture pillar." },
+      { slug: "design", title: "Design", heading: "Design", color: "var(--wad-ink)", icon: "spark", order: 3, description: "Dev fixture pillar." },
+    ],
+    sectors: [],
+  },
 ];
 
 // DTW modules — ported from dtw-web/apps/web/src/lib/data.ts (static fixtures
@@ -283,9 +300,11 @@ const DTW_NEWSLETTERS = [
 ] as const;
 
 const DTW_PODCASTS = [
-  { slug: "daily", title: "DTW Daily Brief", duration: "6:42", host: "Mei Lin", daysAgo: 0 },
-  { slug: "asia", title: "Asia, Decoded", duration: "38:11", host: "Mei Lin & Ravi Kim", daysAgo: 1 },
-  { slug: "build", title: "Building in Public, EM", duration: "44:50", host: "Arif Rahman", daysAgo: 2 },
+  // `youtubeUrl` is required by Podcasts (validate at Podcasts.ts); these are
+  // dev-only placeholder links in a shape `extractYoutubeId` accepts.
+  { slug: "daily", title: "DTW Daily Brief", duration: "6:42", host: "Mei Lin", daysAgo: 0, youtubeUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
+  { slug: "asia", title: "Asia, Decoded", duration: "38:11", host: "Mei Lin & Ravi Kim", daysAgo: 1, youtubeUrl: "https://www.youtube.com/watch?v=9bZkp7q19f0" },
+  { slug: "build", title: "Building in Public, EM", duration: "44:50", host: "Arif Rahman", daysAgo: 2, youtubeUrl: "https://www.youtube.com/watch?v=kJQP7kiw5Fk" },
 ] as const;
 
 const DTW_FUNDING_ROWS = [
@@ -464,7 +483,7 @@ async function main() {
           payload,
           "podcasts",
           { and: [{ tenant: { equals: tenant.id } }, { slug: { equals: p.slug } }] },
-          { tenant: tenant.id, slug: p.slug, title: p.title, show: "DTW", duration: p.duration, host: p.host, publishedAt: new Date(Date.now() - p.daysAgo * 86_400_000).toISOString() },
+          { tenant: tenant.id, slug: p.slug, title: p.title, show: "DTW", duration: p.duration, host: p.host, youtubeUrl: p.youtubeUrl, publishedAt: new Date(Date.now() - p.daysAgo * 86_400_000).toISOString() },
         );
       }
       for (const [i, r] of DTW_FUNDING_ROWS.entries()) {

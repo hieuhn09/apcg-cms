@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-09-23 (initial generation — `process/context/` held only `generated-skills-catalog.json` before this pass; see **Scan Metadata** and **Open Questions** for what that means and does not mean)
+Last updated: 2026-09-24 (APCGHub P4 / CMS-2 — the `/api/hub/*` read routes are now the cross-tenant machine-read pattern (`hubRead` token); tenant slug list corrected to `gcv`/`wad`/`dtw`/`brief-asia`/`world-travel-brief`; see **Key Patterns** and **Open Questions**, plus `integrations/all-integrations.md` §Cross-tenant reads and `tests/all-tests.md` for the probe + disposable-Postgres recipe)
+
+Previously: 2026-09-23 (initial generation — `process/context/` held only `generated-skills-catalog.json` before this pass; see **Scan Metadata** and **Open Questions** for what that means and does not mean)
 
 This file is the **root context entrypoint** for the `apcg-cms` repo (product name: **Central CMS**).
 
@@ -119,7 +121,7 @@ can jump straight to source.
 | Payload collections, schema, migrations, tenant fields | this file, `process/context/database/all-database.md` | `payload.config.ts`, `src/collections/*.ts`, `src/migrations/` |
 | API routes, auth (human/engine/public-read), cross-tenant read design | this file, `process/context/integrations/all-integrations.md` | `src/lib/engine-auth.ts`, `src/lib/public.ts`, `src/access/helpers.ts` |
 | the content-engine intake/translation wire contract specifically | `process/context/integrations/all-integrations.md` | `docs/08-content-engine-integration.md` (field-by-field, authoritative) |
-| bridging a new caller (hub/console/agent) into this CMS across tenants | `process/context/integrations/all-integrations.md` §Cross-tenant reads | the cited files in that section — this is a design gap, not a solved pattern |
+| bridging a new caller (hub/console/agent) into this CMS across tenants | `process/context/integrations/all-integrations.md` §Cross-tenant reads | the cited files in that section — the `/api/hub/*` routes (`hubRead` token) are the existing read-only pattern; cross-tenant writes remain unsolved |
 | the Console (`/console`) UI or its Drizzle read layer | `process/context/database/all-database.md` §Two data-access lanes | `src/console/`, `docs/07-website-management.md` |
 | editorial roles/permissions (who can do what) | `docs/03-roles-and-permissions.md` | `src/access/helpers.ts` for the code-level enforcement |
 | environment variables / deploy / cron | this file's **Environment and Configuration** section | `docs/11-operations.md`, `vercel.json` |
@@ -249,11 +251,14 @@ its *writes* still go through Payload. Full detail: `process/context/database/al
 **Two independent, differently-shaped auth mechanisms**, neither generalizing to the other: a
 human Payload session (reused as-is by both `/admin` and `/console`) vs machine bearer tokens
 (engine token and per-tenant public read token are *two different* bearer schemes, and both resolve
-to exactly **one** tenant per call). **There is currently no machine-credential shape that reads
-across multiple tenants in one call** — the only "see all tenants at once" resolution
-(`tenantScope()`) exists solely for an authenticated human session in the Console. This is the key
-finding for anyone building a cross-tenant bridge (e.g. a hub console reading five publications at
-once) — full detail with concrete extension options:
+to exactly **one** tenant per call). **Updated 2026-09-24:** a third, separate machine credential
+now reads across tenants — `ContentEngines.hubRead` + `authenticateHubEngine`/`narrowHubTenants`
+(`src/lib/hub-auth.ts`), used only by the internal, read-only `/api/hub/*` routes (APCGHub P4:
+CMS-1 `GET /api/hub/articles`, merged in #18; CMS-2 `GET /api/hub/tenants` + `GET /api/hub/taxonomy`
++ search/pillar/views on `/api/hub/articles`, draft PR #19). Engine and public tokens still resolve
+to one tenant; the Console's `tenantScope()` is still human-session-only; cross-tenant **writes** do
+not exist anywhere. Anyone adding a new cross-tenant read should extend the `/api/hub/*` pattern
+(allowlist `select` + sanitize + `depth: 0`, empty-param semantics, merge ordering) — full detail:
 `process/context/integrations/all-integrations.md` §Cross-tenant reads.
 
 **Dual status model on `Articles`:** `_status` (Payload's native draft/published, from its
@@ -456,20 +461,33 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
   `Users` relationships (e.g. an admin "Last Edited By" column may render blank/ID instead of a
   name), verified directly this pass. Documented fix (not applied): `useAsTitle:"name"`. See
   `process/context/database/all-database.md` §Known related gap.
-- **No cross-tenant machine-read mechanism exists today** — the single most important open design
-  question for any hub/bridge work. Full write-up, with concrete extension options, in
-  `process/context/integrations/all-integrations.md` §Cross-tenant reads. Do not start implementation
-  assuming this is a solved problem in this codebase.
+- **UPDATED (2026-09-24) — a cross-tenant machine-read mechanism now exists, for a bounded set of
+  reads.** This entry previously said no such mechanism existed; that is now stale. As of APCGHub
+  P4/CMS-1 (merged) + CMS-2 (draft PR #19), `GET /api/hub/articles` (search/filter/sort),
+  `GET /api/hub/tenants`, and `GET /api/hub/taxonomy` read across every tenant a single
+  `ContentEngines.hubRead` token is allowed to see, in one authenticated call each. Cross-tenant
+  **write** still does not exist anywhere in this codebase, and no route beyond these three exists.
+  Full write-up, allowlist pattern, and the D14 null-ordering fix:
+  `process/context/integrations/all-integrations.md` §Cross-tenant reads (see the EXTENDED
+  2026-09-24/CMS-2 subsection for the current state — do not stop reading at the original gap
+  description, which is now historical framing for how this got built, not current fact).
 - **One legacy plan (`brief-content-type_PLAN_20-08-26.md`) is written in Vietnamese**, unlike every
   other artifact this scan touched (`CLAUDE.md`, all `process/development-protocols/*.md`, all
   `.claude/skills/*/SKILL.md`, and every plan from `09-09-26` onward are English). This context file
   and its two groups were written in English to match the repo's current, live convention — treat
   the one Vietnamese file as historical, not as evidence the convention is mixed today.
-- **Current live tenant set was not independently re-verified this pass** — `process/context/database/all-database.md`
-  names `gcv`/`wad`/`dtw`/`briefasia`/`wtb` based on mentions in `process/general-plans/`, not a
-  direct `payload.find` against a running database (this pass made no database connections and
-  changed no runtime state). Confirm the current live set via the Console's tenant list or a direct
-  query before relying on it for anything precise.
+- **RESOLVED (2026-09-24, `cms-context-tenant-slugs-stale`) — the tenant slug set named above was
+  wrong.** It said `briefasia`/`wtb`; the actual production `publicationId` values (confirmed by the
+  content-engine intake clients that send them —
+  `content-engine admin/src/lib/briefasia-intake-client.ts:184`,
+  `wtb-intake-client.ts:177` — and independently by a live CMS-2 probe against a local seed) are
+  **`gcv`, `wad`, `dtw`, `brief-asia`, `world-travel-brief`**. `database/all-database.md` has been
+  corrected to match. This was a real, previously-undetected drift between this context file and
+  what the intake clients actually send — verify against the live intake code, not this file's prior
+  wording, if this ever needs re-confirming. Still not independently re-verified against a live
+  `payload.find({collection:'tenants'})` in this repo's own database (only against the calling
+  clients + a local seed) — confirm via the Console's tenant list or a direct query before relying on
+  it for anything requiring 100% certainty of the *current* live set (tenants can be added/removed).
 
 ---
 

@@ -116,10 +116,15 @@ checked independently in each surface, not centrally enforced by Payload.
 
 ### Tenants — the site/publication registry
 
-`src/collections/Tenants.ts`. One row per publication (`gcv`, `wad`, `dtw`, `briefasia`, `wtb` per
-`process/general-plans/` mentions of live tenants — confirm the current live set with a direct
-`payload.find({collection:'tenants'})` or the Console's tenant list before relying on it, this file
-does not hardcode which slugs exist). Field groups:
+`src/collections/Tenants.ts`. One row per publication. Live `slug` values, confirmed 2026-09-24
+against the content-engine intake clients that actually send `publicationId` in production
+(`content-engine admin/src/lib/briefasia-intake-client.ts:184`, `wtb-intake-client.ts:177`) and
+independently by a CMS-2 probe against a local seed: **`gcv`, `wad`, `dtw`, `brief-asia`,
+`world-travel-brief`** — NOT `briefasia`/`wtb` (an earlier version of this file had that wrong; see
+`all-context.md` §Open Questions, gap `cms-context-tenant-slugs-stale`, now resolved). This file
+still does not hardcode which slugs exist as a runtime constraint — confirm the current live set with
+a direct `payload.find({collection:'tenants'})` or the Console's tenant list if a tenant may have
+been added/removed since. Field groups:
 
 - **Identity** (system-admin only after creation): `slug` (stable `publicationId`, must match the
   content-engine registry id, "Never change after launch" — `Tenants.ts:88`), `status`
