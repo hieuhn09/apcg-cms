@@ -10,7 +10,7 @@ metadata:
 
 # apcg-cms — All Tests
 
-Last updated: 2026-09-24 (APCGHub P4 / CMS-1 — `npm run build` promoted to mandatory gate; `PAYLOAD_DB_PUSH=true` migration-hiding trap; `scripts/hub-probe.ts`; Docker/seed/port pitfalls; unfiltered-grep lesson)
+Last updated: 2026-09-24 (APCGHub P4 / CMS-1 — `npm run build` promoted to mandatory gate; loose-vs-strict Payload types trap + cheap `tsc` gate without `payload-types.ts`; `PAYLOAD_DB_PUSH=true` migration-hiding trap; `scripts/hub-probe.ts`; Docker/seed/port pitfalls; unfiltered-grep lesson)
 
 Attach this file first when the task involves testing, verification, or gate design.
 
@@ -90,15 +90,27 @@ iteration reports (`cms-cost-remediation-pvl-iteration-*.md`, `results.tsv`).
    and pre-render/import-map steps that `tsc --noEmit` alone does not reach — this is the tier that
    would have caught a bad route export or import-map issue if the CMS-1 Preview failure had turned
    out to be code-caused (it did not — see the note below).
-   **⚠️ A green `npm run build` on your machine does NOT prove the Vercel build is green.** In the
-   CMS-1 case, `npm run build` passed locally under both DB conditions tried (with and without the
-   new column), yet the Vercel Preview deployment still failed with no code-side cause found — the
-   two most likely local hypotheses (a stray non-handler export from the new route; the build
-   touching a DB column that didn't exist yet) were each directly disproved by a controlled local
-   rebuild. Likely cause: something in the Vercel *environment* itself (env vars, R2/import-map
-   differences, resource limits, a transient infra issue) — not reproducible offline. Treat a green
-   local `npm run build` as necessary, not sufficient; a real Vercel deployment status or its logs
-   are the only actual proof.
+   **⚠️ A green `npm run build` on your machine does NOT prove the Vercel build is green — and the
+   reason is now known.** `src/payload-types.ts` is gitignored (`.gitignore:28`), and `build` runs
+   only `payload generate:importmap`, never `generate:types`. So Vercel (a fresh clone) builds
+   WITHOUT that file, the `declare module 'payload'` augmentation in it (`payload-types.ts:2446`)
+   never applies, and Payload falls back to its **loose** types (e.g. `find().docs` is
+   `JsonObject & TypeWithID`). A dev machine has the file (the dev server regenerates it), so every
+   local gate — `typecheck`, `lint`, `npm run build` — checks against **strict** types. Because
+   `tsconfig.json` includes `**/*.ts`, `next build` type-checks `scripts/` too, not just `src/app/`.
+   CMS-1's Preview failed (twice, ~60 s) on exactly this: a direct cast in
+   `scripts/hub-probe.ts:328` that only compiled under strict types. Fixed by casting through
+   `unknown`; reproduced red/green on a clean clone and confirmed `784424f` (pre-hub) builds green.
+   - **Cheap gate (seconds) — MANDATORY before pushing any code change:** move
+     `src/payload-types.ts` out of the tree, run `npx tsc --noEmit` (must be 0 errors), then move it
+     back and confirm with `ls` (it is gitignored, so `git status` will NOT tell you it is missing).
+   - **Full gate:** clean `git clone` + `npm ci` + `VERCEL_ENV=preview npm run vercel-build`, with no
+     `src/payload-types.ts` and no `.env.local` (set `DATABASE_URL`/`DATABASE_DIRECT_URL`/
+     `PAYLOAD_SECRET`/`CENTRAL_SIGNING_SECRET` in the shell, pointing at the local Docker DB).
+   - Gap `cms-gates-run-with-strict-types-but-vercel-builds-loose`: the root cause is NOT fixed.
+     Options (adding `generate:types` to `build`, or committing `payload-types.ts` once the
+     pre-existing strict-type casts are fixed — see the `.gitignore` comment) are a separate
+     decision, out of scope here.
 4. manual/live verification scoped to exactly what changed — the only tier that can confirm
    *behavior*, not just that the code compiles, lints, and builds
 
@@ -108,7 +120,7 @@ iteration reports (`cms-cost-remediation-pvl-iteration-*.md`, `results.tsv`).
 |---|---|---|
 | `npm run typecheck` | `tsc --noEmit`, whole repo | strict; no partial/package-scoped variant |
 | `npm run lint` | `next lint` (flat config, `eslint.config.mjs`) | not a deploy gate |
-| `npm run build` | `payload generate:importmap && next build` | **MANDATORY gate as of 24-09-26** (see §Default Verification Order #3) — closest thing to an integration check; a bad Payload config, an import cycle, or a Next route-typing issue can fail here even when `typecheck` passed clean. Green locally ≠ green on Vercel. |
+| `npm run build` | `payload generate:importmap && next build` | **MANDATORY gate as of 24-09-26** (see §Default Verification Order #3) — closest thing to an integration check; a bad Payload config, an import cycle, or a Next route-typing issue can fail here even when `typecheck` passed clean. Green locally ≠ green on Vercel — local builds see strict Payload types, Vercel builds loose ones (see §Default Verification Order #3 for the cheap loose-type gate). |
 | `npm run db:status` | `tsx scripts/db-status.ts` | quick live DB-connectivity/migration-state check — closest thing to a smoke test |
 | `npx tsx scripts/hub-probe.ts --setup / --check / --paging` | one-shot data-layer probe for the `/api/hub/*` route family (added APCGHub P4 / CMS-1, kept in `scripts/` for reuse by future CMS-N hub routes) | requires the Docker Postgres local stack running (see §Debugging Quick Reference); `--setup` seeds two `ContentEngines` fixture rows + articles and prints a fresh test token (never hardcode a token in code/plan/report); `--check` runs the read/leak/filter assertions; `--paging` runs mutation-based red/green checks on `scopedFindMultiTenant`'s pagination invariants. Not a general test runner — scoped to this one route family. |
 
