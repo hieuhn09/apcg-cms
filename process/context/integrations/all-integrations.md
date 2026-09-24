@@ -109,6 +109,7 @@ Update this group when:
 | `GET /api/public/articles`, `/articles/[slug]`, `/authors`, `/cities`, `/menus`, `/site`, `/subscribers` (POST), `/views`, `/[module]` (podcasts/newsletters/corrections/wire/market/dashboards/sponsors), `/preview` | Per-tenant read token (`resolveReadToken`) | **External contract** — consumed by every live frontend | A disabled feature 404s (never an empty 200 — see `Tenants.features`). CORS via `PUBLIC_API_ALLOWED_ORIGINS`. Response gzip'd above 1 KB when the caller accepts it (`src/lib/public.ts`). |
 | `GET /api/cron/publish-scheduled`, `/unpin-expired`, `/refresh-ai-leaderboard` | `CRON_SECRET` bearer (fail-**closed** in production if unset; open in non-production for local `curl`) | **Internal** — Vercel Cron only | Run across **all tenants** in one pass; there is no per-tenant cron entry. |
 | `GET /api/preview/mint` | Payload human session (`payload.auth()`) | **Internal** — the admin "Preview" button | Verifies the signed-in user can access the article's tenant, mints a short-lived HMAC token (`signPayload`, 10 min), redirects to that tenant's own `frontendUrl`. |
+| `GET /api/hub/articles` | Hub engine bearer token (`authenticateHubEngine`, requires `ContentEngines.hubRead`) | **Internal** — consumed by APCGHub in the separate `content-engine` repo | The ONLY multi-tenant machine read in this repo (APCGHub P4 / CMS-1, 2026-09-24). Read-only. Filters `workflowStatus`, never `_status`. A tenant outside the engine's grant is a 403, never a silent drop. No rate limit (see §Cross-tenant reads). |
 | `/(payload)` route group | Payload's own admin session | **Framework-managed** | Payload-generated `/admin` UI + its own REST/GraphQL under `/api` — not a hand-written contract, changes with the Payload version. |
 | `/(console)/console/*` | Payload human session (reused, `src/console/auth.ts`) | **Internal** — staff-only alternate admin UI | See §Cross-tenant reads — this is the one surface with an existing "see multiple tenants at once" shape, and it is human-session-only. |
 
@@ -203,6 +204,47 @@ in code today, are roughly:
 This is a genuine design decision for INNOVATE/PLAN, not something this scan can resolve — it is
 flagged here specifically so the next agent does not assume a cross-tenant read path already exists
 and start "finding" it in the wrong file.
+
+### PARTIAL RESOLUTION (2026-09-24, APCGHub P4 / CMS-1) — articles only, read only
+
+The gap above is **no longer total**. One cross-tenant read path now exists, and it is deliberately
+narrow. Everything stated above about `authenticateEngine()`, `resolveReadToken()` and
+`tenantScope()` remains true and unchanged — none of those three files was touched.
+
+- `GET /api/hub/articles` (`src/app/api/hub/articles/route.ts`) — reads **articles** across every
+  tenant in one authenticated machine call.
+- `authenticateHubEngine()` (`src/lib/hub-auth.ts`) — a NEW function living beside
+  `authenticateEngine()`, not a modification of it. Same credential store (`ContentEngines`), same
+  bearer → sha256 → document → `status === "active"` handshake, same audit events
+  (`engine_auth_failed` / `engine_action_denied` / `engine_tenant_denied`). It diverges at exactly
+  two points: permission comes from a new `ContentEngines.hubRead` checkbox
+  (`src/collections/ContentEngines.ts`) rather than `allowedActions`, and it resolves **every**
+  active tenant in `allowedTenants` instead of demanding exactly one.
+- `scopedFindMultiTenant()` (`src/lib/hub-scoped.ts`) — fans `scopedFind` out once per tenant and
+  merge-sorts the union. It does NOT hand-write a `tenant: { in: [...] }` clause, because that would
+  mean calling `payload.find` directly and re-implementing the filter `scoped.ts` exists to enforce.
+
+**Which of options (a)/(b)/(c) above was taken:** essentially (a), but WITHOUT the change to
+`engine-auth.ts` that option (a) assumed was unavoidable — the multi-tenant branch lives in a new
+file, so the single-tenant write path keeps its invariant. The capability is also NOT a new
+`ENGINE_ACTIONS` value: that array is consumed in three places, the third being the hand-written
+Console form (`src/app/(console)/console/engines/engine-form.tsx:4,95` → a checkbox per value, whose
+submit path replaces the whole array), so adding to it would have changed `/console`.
+
+**What is still missing** (the gap above is still the right description for all of it):
+
+- Any cross-tenant read of anything OTHER than articles (authors, stats, media, translations…).
+  Each would need its own `/api/hub/*` sub-route.
+- Any cross-tenant **write**. The hub path grants read only; nothing in `hub-auth.ts` is consulted by
+  any write route.
+- Rate limiting. `ContentEngines.rateLimitPerMin` is declared but enforced nowhere in this repo, so
+  `/api/hub/*` inherits no limit. Known gap, not an oversight.
+
+**Response safety:** the route emits a hand-written allowlist (`sanitizeHubArticle`) on top of a
+`select` allowlist, and never populates the `tenant` relationship — the owning tenant travels as an
+internal id stamp and is emitted as a bare slug, so the `Tenants` document (which carries
+`readTokens`) never enters the response path. See §Security patterns: a route that does its own
+`select`/populate owns its own output; `defaultPopulate` is not a sufficient guarantee for it.
 
 ---
 
