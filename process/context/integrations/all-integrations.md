@@ -242,18 +242,90 @@ Payload's own `/admin` (a different surface, not covered by the "don't change co
 
 **What is still missing** (the gap above is still the right description for all of it):
 
-- Any cross-tenant read of anything OTHER than articles (authors, stats, media, translations…).
-  Each would need its own `/api/hub/*` sub-route.
 - Any cross-tenant **write**. The hub path grants read only; nothing in `hub-auth.ts` is consulted by
   any write route.
 - Rate limiting. `ContentEngines.rateLimitPerMin` is declared but enforced nowhere in this repo, so
-  `/api/hub/*` inherits no limit. Known gap, not an oversight.
+  `/api/hub/*` inherits no limit. Known gap (`cms1-hub-route-has-no-rate-limit`), not an oversight —
+  and CMS-2 (below) widened the attack/cost surface this gap applies to (sequential-scan `q` search,
+  `2N`-query taxonomy).
 
-**Response safety:** the route emits a hand-written allowlist (`sanitizeHubArticle`) on top of a
-`select` allowlist, and never populates the `tenant` relationship — the owning tenant travels as an
-internal id stamp and is emitted as a bare slug, so the `Tenants` document (which carries
-`readTokens`) never enters the response path. See §Security patterns: a route that does its own
-`select`/populate owns its own output; `defaultPopulate` is not a sufficient guarantee for it.
+**Response safety:** each `/api/hub/*` route emits a hand-written allowlist on top of a `select`
+allowlist, and never populates the `Tenants` relationship on articles — the owning tenant travels as
+an internal id stamp and is emitted as a bare slug, so the `Tenants` document (which carries
+`readTokens`) never enters the response path via relationship population. See §Security patterns: a
+route that does its own `select`/populate owns its own output; `defaultPopulate` is not a sufficient
+guarantee for it.
+
+### EXTENDED (2026-09-24, APCGHub P4 / CMS-2) — search/filter on articles, plus tenants + taxonomy
+
+CMS-2 (plan `apcg-hub-p4-cms2-hub-read-routes_PLAN_24-09-26.md` in the `content-engine` repo; code
+here at `e66cf8a`+`70232a5`, PR #19 draft, not yet merged) closed most of the "still missing" list
+above, reusing the CMS-1 credential (`ContentEngines.hubRead`) for all three routes rather than
+adding per-route permissions.
+
+- **`GET /api/hub/articles` extended, backward-compatible.** Added `q` (title/dek/slug substring
+  search, matches `Articles.listSearchableFields`), `pillar` (CSV of slugs, resolved per-tenant to
+  ids before filtering — a slug absent from a tenant's `pillars` naturally yields zero matches for
+  that tenant, not a 400), `sort=-views|views` (in addition to CMS-1's `-publishedAt|publishedAt`).
+  Response gains `views: number|null` and `pillar: {slug,title}|null` per article; existing fields
+  are unchanged (Hub-1's consumer parses defensively and ignores unknown fields).
+- **`GET /api/hub/tenants` (new).** Tenant metadata for the settings-style surfaces of a hub. Same
+  3-layer allowlist discipline as articles: a `select` allowlist (`TENANT_SELECT`, `src/lib/hub-sanitize.ts`)
+  narrows the DB query itself, then `sanitizeHubTenant` builds a fresh object (no spread) from only
+  the allowed keys. **Never returned, by design, verified against every field on `Tenants.ts:77-294`:**
+  `readTokens` (the secret this whole group exists to protect), `contact.*` (4 email fields),
+  `allowedEngines` (a relationship into the secret-bearing `ContentEngines` collection),
+  `autoPublishEngineDrafts`, `brand.themeTokens` (unstructured JSON — can't be allowlisted safely),
+  `dashboards.*`. Upload fields (`logo`, `brand.ogImageDefault`, `seo.defaultOgImage`) are returned as
+  raw numeric/string ids (`depth: 0`), never populated into Media documents — deferred to a future
+  media phase. Lookup lives in a dedicated `findHubTenants(payload, ids)` helper
+  (`src/lib/hub-tenants.ts`), not inline in the route: `ids.length === 0` short-circuits to `[]`
+  with **no DB call** (Payload's `limit: 0` means "unlimited," not "zero," so this guard is
+  load-bearing, not decorative).
+- **`GET /api/hub/taxonomy` (new).** Pillars + authors across every tenant the caller's token allows.
+  Explicit caps (`limit: CAP + 1` per tenant — 200 for pillars, 1000 for authors) with a `truncated`
+  flag per tenant when the cap is hit; `pagination: false` is deliberately NOT used (it cannot be
+  passed through `scopedFind`'s typed args, and would not bound result size anyway). Authors drop the
+  `user` relationship field entirely (never allowlisted — the collection field itself,
+  `Authors.ts:51-56`, links to a user account).
+- **Fixed a latent ordering bug in CMS-1's own shared helper (D14).** `scopedFindMultiTenant()`
+  (`src/lib/hub-scoped.ts`) issues one query per tenant and merge-sorts the union **in application
+  memory**. Its original `comparatorFor` sorted `null` values to the END on both ascending and
+  descending sorts. Postgres does the opposite for `DESC` (NULL FIRST is the Postgres default for
+  `DESC`; Drizzle's `buildOrderBy.js` never emits an explicit `NULLS` clause, so the DB default
+  governs) — so on a tenant with more null-`publishedAt` articles than fit in one page, the
+  in-memory merge could silently drop that tenant's dated articles off page 1. This bug pre-dates
+  CMS-2; CMS-2 found it while adding a second sort key (`views`) and fixed the shared helper for
+  both callers. Fix: every route now passes an explicit sort-key array ending in `-id`/`id` (a
+  globally unique tie-breaker Payload's own implicit `-createdAt` fallback is NOT — `createdAt` is
+  not unique), and the merge comparator sorts multi-key with `null` FIRST on `DESC`, LAST on `ASC`,
+  matching Postgres exactly. Verified red-before-fix (`actual=[15,14,13,12,11]` vs
+  `expected=[33,32,31,30,29]` from a direct `payload.find` ground truth) and green-after, reproduced
+  independently in EVL by reverting the helper and re-running the same fixture.
+- **Empty/absent scope parameters still mean "all allowed," not "none" (D17) — a caller-side trust
+  boundary, not a CMS bug.** `tenants` absent/empty = every tenant the token allows (unchanged from
+  CMS-1, `hub-auth.ts:190-192`); `pillar`/`kinds` absent/empty = no filter, matching what a caller
+  who forgot to set a filter would expect. Every route's docblock states this explicitly. **Any new
+  caller (a hub, a console) MUST treat an accidentally-empty scope value as a bug in itself and
+  refuse to send the request** — do not rely on this API to reject it. Hub-1 already learned this the
+  hard way (its own empty-tenant guard, `hub-cms-client.ts`); it is now a named gap
+  (`cms2-empty-param-means-all-hub2-must-guard`) for whatever calls `/tenants` and `/taxonomy` next.
+- **Two known project-level decisions this pass did NOT change:** (1) whether a `publishedAt: null`
+  article should be excluded from a caller's "published" view is left to the caller — CMS-2 returns
+  DB order faithfully (now correctly, see D14); the project decided (2026-09-24) that the *consuming*
+  hub should carve nulls into a separate "no publish date yet" bucket rather than asking this API for
+  a `publishedAt IS NOT NULL` filter. (2) `q` uses Payload's `contains` operator, which lowers to
+  Postgres `ILIKE '%...%'` with **no automatic escaping of `%`/`_`/`\`** (verified directly in
+  `@payloadcms/drizzle/dist/queries/sanitizeQueryValue.js` and `parseParams.js` — neither escapes).
+  The route escapes `\` → `%` → `_` itself before the value reaches Payload; any other `/api/hub/*`
+  (or `/api/public/*`) route adding a `contains`/`like` filter on user input needs the same escaping
+  — it is NOT provided by the framework.
+
+**Still missing after CMS-2:** cross-tenant read of anything besides articles/tenants/pillars/authors
+(media, translations, sub-sections, stats); cross-tenant write (unchanged); rate limiting
+(unchanged, now a bigger surface — see above). Live-traffic verification of all three routes is
+blocked on the project owner minting a hub credential — as of this pass, `/api/hub/*` has never been
+called outside a local Docker Postgres harness and a clean-clone `vercel-build`.
 
 ---
 
