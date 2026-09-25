@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-09-24 (APCGHub P4 / CMS-2 — the `/api/hub/*` read routes are now the cross-tenant machine-read pattern (`hubRead` token); tenant slug list corrected to `gcv`/`wad`/`dtw`/`brief-asia`/`world-travel-brief`; see **Key Patterns** and **Open Questions**, plus `integrations/all-integrations.md` §Cross-tenant reads and `tests/all-tests.md` for the probe + disposable-Postgres recipe)
+Last updated: 2026-09-25 (APCGHub P4 / CMS-3 — first hub WRITE route `POST /api/hub/articles/{id}/status` (hide = published→archived, republish = hidden|archived→published), gated by the new `ContentEngines.hubWrite` flag on top of `hubRead`; see **Key Patterns** and `integrations/all-integrations.md` §Cross-tenant reads → WRITE)
+
+Previously: 2026-09-24 (APCGHub P4 / CMS-2 — the `/api/hub/*` read routes are now the cross-tenant machine-read pattern (`hubRead` token); tenant slug list corrected to `gcv`/`wad`/`dtw`/`brief-asia`/`world-travel-brief`; see **Key Patterns** and **Open Questions**, plus `integrations/all-integrations.md` §Cross-tenant reads and `tests/all-tests.md` for the probe + disposable-Postgres recipe)
 
 Previously: 2026-09-23 (initial generation — `process/context/` held only `generated-skills-catalog.json` before this pass; see **Scan Metadata** and **Open Questions** for what that means and does not mean)
 
@@ -121,7 +123,7 @@ can jump straight to source.
 | Payload collections, schema, migrations, tenant fields | this file, `process/context/database/all-database.md` | `payload.config.ts`, `src/collections/*.ts`, `src/migrations/` |
 | API routes, auth (human/engine/public-read), cross-tenant read design | this file, `process/context/integrations/all-integrations.md` | `src/lib/engine-auth.ts`, `src/lib/public.ts`, `src/access/helpers.ts` |
 | the content-engine intake/translation wire contract specifically | `process/context/integrations/all-integrations.md` | `docs/08-content-engine-integration.md` (field-by-field, authoritative) |
-| bridging a new caller (hub/console/agent) into this CMS across tenants | `process/context/integrations/all-integrations.md` §Cross-tenant reads | the cited files in that section — the `/api/hub/*` routes (`hubRead` token) are the existing read-only pattern; cross-tenant writes remain unsolved |
+| bridging a new caller (hub/console/agent) into this CMS across tenants | `process/context/integrations/all-integrations.md` §Cross-tenant reads | the cited files in that section — the `/api/hub/*` routes (`hubRead` token) are the existing read pattern; the only write is CMS-3's single-article status route (`hubWrite` token, §Cross-tenant reads → WRITE) — general cross-tenant writes remain unsolved |
 | the Console (`/console`) UI or its Drizzle read layer | `process/context/database/all-database.md` §Two data-access lanes | `src/console/`, `docs/07-website-management.md` |
 | editorial roles/permissions (who can do what) | `docs/03-roles-and-permissions.md` | `src/access/helpers.ts` for the code-level enforcement |
 | environment variables / deploy / cron | this file's **Environment and Configuration** section | `docs/11-operations.md`, `vercel.json` |
@@ -257,7 +259,10 @@ now reads across tenants — `ContentEngines.hubRead` + `authenticateHubEngine`/
 CMS-1 `GET /api/hub/articles`, merged in #18; CMS-2 `GET /api/hub/tenants` + `GET /api/hub/taxonomy`
 + search/pillar/views on `/api/hub/articles`, draft PR #19). Engine and public tokens still resolve
 to one tenant; the Console's `tenantScope()` is still human-session-only; cross-tenant **writes** do
-not exist anywhere. Anyone adding a new cross-tenant read should extend the `/api/hub/*` pattern
+not exist anywhere — **updated 2026-09-25:** one narrow exception now exists, the CMS-3 route
+`POST /api/hub/articles/{id}/status` (one article, one tenant, `workflowStatus` only: hide =
+`published → archived`, republish = `hidden|archived → published`), gated by a separate
+`ContentEngines.hubWrite` flag checked in `src/lib/hub-write-auth.ts` (`hub-auth.ts` stays read-only). Anyone adding a new cross-tenant read should extend the `/api/hub/*` pattern
 (allowlist `select` + sanitize + `depth: 0`, empty-param semantics, merge ordering) — full detail:
 `process/context/integrations/all-integrations.md` §Cross-tenant reads.
 
@@ -466,7 +471,8 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
   P4/CMS-1 (merged) + CMS-2 (draft PR #19), `GET /api/hub/articles` (search/filter/sort),
   `GET /api/hub/tenants`, and `GET /api/hub/taxonomy` read across every tenant a single
   `ContentEngines.hubRead` token is allowed to see, in one authenticated call each. Cross-tenant
-  **write** still does not exist anywhere in this codebase, and no route beyond these three exists.
+  **write** still does not exist anywhere in this codebase except (2026-09-25, CMS-3) the single-article
+  status route `POST /api/hub/articles/{id}/status` gated by `ContentEngines.hubWrite`; no other `/api/hub/*` route exists.
   Full write-up, allowlist pattern, and the D14 null-ordering fix:
   `process/context/integrations/all-integrations.md` §Cross-tenant reads (see the EXTENDED
   2026-09-24/CMS-2 subsection for the current state — do not stop reading at the original gap
