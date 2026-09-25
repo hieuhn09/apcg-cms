@@ -1447,6 +1447,386 @@ async function check3() {
   process.exit(state.failures === 0 ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CMS-4 (APCGHub P4) — the hub READ route GET /api/hub/articles/{id}?tenant=.
+// DISPOSABLE POSTGRES ONLY (raw SQL writes into articles / articles_locales).
+//
+//   --setup4 --out <file>   create/refresh 2 engines (hubRead true / false),
+//                           granted dtw+gcv only (wad deliberately excluded).
+//                           Tokens go to <file> (mode 600), NEVER stdout.
+//   --check4 --in <file>    unit checks of the body wrapper + sanitizer (no
+//                           server needed), then real HTTP against the dev
+//                           server (HUB_PROBE_BASE) for AC1–AC13, AC18, AC19.
+//                           Creates FRESH fixtures every run (unique slugs), so
+//                           it can be re-run under each red-first mutation.
+//            [--unit-only]  only the in-process checks.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const R_ENGINES = { read: "apcghub-cms4-read", noread: "apcghub-cms4-noread" } as const;
+type R_Tokens = { read: string; noread: string };
+
+async function setup4() {
+  const out = arg("out");
+  if (!out) throw new Error("--out <file> required (tokens are written there, never printed)");
+  const payload = await getPayload({ config });
+  const tenants = await tenantsBySlug(payload);
+  const grant = [need(tenants, "dtw"), need(tenants, "gcv")];
+  need(tenants, "wad"); // must exist, deliberately NOT granted (AC3)
+  const tokens = {} as R_Tokens;
+  for (const key of Object.keys(R_ENGINES) as (keyof R_Tokens)[]) {
+    const name = R_ENGINES[key];
+    const token = randomBytes(24).toString("hex");
+    tokens[key] = token;
+    const data = { rawToken: token, hubRead: key === "read", hubWrite: false, status: "active", allowedTenants: grant };
+    const id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else
+      await payload.create({
+        collection: "content-engines",
+        overrideAccess: true,
+        data: { name, engineType: "other", allowedActions: ["import"], ...data } as never,
+      });
+    console.log(`[setup4] engine ${name}: hubRead=${key === "read"} hubWrite=false grant=dtw,gcv`);
+  }
+  writeFileSync(out, JSON.stringify(tokens), { mode: 0o600 });
+  console.log(`[setup4] tokens written to ${out} (not printed)`);
+  process.exit(0);
+}
+
+// Lexical JSON builders (hand-built editor state, as in the CMS-4 FEASIBILITY probe).
+const lx = {
+  text: (text: string, format = 0) => ({ type: "text", version: 1, text, format, detail: 0, mode: "normal", style: "" }),
+  el: (type: string, children: unknown[], extra: Record<string, unknown> = {}) => ({
+    type, version: 1, direction: "ltr", format: "", indent: 0, children, ...extra,
+  }),
+  p: (...children: unknown[]) => lx.el("paragraph", children, { textFormat: 0, textStyle: "" }),
+  link: (url: string, label: string) =>
+    lx.el("link", [lx.text(label)], { version: 3, id: randomBytes(6).toString("hex"), fields: { linkType: "custom", url, newTab: false } }),
+  upload: (relationTo: string, value: number) => ({ type: "upload", version: 3, format: "", id: randomBytes(6).toString("hex"), fields: null, relationTo, value }),
+  rel: (relationTo: string, value: number) => ({ type: "relationship", version: 2, format: "", relationTo, value }),
+  root: (...children: unknown[]) => ({ root: lx.el("root", children) }),
+};
+
+const DETAIL_KEYS = [
+  "author", "bodyMarkdown", "bodyState", "coAuthors", "contentType", "dek", "heroImage", "id", "pillar", "publishedAt",
+  "readMin", "slug", "subSection", "tags", "takeaways", "tenant", "title", "updatedAt", "video", "views", "workflowStatus",
+];
+
+// 1×1 PNG, and a minimal ISO-BMFF `ftyp` header (detected as video/mp4).
+const PNG_1X1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+const MP4_STUB = Buffer.concat([
+  Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypmp42"), Buffer.from([0, 0, 0, 0]), Buffer.from("mp42isom"),
+  Buffer.from([0, 0, 0, 8]), Buffer.from("free"),
+]);
+
+async function check4() {
+  const unitOnly = flag("unit-only");
+  const inFile = arg("in");
+  const tokens = inFile ? (JSON.parse(readFileSync(inFile, "utf8")) as R_Tokens) : undefined;
+  if (!unitOnly && !tokens) throw new Error("--in <file from --setup4> required (or --unit-only)");
+  const payload = await getPayload({ config });
+  const { state, expect } = makeExpect();
+  const obs = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
+  const md = await import("../src/lib/hub-article-markdown");
+  const sel = await import("../src/lib/hub-article-detail-select");
+  const loadCfg = () => md.loadHubEditorConfig(payload.config);
+  // A throw escaping the wrapper is itself a failure: record it and keep going,
+  // so one mutation cannot hide every later check.
+  type BodyOpts = Parameters<typeof md.hubArticleBodyToMarkdown>[1];
+  const wrap = async (data: unknown, opts: BodyOpts): Promise<Partial<Awaited<ReturnType<typeof md.hubArticleBodyToMarkdown>>> & { threw?: string }> => {
+    try { return await md.hubArticleBodyToMarkdown(data, opts); } catch (err) { return { threw: (err as Error).name }; }
+  };
+
+  // ── Unit: body wrapper (checklist step 1) ─────────────────────────────────
+  let calls = 0;
+  const spy = (() => { calls++; return "x"; }) as never;
+  for (const [label, data] of [
+    ["null", null], ["undefined", undefined], ["no root", {}], ["root without children", { root: { type: "root" } }],
+    ["root, 0 children", lx.root()], ["root, one empty paragraph", lx.root(lx.p())],
+  ] as const) {
+    const r = await wrap(data, { loadEditorConfig: loadCfg, convert: spy });
+    expect(`AC18 unit ${label} → empty`, [r.bodyState, r.bodyMarkdown], ["empty", ""]);
+  }
+  expect("AC18 unit converter never called for empty bodies", calls, 0);
+
+  let threw = false;
+  let rThrow: unknown;
+  try {
+    rThrow = await md.hubArticleBodyToMarkdown(lx.root(lx.p(lx.text("secret body text"))), {
+      loadEditorConfig: loadCfg,
+      convert: (() => { throw new Error("secret body text"); }) as never,
+    });
+  } catch { threw = true; }
+  expect("AC19 unit forced converter throw does not escape the wrapper", threw, false);
+  const rt = rThrow as { bodyState?: string; bodyMarkdown?: string; error?: Record<string, unknown> } | undefined;
+  expect("AC19 unit forced throw → error, empty markdown", [rt?.bodyState, rt?.bodyMarkdown], ["error", ""]);
+  expect("AC19 unit error detail carries no body text / message", JSON.stringify(rt?.error ?? {}).includes("secret"), false);
+  {
+    const r = await wrap(lx.root(lx.p(lx.text("x"))), { loadEditorConfig: () => Promise.reject(new Error("cfg")) });
+    expect("AC19 unit editor-config failure → error, does not escape", [r.bodyState, r.threw], ["error", undefined]);
+  }
+
+  const nonEmpty = lx.root(lx.p(lx.text("x")));
+  for (const bad of ["[a](javascript:alert(1))", "[a](JaVaScRiPt:alert(1))", "[a]( javascript:alert(1))", "[a](vbscript:x)", "[a](data:text/html,<script>alert(1)</script>)"]) {
+    const r = await wrap(nonEmpty, { loadEditorConfig: loadCfg, convert: (() => `ok ${bad}`) as never });
+    expect(`AC7 unit scrub blocks ${bad}`, [r.bodyState, r.bodyMarkdown, r.error?.kind], ["error", "", "dangerous_link"]);
+  }
+  {
+    const r = await wrap(nonEmpty, { loadEditorConfig: loadCfg, convert: (() => "  \n") as never });
+    expect("AC19 unit non-empty body converted to nothing → error", [r.bodyState, r.bodyMarkdown, r.error?.name], ["error", "", "EmptyConversionOutput"]);
+  }
+  for (const good of ["[a](https://example.com)", "![a](data:image/png;base64,AAAA)", "text about javascript: in prose"]) {
+    const r = await wrap(nonEmpty, { loadEditorConfig: loadCfg, convert: (() => good) as never });
+    expect(`AC7 unit scrub keeps ${good}`, [r.bodyState, r.bodyMarkdown], ["ok", good]);
+  }
+
+  // ── Unit: sanitizer (checklist step 2) ────────────────────────────────────
+  const hostile = {
+    id: 7, title: "T", slug: "s", dek: "d", workflowStatus: "hidden", publishedAt: null, updatedAt: "2026-09-25T00:00:00.000Z",
+    contentType: "article", readMin: 3, takeaways: "one\n\n two \n", views: null,
+    tenant: { id: 1, slug: "dtw", readTokens: [{ token: "LEAK-readtoken" }] },
+    lastEngine: { id: 9, tokenHash: "LEAK-hash", tokenPrefix: "LEAK-pfx" },
+    assignedTo: { id: 2, email: "LEAK@example.test" },
+    lastEditedBy: { id: 2, email: "LEAK2@example.test" },
+    translationStatus: [{ locale: "vi", state: "done" }],
+    author: { id: 3, name: "A", role: "R", email: "LEAK3@example.test", user: { email: "LEAK4@example.test" } },
+    coAuthors: [{ id: 4, name: "B", role: null, bio: "LEAK-bio" }, 5],
+    tags: [{ id: 6, slug: "t", title: "Tag", tenant: { readTokens: "LEAK-tag" } }],
+    pillar: 99, subSection: null,
+    heroImage: { id: 8, url: "/u.png", alt: "alt", caption: null, credit: "c", tenant: { readTokens: "LEAK-media" } },
+    body: { root: "LEAK-body" },
+  } as Record<string, unknown>;
+  const s = sel.sanitizeHubArticleDetail(hostile, "dtw", { bodyMarkdown: "", bodyState: "empty" });
+  expect("AC6 unit sanitizer emits exactly the allowlisted keys", Object.keys(s).sort(), DETAIL_KEYS);
+  expect("AC6 unit sanitizer output has no LEAK marker", JSON.stringify(s).includes("LEAK"), false);
+  expect("AC6 unit takeaways split per line", s.takeaways, ["one", "two"]);
+  expect("AC11 unit unpopulated pillar id → null, null subSection → null", [s.pillar, s.subSection], [null, null]);
+  expect("AC11 unit id-only coAuthor dropped", s.coAuthors, [{ name: "B", role: null }]);
+  expect("AC6 unit views NULL stays null", s.views, null);
+
+  if (unitOnly) {
+    console.log(`\n[check4] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+
+  // ── Fixtures (fresh per run) ──────────────────────────────────────────────
+  const t = tokens as R_Tokens;
+  const tenants = await tenantsBySlug(payload);
+  const dtw = need(tenants, "dtw");
+  const gcv = need(tenants, "gcv");
+  const wad = need(tenants, "wad");
+  const stamp = Date.now().toString(36);
+  const db = rawDb(payload);
+
+  const firstPillar = async (tenantId: number) => {
+    const p = (await payload.find({ collection: "pillars", where: { tenant: { equals: tenantId } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as { id: number } | undefined;
+    if (!p) throw new Error(`tenant ${tenantId} has no pillar`);
+    return p.id;
+  };
+  const pDtw = await firstPillar(dtw);
+  const author = await ensureAuthor(payload, dtw, "cms4-probe-author", "CMS-4 Probe Author");
+  await payload.update({ collection: "authors", id: author, overrideAccess: true, data: { role: "Probe Desk" } as never });
+  const coAuthor = await ensureAuthor(payload, dtw, "cms4-probe-coauthor", "CMS-4 Probe CoAuthor");
+  const sub = (await payload.create({ collection: "subsections", overrideAccess: true, locale: "en", data: { tenant: dtw, pillar: pDtw, slug: `cms4-sub-${stamp}`, title: "CMS4 Sub", order: 0 } as never })) as unknown as { id: number };
+  const tag = (await payload.create({ collection: "tags", overrideAccess: true, locale: "en", data: { tenant: dtw, slug: `cms4-tag-${stamp}`, title: "CMS4 Tag" } as never })) as unknown as { id: number };
+  const media = (await payload.create({
+    collection: "media", overrideAccess: true, locale: "en",
+    data: { tenant: dtw, alt: "cms4 alt", caption: "cms4 caption", credit: "cms4 credit" } as never,
+    file: { data: PNG_1X1, mimetype: "image/png", name: `cms4-${stamp}.png`, size: PNG_1X1.length },
+  })) as unknown as { id: number; url: string };
+  let videoId: number | null = null;
+  try {
+    const v = (await payload.create({
+      collection: "videoMedia", overrideAccess: true, locale: "en",
+      data: { tenant: dtw, alt: "cms4 video" } as never,
+      file: { data: MP4_STUB, mimetype: "video/mp4", name: `cms4-${stamp}.mp4`, size: MP4_STUB.length },
+    })) as unknown as { id: number };
+    videoId = v.id;
+  } catch (err) {
+    obs("videoMedia fixture create failed", (err as Error).message);
+  }
+  const markerEmail = `probe-leak-marker-${stamp}@example.test`;
+  const user = (await payload.create({ collection: "users", overrideAccess: true, data: { name: "Leak Marker", email: markerEmail, password: randomBytes(12).toString("hex"), role: "standard" } as never })) as unknown as { id: number };
+  const markerToken = `cms4leakmarker${randomBytes(16).toString("hex")}`;
+  const engine = (await payload.create({ collection: "content-engines", overrideAccess: true, data: { name: `cms4-marker-${stamp}`, engineType: "other", status: "active", allowedTenants: [dtw], allowedActions: ["import"], rawToken: markerToken } as never })) as unknown as { id: number };
+  const engineRow = (await payload.findByID({ collection: "content-engines", id: engine.id, depth: 0, overrideAccess: true })) as unknown as { tokenHash?: string; tokenPrefix?: string };
+  obs("marker engine tokenHash present", Boolean(engineRow.tokenHash));
+
+  const fullBody = lx.root(
+    lx.el("heading", [lx.text("CMS4 heading")], { tag: "h2" }),
+    lx.p(lx.text("Normal "), lx.text("bold", 1), lx.text(" and "), lx.text("italic", 2), lx.text(" text.")),
+    lx.el("list", [lx.el("listitem", [lx.text("First")], { value: 1 }), lx.el("listitem", [lx.text("Second")], { value: 2 })], { listType: "number", start: 1, tag: "ol" }),
+    lx.el("list", [lx.el("listitem", [lx.text("Bullet")], { value: 1 })], { listType: "bullet", start: 1, tag: "ul" }),
+    lx.el("quote", [lx.text("Quoted line.")]),
+    lx.p(lx.link("javascript:alert(1)", "danger 1")),
+    lx.p(lx.link("JaVaScRiPt:alert(1)", "danger 2")),
+    lx.p(lx.link("data:text/html,<script>alert(1)</script>", "danger 4")),
+    lx.p(lx.link("vbscript:x", "danger 5")),
+    lx.p(lx.link("https://example.com/safe", "safe link")),
+    lx.upload("media", media.id),
+    lx.rel("users", user.id),
+    lx.rel("content-engines", engine.id),
+  );
+  // The leading-space variant cannot be saved through Payload (validateUrl);
+  // it is appended with raw SQL below, bypassing field validation.
+  const leadingSpace = lx.p(lx.link(" javascript:alert(1)", "danger 3"));
+
+  const mk = async (tenantId: number, key: string, workflowStatus: ArticleStatus, extra: Record<string, unknown> = {}) => {
+    const created = (await payload.create({
+      collection: "articles", overrideAccess: true, locale: "en", draft: true,
+      data: {
+        tenant: tenantId, title: `CMS4 ${key} ${stamp}`, slug: `cms4-${key}-${stamp}`,
+        pillar: tenantId === dtw ? pDtw : await firstPillar(tenantId),
+        author: tenantId === dtw ? author : await ensureAuthor(payload, tenantId, "cms4-probe-author", "CMS-4 Probe Author"),
+        workflowStatus, publishedAt: iso(2026, 9, 2), ...extra,
+      } as never,
+    })) as unknown as { id: number };
+    return created.id;
+  };
+  const setBodySql = async (id: number, body: unknown) =>
+    db.execute(sql`UPDATE articles_locales SET body = ${JSON.stringify(body)}::jsonb WHERE _parent_id = ${id} AND _locale = 'en'`);
+
+  const idFull = await mk(dtw, "full", "published", {
+    dek: "cms4 dek", body: fullBody, takeaways: "Take one\nTake two", readMin: 7, views: 42, contentType: "article",
+    subSection: sub.id, coAuthors: [coAuthor], tags: [tag.id], heroImage: media.id,
+    ...(videoId != null ? { video: videoId, videoCaption: "vcap", videoCredit: "vcred", videoDescription: "vdesc" } : {}),
+    lastEngine: engine.id, assignedTo: user.id, lastEditedBy: user.id,
+  });
+  await setBodySql(idFull, { root: { ...fullBody.root, children: [...fullBody.root.children, leadingSpace] } });
+  const idHidden = await mk(dtw, "hidden", "hidden");
+  await db.execute(sql`UPDATE articles SET pillar_id = NULL, author_id = NULL WHERE id = ${idHidden}`);
+  const idArchived = await mk(dtw, "archived", "archived", { body: lx.root(lx.p(lx.text("archived body"))) });
+  const idPending = await mk(dtw, "pending", "pending_review");
+  const idEmptyRoot = await mk(dtw, "emptyroot", "published");
+  await setBodySql(idEmptyRoot, lx.root(lx.p()));
+  const idUnknownNode = await mk(dtw, "unknownnode", "published");
+  await setBodySql(idUnknownNode, lx.root({ type: "cms4-unknown-node", version: 1 }));
+  const idGcv = await mk(gcv, "gcv", "published");
+  const idWad = await mk(wad, "wad", "published");
+  obs("fixtures", { idFull, idHidden, idArchived, idPending, idEmptyRoot, idUnknownNode, idGcv, idWad, videoId });
+
+  // ── HTTP ──────────────────────────────────────────────────────────────────
+  const get = async (id: string | number, tenant: string | null, token: string | null = t.read) => {
+    const qs = tenant == null ? "" : `?tenant=${encodeURIComponent(tenant)}`;
+    const res = await fetch(`${BASE}/api/hub/articles/${id}${qs}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+    const text = await res.text();
+    let body: Doc = {};
+    try { body = JSON.parse(text) as Doc; } catch { /* non-JSON (e.g. Next 404 page) */ }
+    return { status: res.status, text, body };
+  };
+  const logCount = async (eventType?: string) =>
+    (await payload.count({ collection: "activityLog", ...(eventType ? { where: { eventType: { equals: eventType } } } : {}), overrideAccess: true })).totalDocs;
+
+  // Registration / auth.
+  const reg = await get(idFull, "dtw");
+  expect("route registered: JSON with ok:true (not the Next 404 page)", [reg.status, reg.body.ok], [200, true]);
+  expect("AUTH no bearer → 401", (await get(idFull, "dtw", null)).status, 401);
+  expect("AUTH unknown bearer → 401", (await get(idFull, "dtw", "nope-" + stamp)).status, 401);
+  expect("AUTH hubRead:false → 403", (await get(idFull, "dtw", t.noread)).status, 403);
+
+  // AC1 — tenant required.
+  for (const [label, tq] of [["absent", null], ["empty", ""], ["blank", "   "]] as const) {
+    const r = await get(idFull, tq);
+    expect(`AC1 tenant ${label} → 400 bad_request`, [r.status, r.body.status], [400, "bad_request"]);
+  }
+
+  // AC3 + AC13 — tenant outside grant.
+  const deniedBefore = await logCount("engine_tenant_denied");
+  const r403 = await get(idWad, "wad");
+  expect("AC3 tenant outside grant → 403 forbidden", [r403.status, r403.body.status], [403, "forbidden"]);
+  expect("AC3 allowedTenants non-empty, exactly the grant", [...((r403.body.allowedTenants as string[]) ?? [])].sort(), ["dtw", "gcv"]);
+  expect("AC13 denial logged as engine_tenant_denied (+1)", (await logCount("engine_tenant_denied")) - deniedBefore, 1);
+  expect("AC3 unknown tenant slug → 403", (await get(idFull, "nope")).status, 403);
+
+  // AC2 + AC4 — one 404 body for every "not here" case.
+  const missing = await get(999999999, "dtw");
+  expect("AC2/AC4 nonexistent id → 404 not_found", [missing.status, missing.body.status], [404, "not_found"]);
+  for (const bad of ["abc", "-1", "1.5", "0", "01", "12345678901234567", "1e3", "%20" + idFull]) {
+    const r = await get(bad, "dtw");
+    expect(`AC2 malformed id ${JSON.stringify(bad)} → 404 identical body`, [r.status, r.text], [404, missing.text]);
+  }
+  const other = await get(idGcv, "dtw");
+  expect("AC4 article in another (granted) tenant → 404 byte-identical", [other.status, other.text], [404, missing.text]);
+  expect("AC4 same article with its own tenant → 200", (await get(idGcv, "gcv")).status, 200);
+
+  // AC5 — every workflowStatus readable.
+  for (const [id, ws] of [[idHidden, "hidden"], [idArchived, "archived"], [idPending, "pending_review"], [idFull, "published"]] as const) {
+    const r = await get(id, "dtw");
+    expect(`AC5 ${ws} article readable`, [r.status, (r.body.article as Doc | undefined)?.workflowStatus], [200, ws]);
+  }
+
+  // Full article — AC6–AC10, AC12.
+  const okBefore = await logCount();
+  const full = await get(idFull, "dtw");
+  expect("AC12 successful read writes no ActivityLog row", (await logCount()) - okBefore, 0);
+  const a = (full.body.article ?? {}) as Doc;
+  const mdOut = String(a.bodyMarkdown ?? "");
+  expect("AC6 response keys = exact allowlist", Object.keys(a).sort(), DETAIL_KEYS);
+  expect("AC6 top-level response keys", Object.keys(full.body).sort(), ["article", "ok"]);
+  for (const [label, needle] of [
+    ["marker email", markerEmail], ["marker raw token", markerToken], ["marker tokenHash", engineRow.tokenHash ?? "<none>"],
+    ["marker tokenPrefix", engineRow.tokenPrefix ?? "<none>"], ["readTokens", "readTokens"], ["tokenHash key", "tokenHash"],
+    ["lastEngine", "lastEngine"], ["assignedTo", "assignedTo"], ["translationStatus", "translationStatus"], ["lastEditedBy", "lastEditedBy"],
+    ["password/hash", "\"hash\""],
+  ] as const) {
+    expect(`AC6/AC8 response JSON contains no ${label}`, full.text.includes(needle), false);
+  }
+  expect("AC6 tenant slug from narrowed tenant", a.tenant, { slug: "dtw" });
+  expect("AC6 scalar fields", [a.id, a.dek, a.readMin, a.views, a.contentType, a.takeaways], [idFull, "cms4 dek", 7, 42, "article", ["Take one", "Take two"]]);
+  expect("AC6 pillar/subSection/tags reduced to {slug,title}", [Object.keys((a.pillar as Doc) ?? {}).sort(), a.subSection, a.tags],
+    [["slug", "title"], { slug: `cms4-sub-${stamp}`, title: "CMS4 Sub" }, [{ slug: `cms4-tag-${stamp}`, title: "CMS4 Tag" }]]);
+  expect("AC6 author/coAuthors reduced to {name,role}", [a.author, a.coAuthors],
+    [{ name: "CMS-4 Probe Author", role: "Probe Desk" }, [{ name: "CMS-4 Probe CoAuthor", role: null }]]);
+  expect("AC18/AC19 bodyState ok for a convertible body", a.bodyState, "ok");
+  expect("AC7 bodyMarkdown has no javascript: (any case, incl. SQL-injected leading-space variant)", /javascript:/i.test(mdOut), false);
+  expect("AC7 bodyMarkdown has no vbscript: / data:text", /vbscript:|data:text/i.test(mdOut), false);
+  expect("AC7 safe link kept", mdOut.includes("[safe link](https://example.com/safe)"), true);
+  obs("AC7 neutralised links", mdOut.split("\n").filter((l) => l.includes("danger")));
+  expect("AC8 relationship nodes export as '{relationTo} relation to {id}' only", [mdOut.includes(`users relation to ${user.id}`), mdOut.includes(`content-engines relation to ${engine.id}`)], [true, true]);
+  expect("AC9 (a) body Upload node → real media URL, no placeholder", [mdOut.includes(`![media:${media.id}]`), mdOut.includes(`](${media.url})`)], [false, true]);
+  expect("GFM heading / lists / quote / emphasis", [mdOut.includes("## CMS4 heading"), mdOut.includes("1. First"), mdOut.includes("- Bullet"), mdOut.includes("> Quoted line."), mdOut.includes("**bold**"), mdOut.includes("*italic*")], [true, true, true, true, true, true]);
+  const hero = a.heroImage as Doc | null;
+  expect("AC10 (b) heroImage populated {url,alt,caption,credit}", hero && [Object.keys(hero).sort(), hero.url, hero.alt, hero.caption, hero.credit],
+    [["alt", "caption", "credit", "url"], media.url, "cms4 alt", "cms4 caption", "cms4 credit"]);
+  const video = a.video as Doc | null;
+  if (videoId != null) {
+    expect("AC10 (c) video resolved (attached branch)", video && [typeof video.url, (video.url as string).length > 0, video.mimeType, video.posterUrl ? "poster" : "none", video.caption, video.credit, video.description],
+      ["string", true, "video/mp4", "poster", "vcap", "vcred", "vdesc"]);
+  } else {
+    expect("AC10 (c) video fixture could be created (attached branch)", videoId != null, true);
+  }
+
+  // AC11 + AC18 — hidden article: pillar/author NULLed by SQL, nothing else set, body null.
+  const h = ((await get(idHidden, "dtw")).body.article ?? {}) as Doc;
+  expect("AC11 absent relations → null / []", [h.pillar, h.subSection, h.author, h.coAuthors, h.tags, h.heroImage, h.video, h.takeaways],
+    [null, null, null, [], [], null, null, []]);
+  expect("AC10 (c) video absent branch → null (no throw)", h.video, null);
+  expect("AC18 body null → 200, bodyMarkdown '', bodyState empty", [h.bodyMarkdown, h.bodyState], ["", "empty"]);
+  const er = await get(idEmptyRoot, "dtw");
+  expect("AC18 empty-root body → 200 empty", [er.status, (er.body.article as Doc)?.bodyMarkdown, (er.body.article as Doc)?.bodyState], [200, "", "empty"]);
+
+  // AC19 over the real route — an unregistered node type stored via raw SQL.
+  const errBefore = await logCount("integration_error");
+  const un = await get(idUnknownNode, "dtw");
+  const ua = (un.body.article ?? {}) as Doc;
+  obs("AC19 route unknown-node result", { status: un.status, bodyState: ua.bodyState });
+  // convertLexicalToMarkdown swallows this parse failure (console.error) and returns "";
+  // the wrapper must still report it as an error, never as an empty "ok" body.
+  expect("AC19 route: unregistered node type → bodyState error (not a silent empty ok)", ua.bodyState, "error");
+  if (ua.bodyState === "error") {
+    expect("AC19 route: unconvertible body → 200, '' , error, other fields intact", [un.status, ua.bodyMarkdown, ua.workflowStatus, Object.keys(ua).sort()], [200, "", "published", DETAIL_KEYS]);
+    const errRows = (await payload.find({ collection: "activityLog", where: { eventType: { equals: "integration_error" } }, sort: "-id", limit: 1, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+    expect("AC19 route: integration_error logged (+1)", (await logCount("integration_error")) - errBefore, 1);
+    obs("AC19 route: logged detail", errRows[0]?.detail);
+    expect("AC19 route: log detail has no token / body text", JSON.stringify(errRows[0]?.detail ?? {}).includes(t.read), false);
+  } else {
+    expect("AC19 route: unconvertible body never 500", un.status, 200);
+  }
+
+  console.log(`\n[check4] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(state.failures === 0 ? 0 : 1);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -1463,10 +1843,14 @@ const run = flag("setup")
               ? setup3
               : flag("check3")
                 ? check3
-                : null;
+                : flag("setup4")
+                  ? setup4
+                  : flag("check4")
+                    ? check4
+                    : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only]",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only]",
   );
   process.exit(2);
 }
