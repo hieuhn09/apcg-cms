@@ -30,6 +30,11 @@ import { scopedFindMultiTenant, HubPageOutOfRangeError } from "../src/lib/hub-sc
 // does not exist yet (`comparatorFor` before D14) would be a load-time
 // SyntaxError and take the whole probe down. Feature-detect instead.
 import * as hubScoped from "../src/lib/hub-scoped";
+// CMS-3 (--setup3 / --check3).
+import { readFileSync, writeFileSync } from "node:fs";
+import { sql } from "@payloadcms/db-postgres";
+import { isValidTransition } from "../src/lib/hub-transition";
+import { ARTICLE_STATUSES, type ArticleStatus } from "../src/lib/constants";
 
 const HUB_ENGINE_NAME = "apcghub-read";
 const BASE = process.env.HUB_PROBE_BASE ?? "http://localhost:3000";
@@ -1013,6 +1018,435 @@ async function check2() {
   process.exit(state.failures === 0 ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CMS-3 (APCGHub P4) — the hub WRITE route POST /api/hub/articles/{id}/status.
+// DISPOSABLE POSTGRES ONLY (it forces a column to NULL with raw SQL and writes
+// articles). Run after the CMS-1/CMS-2 modes; independent of their fixtures.
+//
+//   --setup3 --out <file>   create/refresh 3 engines (hubWrite true / false /
+//                           genuinely NULL), all hubRead:true, granted dtw+gcv
+//                           only. Tokens go to <file> (mode 600), NEVER stdout.
+//   --check3 --in <file>    real HTTP against the dev server (HUB_PROBE_BASE) for
+//                           AC1–AC12, AC21, AC22 + Local API for AC18–AC20, AC23.
+//                           Creates FRESH articles every run (unique slugs), so
+//                           it can be re-run under each red-first mutation.
+//            [--hooks-only] only the Local-API shared-hook sections (AC18–AC20,
+//                           AC23) — no dev server needed; prints OBS lines meant
+//                           to be diffed between the pre-CMS-3 hook and this one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const W_ENGINES = { write: "apcghub-cms3-write", nowrite: "apcghub-cms3-nowrite", nullwrite: "apcghub-cms3-nullwrite" } as const;
+type W_Tokens = { write: string; nowrite: string; nullwrite: string };
+
+function rawDb(payload: P) {
+  // Payload.db is typed as the base adapter (no `.drizzle`); same cast as
+  // scripts/wad-audit-fixes{,-pass2,-pass3}.ts.
+  return (payload.db as unknown as { drizzle: { execute: (q: unknown) => Promise<unknown> } }).drizzle;
+}
+
+async function forceHubWriteNull(payload: P, engineId: number): Promise<void> {
+  const db = rawDb(payload);
+  await db.execute(sql`UPDATE content_engines SET hub_write = NULL WHERE id = ${engineId}`);
+  const res = (await db.execute(
+    sql`SELECT (hub_write IS NULL) AS is_null FROM content_engines WHERE id = ${engineId}`,
+  )) as { rows?: { is_null: boolean }[] };
+  if (res.rows?.[0]?.is_null !== true) {
+    console.error(`[setup3] FATAL: content_engines.hub_write is not NULL for engine ${engineId} — AC22 fixture invalid`);
+    process.exit(1);
+  }
+}
+
+async function engineIdByName(payload: P, name: string): Promise<number | undefined> {
+  const r = await payload.find({ collection: "content-engines", where: { name: { equals: name } }, limit: 1, depth: 0, overrideAccess: true });
+  return (r.docs[0] as unknown as { id: number } | undefined)?.id;
+}
+
+async function setup3() {
+  const out = arg("out");
+  if (!out) throw new Error("--out <file> required (tokens are written there, never printed)");
+  const payload = await getPayload({ config });
+  const tenants = await tenantsBySlug(payload);
+  const grant = [need(tenants, "dtw"), need(tenants, "gcv")];
+  need(tenants, "wad"); // must exist, deliberately NOT granted (AC8)
+
+  const tokens = {} as W_Tokens;
+  const flags: Record<keyof W_Tokens, boolean> = { write: true, nowrite: false, nullwrite: false };
+  for (const key of Object.keys(W_ENGINES) as (keyof W_Tokens)[]) {
+    const name = W_ENGINES[key];
+    const token = randomBytes(24).toString("hex");
+    tokens[key] = token;
+    const data = { rawToken: token, hubRead: true, hubWrite: flags[key], status: "active", allowedTenants: grant };
+    const id = await engineIdByName(payload, name);
+    if (id != null) {
+      await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    } else {
+      await payload.create({
+        collection: "content-engines",
+        overrideAccess: true,
+        data: { name, engineType: "other", allowedActions: ["import"], ...data } as never,
+      });
+    }
+    console.log(`[setup3] engine ${name}: hubRead=true hubWrite=${key === "nullwrite" ? "NULL (forced below)" : flags[key]}`);
+  }
+  // create() fills defaultValue:false for an absent checkbox, so NULL needs raw SQL.
+  const nullId = await engineIdByName(payload, W_ENGINES.nullwrite);
+  if (nullId == null) throw new Error("nullwrite engine missing after create");
+  await forceHubWriteNull(payload, nullId);
+  console.log(`[setup3] engine ${W_ENGINES.nullwrite}: SELECT hub_write IS NULL → true`);
+
+  writeFileSync(out, JSON.stringify(tokens), { mode: 0o600 });
+  console.log(`[setup3] tokens written to ${out} (not printed). grant = dtw,gcv (wad deliberately excluded)`);
+  process.exit(0);
+}
+
+async function check3() {
+  const inFile = arg("in");
+  const hooksOnly = flag("hooks-only");
+  const tokens = inFile ? (JSON.parse(readFileSync(inFile, "utf8")) as W_Tokens) : undefined;
+  if (!hooksOnly && !tokens) throw new Error("--in <file from --setup3> required (or --hooks-only)");
+  const payload = await getPayload({ config });
+  const tenants = await tenantsBySlug(payload);
+  const dtw = need(tenants, "dtw");
+  const gcv = need(tenants, "gcv");
+  const { state, expect } = makeExpect();
+  const obs = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
+  const stamp = Date.now().toString(36);
+
+  const admin = (
+    await payload.find({ collection: "users", where: { role: { equals: "systemAdmin" } }, limit: 1, depth: 0, overrideAccess: true })
+  ).docs[0] as unknown as (Doc & { id: number }) | undefined;
+  if (!admin) throw new Error("no systemAdmin user — run `npm run db:seed` first");
+
+  const firstPillar = async (tenantId: number) => {
+    const p = (await payload.find({ collection: "pillars", where: { tenant: { equals: tenantId } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as { id: number } | undefined;
+    if (!p) throw new Error(`tenant ${tenantId} has no pillar`);
+    return p.id;
+  };
+  const defs = new Map<number, { pillar: number; author: number }>();
+  for (const t of [dtw, gcv]) {
+    defs.set(t, { pillar: await firstPillar(t), author: await ensureAuthor(payload, t, "cms3-probe-author", "CMS-3 Probe Author") });
+  }
+
+  type Shape = "imported" | "natural";
+  const mk = async (tenantId: number, key: string, shape: Shape, workflowStatus: ArticleStatus, context?: Record<string, unknown>) => {
+    const d = defs.get(tenantId)!;
+    const data = {
+      tenant: tenantId,
+      title: `CMS3 ${key} ${stamp}`,
+      dek: `dek ${key}`,
+      slug: `cms3-${key}-${stamp}`,
+      pillar: d.pillar,
+      author: d.author,
+      workflowStatus,
+      publishedAt: iso(2026, 9, 1),
+      ...(shape === "natural" ? { _status: "published" } : {}),
+    };
+    const created = (await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      locale: "en",
+      ...(shape === "imported" ? { draft: true } : {}),
+      ...(context ? { context } : {}),
+      data: data as never,
+    })) as unknown as { id: number };
+    return created.id;
+  };
+  const read = async (id: number) =>
+    (await payload.findByID({ collection: "articles", id, depth: 0, locale: "en", overrideAccess: true })) as unknown as Doc;
+  const snap = async (id: number) => {
+    const d = await read(id);
+    return {
+      workflowStatus: d.workflowStatus,
+      _status: d._status,
+      version: d.version,
+      title: d.title,
+      dek: d.dek,
+      pillar: d.pillar,
+      author: d.author,
+      publishedAt: d.publishedAt,
+      editedByHuman: d.editedByHuman ?? null,
+    };
+  };
+  const actRows = async (id: number) =>
+    (
+      await payload.find({
+        collection: "activityLog",
+        where: { and: [{ targetCollection: { equals: "articles" } }, { targetId: { equals: String(id) } }] },
+        sort: "id",
+        pagination: false,
+        depth: 0,
+        overrideAccess: true,
+      })
+    ).docs as unknown as Doc[];
+  const jobCount = async (id: number) =>
+    (await payload.count({ collection: "translationJobs", where: { article: { equals: id } }, overrideAccess: true })).totalDocs;
+  const publicVisible = async (tenantId: number, id: number) => {
+    const d = await read(id);
+    // Same where-clause as /api/public/articles/[slug] (tenant-scoped + workflowStatus).
+    const r = await payload.find({
+      collection: "articles",
+      where: { and: [{ tenant: { equals: tenantId } }, { slug: { equals: d.slug } }, { workflowStatus: { equals: "published" } }] },
+      limit: 1,
+      depth: 0,
+      overrideAccess: true,
+    });
+    return r.docs.length === 1;
+  };
+  /** A human Payload-admin Publish/Publish-changes save: real `user`, access
+   *  enforced, `_status:'published'`, the workflowStatus select posted UNCHANGED,
+   *  and every content field posted with its STORED value (not a sparse patch). */
+  const humanPublishSave = async (id: number, extra: Doc = {}) => {
+    const d = await read(id);
+    return payload.update({
+      collection: "articles",
+      id,
+      locale: "en",
+      overrideAccess: false,
+      user: admin as never,
+      data: { title: d.title, dek: d.dek, body: d.body, slug: d.slug, workflowStatus: d.workflowStatus, _status: "published", ...extra } as never,
+    });
+  };
+  /** A translation engine completing every target locale at the CURRENT version
+   *  (mirrors /api/engine/translation's sidecar write). */
+  const completeTranslations = async (id: number) => {
+    const d = await read(id);
+    const version = d.version as number;
+    const rows = (["vi", "id"] as const).map((locale) => ({ locale, state: "machine_translated", sourceVersionAtTranslation: version }));
+    await payload.update({
+      collection: "articles",
+      id,
+      overrideAccess: true,
+      data: { translationStatus: rows } as never,
+      context: { translationWrite: true, skipTranslationEnqueue: true },
+    });
+  };
+
+  // ── Pure: transition table (hub-transition.ts) ──
+  const allowed = new Set(["published>archived", "hidden>published", "archived>published"]);
+  const bad: string[] = [];
+  for (const f of ARTICLE_STATUSES) for (const t of ARTICLE_STATUSES) {
+    if (isValidTransition(f, t) !== allowed.has(`${f}>${t}`)) bad.push(`${f}>${t}`);
+  }
+  expect("T-PURE isValidTransition matches exactly {published→archived, hidden→published, archived→published}", bad, []);
+
+  // ── AC18–AC20: shared hook, NON-hub write contexts, via Local API ──
+  // AC18 human write (req.user present).
+  const h = await mk(dtw, "h18", "natural", "published");
+  const h0 = await snap(h);
+  await payload.update({ collection: "articles", id: h, locale: "en", overrideAccess: false, user: admin as never, data: { title: `CMS3 h18 edited ${stamp}`, _status: "published" } as never });
+  const h1 = await snap(h);
+  const hDoc = await read(h);
+  obs("AC18 human edit: versionDelta,editedByHuman,lastEditedByIsAdmin,workflowStatus", [(h1.version as number) - (h0.version as number), h1.editedByHuman, hDoc.lastEditedBy === admin.id, h1.workflowStatus]);
+  expect("AC18 human edit → editedByHuman true, lastEditedBy = admin, version bumped", [h1.editedByHuman, hDoc.lastEditedBy === admin.id, (h1.version as number) > (h0.version as number)], [true, true, true]);
+  // AC18 + PR #20: human Unpublish → hidden, then Publish-save revives → published; actorType human.
+  const r20 = await mk(dtw, "r20", "natural", "published");
+  const beforeR20 = (await actRows(r20)).length;
+  await payload.update({ collection: "articles", id: r20, locale: "en", overrideAccess: false, user: admin as never, data: { _status: "draft" } as never });
+  const r20a = await snap(r20);
+  await humanPublishSave(r20);
+  const r20b = await snap(r20);
+  const r20rows = (await actRows(r20)).slice(beforeR20).filter((r) => r.eventType !== "translation_queued");
+  obs("AC18 PR#20 round trip: afterUnpublish,afterPublishSave,events", [r20a.workflowStatus, r20b.workflowStatus, r20rows.map((r) => `${r.eventType}/${r.actorType}/${r.fromStatus}>${r.toStatus}`)]);
+  expect("AC18 PR#20 human Unpublish → hidden, human Publish-save → published, both actorType human", [r20a.workflowStatus, r20b.workflowStatus, r20rows.map((r) => r.actorType)], ["hidden", "published", ["human", "human"]]);
+
+  // AC19 engine intake write (context.engineWrite) — create, then refreshExisting-shaped update.
+  const writeEngineId = (await engineIdByName(payload, W_ENGINES.write)) ?? null;
+  if (writeEngineId == null) throw new Error("run --setup3 first (its write engine is the provenance id here)");
+  const eng = writeEngineId;
+  const e = await mk(dtw, "e19", "natural", "published", { engineWrite: true, engineId: eng, processingVersion: "p-1" });
+  const eCreate = (await actRows(e)).find((r) => r.eventType === "article_created");
+  const e0 = await snap(e);
+  await payload.update({
+    collection: "articles",
+    id: e,
+    locale: "en",
+    overrideAccess: true,
+    context: { engineWrite: true, engineId: eng, processingVersion: "p-2" },
+    data: { title: `CMS3 e19 refreshed ${stamp}`, engineSourceUrl: `https://example.invalid/${stamp}` } as never,
+  });
+  const e1 = await snap(e);
+  const eDoc = await read(e);
+  obs("AC19 engine: createActorType,editedByHuman,lastEngineMatches,processingVersion,versionDelta,workflowStatus", [eCreate?.actorType, e1.editedByHuman, eDoc.lastEngine === eng, eDoc.processingVersion, (e1.version as number) - (e0.version as number), e1.workflowStatus]);
+  expect("AC19 engine refresh → actorType engine, editedByHuman false, lastEngine/processingVersion stamped, workflowStatus untouched", [eCreate?.actorType, e1.editedByHuman, eDoc.lastEngine === eng, eDoc.processingVersion, e1.workflowStatus], ["engine", false, true, "p-2", "published"]);
+
+  // AC20 translation write (context.translationWrite) — early return before the version bump.
+  const t0 = await snap(e);
+  await completeTranslations(e);
+  const t1 = await snap(e);
+  obs("AC20 translation write: versionDelta,editedByHuman", [(t1.version as number) - (t0.version as number), t1.editedByHuman]);
+  expect("AC20 translation write → version unchanged, editedByHuman unchanged", [t1.version, t1.editedByHuman], [t0.version, t0.editedByHuman]);
+
+  // ── AC23 (Local API part): hub-archived article is NOT revived by a human Publish-save ──
+  // Control first: a naturally hidden article IS revived by the identical save (PR #20).
+  const ctl = await mk(dtw, "c23", "natural", "published");
+  await payload.update({ collection: "articles", id: ctl, locale: "en", overrideAccess: false, user: admin as never, data: { _status: "draft" } as never });
+  const ctlHidden = (await snap(ctl)).workflowStatus;
+  await humanPublishSave(ctl);
+  const ctlAfter = await snap(ctl);
+  expect("AC23 control: naturally hidden article + human Publish-save → published", [ctlHidden, ctlAfter.workflowStatus], ["hidden", "published"]);
+  // Main case: archive it exactly as the route does (Local API, same context), then the same save.
+  const a23 = await mk(dtw, "a23", "natural", "published");
+  await payload.update({
+    collection: "articles",
+    id: a23,
+    overrideAccess: true,
+    data: { workflowStatus: "archived" } as never,
+    context: { hubWrite: { actor: { email: "probe@example.com", role: "editor" }, reason: "AC23 probe hide" }, engineId: eng },
+  });
+  const a23Archived = await snap(a23);
+  await humanPublishSave(a23);
+  const a23After = await snap(a23);
+  const a23Doc = await read(a23);
+  const outdated = ((a23Doc.translationStatus ?? []) as Doc[]).filter((r) => r.state === "outdated").length;
+  expect("AC23 hub-archived article + human Publish-save → STAYS archived, _status published, no row marked outdated (fixture mirrors content)", [a23Archived.workflowStatus, a23After.workflowStatus, a23After._status, outdated], ["archived", "archived", "published", 0]);
+
+  if (hooksOnly) {
+    console.log(`\n[check3 --hooks-only] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+  if (!tokens || writeEngineId == null) throw new Error("run --setup3 first");
+  const nullEngineId = (await engineIdByName(payload, W_ENGINES.nullwrite))!;
+
+  // ── HTTP ──
+  const post = async (id: number | string, body: unknown, bearer: string | undefined = tokens.write) => {
+    const res = await fetch(`${BASE}/api/hub/articles/${id}/status`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(bearer ? { authorization: `Bearer ${bearer}` } : {}) },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+    const text = await res.text();
+    let json: Doc = {};
+    try {
+      json = JSON.parse(text) as Doc;
+    } catch {
+      json = { __raw: text.slice(0, 200) };
+    }
+    return { status: res.status, body: json, text };
+  };
+  const actor = { email: "operator@example.com", role: "editor", id: "hub-user-7" };
+  const req = (tenant: string, to: string, expectedStatus: string, reason = "probe reason ok", extra: Doc = {}) => ({ tenant, to, expectedStatus, reason, actor, ...extra });
+  /** A call that must be refused: status/body as expected, article untouched, 0 new ActivityLog rows. */
+  const refused = async (label: string, id: number, body: unknown, wantStatus: number, wantCode: string, bearer?: string) => {
+    const before = await snap(id);
+    const rowsBefore = (await actRows(id)).length;
+    const r = await post(id, body, bearer);
+    const after = await snap(id);
+    const rowsAfter = (await actRows(id)).length;
+    expect(`${label} → ${wantStatus} ${wantCode}, no write, no ActivityLog row`, [r.status, r.body.status, after, rowsAfter - rowsBefore], [wantStatus, wantCode, before, 0]);
+    return r;
+  };
+  // jsonb does not keep key order — compare structure, not serialization.
+  const canon = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v as Doc).sort().map((k) => [k, canon((v as Doc)[k])])) : v;
+  /** A successful hub call: 200 + response contract + exactly ONE status ActivityLog row with actor/reason.
+   *  `newJobs` = translation jobs this call may legitimately create: 0, except an article going live for
+   *  the FIRST time (never published → no job ever queued), where enqueueTranslations queues one per target
+   *  locale and logs one `translation_queued` row per job (pre-existing behavior, not hub-specific). */
+  const hub = async (label: string, tenantSlug: string, tenantId: number, id: number, to: "archived" | "published", reason = "probe reason ok", newJobs = 0) => {
+    const before = await snap(id);
+    const jobsBefore = await jobCount(id);
+    const rowsBefore = (await actRows(id)).length;
+    const r = await post(id, req(tenantSlug, to, before.workflowStatus as string, reason));
+    const after = await snap(id);
+    const allNew = (await actRows(id)).slice(rowsBefore);
+    const newRows = allNew.filter((r) => r.eventType !== "translation_queued");
+    const queuedRows = allNew.length - newRows.length;
+    expect(`${label} → 200 {ok,id,tenant,from,to,workflowStatus}`, r.body, { ok: true, id, tenant: tenantSlug, from: before.workflowStatus, to, workflowStatus: to });
+    expect(`${label} → only workflowStatus changed (_status/version/title/dek/pillar/author/publishedAt/editedByHuman identical)`, after, { ...before, workflowStatus: to });
+    const row = newRows[0] ?? {};
+    const actorEngine = typeof row.actorEngine === "object" && row.actorEngine ? (row.actorEngine as Doc).id : row.actorEngine;
+    expect(`${label} → exactly 1 status ActivityLog row: eventType/actorType/actorEngine/from/to/detail`, [newRows.length, row.eventType, row.actorType, actorEngine, row.fromStatus, row.toStatus, canon(row.detail)], [1, to === "archived" ? "article_archived" : "article_published", "engine", writeEngineId, before.workflowStatus, to, canon({ via: "hub", actor, reason: reason.trim() })]);
+    expect(`${label} → public visibility = (workflowStatus === published)`, await publicVisible(tenantId, id), to === "published");
+    const jobsDelta = (await jobCount(id)) - jobsBefore;
+    expect(`${label} → new translation_jobs = ${newJobs} (and one translation_queued row per job, no other extra row)`, [jobsDelta, queuedRows], [newJobs, newJobs]);
+    return r;
+  };
+
+  // Fixtures on dtw (granted) + one on gcv (granted; used for the cross-tenant 404).
+  const imp = await mk(dtw, "imp", "imported", "published"); // AC1: _status draft + workflowStatus published
+  const nat = await mk(dtw, "nat", "natural", "published"); // AC2 / AC6
+  await completeTranslations(nat); // translations up to date at the CURRENT version
+  const hid = await mk(dtw, "hid", "natural", "published");
+  await payload.update({ collection: "articles", id: hid, locale: "en", overrideAccess: false, user: admin as never, data: { _status: "draft" } as never }); // native Unpublish → hidden
+  const arc = await mk(dtw, "arc", "natural", "archived");
+  const drf = await mk(dtw, "drf", "imported", "draft");
+  const other = await mk(gcv, "gcv", "natural", "published");
+  expect("fixtures: imp/nat/hid/arc/drf states", [(await snap(imp))._status, (await snap(nat))._status, (await snap(hid)).workflowStatus, (await snap(arc)).workflowStatus, (await snap(drf)).workflowStatus], ["draft", "published", "hidden", "archived", "draft"]);
+
+  // AC22 first (before any call stamps lastSeen on that engine): hubWrite genuinely NULL → 403.
+  await forceHubWriteNull(payload, nullEngineId);
+  expect("AC22 fixture: content_engines.hub_write IS NULL (hard-checked in forceHubWriteNull)", true, true);
+  await refused("AC22 hubWrite NULL key", nat, req("dtw", "archived", "published"), 403, "forbidden", tokens.nullwrite);
+  // AC7: hubRead but hubWrite false.
+  await refused("AC7 hubWrite false key", nat, req("dtw", "archived", "published"), 403, "forbidden", tokens.nowrite);
+  // 401s.
+  await refused("401 no bearer", nat, req("dtw", "archived", "published"), 401, "unauthorized", "");
+  await refused("401 junk bearer", nat, req("dtw", "archived", "published"), 401, "unauthorized", "junk-token");
+
+  // AC21: unknown keys (top-level and inside actor).
+  await refused("AC21 unknown top-level key", nat, req("dtw", "archived", "published", "probe reason ok", { title: "pwned" }), 400, "bad_request");
+  await refused("AC21 unknown actor key", nat, { ...req("dtw", "archived", "published"), actor: { ...actor, isAdmin: true } }, 400, "bad_request");
+  // Body shape.
+  await refused("400 tenant missing", nat, { to: "archived", expectedStatus: "published", reason: "probe reason ok", actor }, 400, "bad_request");
+  await refused("400 tenant empty", nat, req("", "archived", "published"), 400, "bad_request");
+  await refused("400 tenant blank", nat, req("   ", "archived", "published"), 400, "bad_request");
+  await refused("400 tenant not a string", nat, req(["dtw"] as never, "archived", "published"), 400, "bad_request");
+  await refused("400 invalid JSON", nat, "{not json", 400, "bad_request");
+  await refused("400 array body", nat, [req("dtw", "archived", "published")], 400, "bad_request");
+  await refused("400 expectedStatus bogus", nat, req("dtw", "archived", "bogus"), 400, "bad_request");
+  await refused("400 actor missing email", nat, { ...req("dtw", "archived", "published"), actor: { role: "editor" } }, 400, "bad_request");
+  await refused("400 actor missing role", nat, { ...req("dtw", "archived", "published"), actor: { email: "x@example.com" } }, 400, "bad_request");
+  // AC12: reason 5–500 after trim.
+  await refused("AC12 reason 4 chars", nat, req("dtw", "archived", "published", "abcd"), 400, "bad_request");
+  await refused("AC12 reason 4 chars padded", nat, req("dtw", "archived", "published", "   abcd   "), 400, "bad_request");
+  await refused("AC12 reason 501 chars", nat, req("dtw", "archived", "published", "x".repeat(501)), 400, "bad_request");
+  await refused("AC12 reason missing", nat, { tenant: "dtw", to: "archived", expectedStatus: "published", actor }, 400, "bad_request");
+
+  // AC8: tenant outside the grant → 403 with the (non-empty) allowed list.
+  const t8 = await refused("AC8 tenant wad (not granted)", nat, req("wad", "archived", "published"), 403, "forbidden");
+  expect("AC8 allowedTenants lists the grant, never empty", t8.body.allowedTenants, ["dtw", "gcv"]);
+  // AC9: article in another tenant ≡ nonexistent article, byte for byte.
+  const r9a = await refused("AC9 gcv article addressed as dtw", other, req("dtw", "archived", "published"), 404, "not_found");
+  const r9b = await post(2147483000, req("dtw", "archived", "published"));
+  const r9c = await post("abc", req("dtw", "archived", "published"));
+  expect("AC9 404 bodies byte-identical (other tenant / nonexistent id / non-numeric id)", [r9a.text === r9b.text, r9a.text === r9c.text, r9b.status, r9c.status], [true, true, 404, 404]);
+
+  // AC11: every pair outside the table → 422 (expectedStatus always correct).
+  await refused("AC11 published→published", nat, req("dtw", "published", "published"), 422, "invalid_transition");
+  await refused("AC11 hidden→hidden", hid, req("dtw", "hidden", "hidden"), 422, "invalid_transition");
+  await refused("AC11 archived→archived", arc, req("dtw", "archived", "archived"), 422, "invalid_transition");
+  await refused("AC11 draft→archived", drf, req("dtw", "archived", "draft"), 422, "invalid_transition");
+  await refused("AC11 draft→published", drf, req("dtw", "published", "draft"), 422, "invalid_transition");
+  await refused("AC11 published→hidden", nat, req("dtw", "hidden", "published"), 422, "invalid_transition");
+  await refused("AC11 hidden→archived", hid, req("dtw", "archived", "hidden"), 422, "invalid_transition");
+  await refused("AC11 to=bogus", nat, req("dtw", "bogus", "published"), 422, "invalid_transition");
+  // AC10: valid transition, stale expectedStatus → 409 + real currentStatus.
+  const r10 = await refused("AC10 expectedStatus stale", arc, req("dtw", "published", "hidden"), 409, "conflict");
+  expect("AC10 409 carries the real currentStatus", r10.body.currentStatus, "archived");
+
+  // AC1 / AC2 / AC3 / AC4 / AC5 / AC6 — the happy paths.
+  await hub("AC1 Ẩn imported-shape (_status draft)", "dtw", dtw, imp, "archived");
+  await hub("AC3 Đăng lại archived→published (imported-shape)", "dtw", dtw, imp, "published", "abcde"); // reason exactly 5
+  const natV = (await snap(nat)).version;
+  const natJobs = await jobCount(nat);
+  await hub("AC2 Ẩn natural (_status published)", "dtw", dtw, nat, "archived", "y".repeat(500)); // reason exactly 500
+  await hub("AC3 Đăng lại archived→published (natural, translations current)", "dtw", dtw, nat, "published", "  padded reason  ");
+  expect("AC6 natural article after Ẩn+Đăng lại: version unchanged, 0 new translation_jobs", [(await snap(nat)).version, await jobCount(nat)], [natV, natJobs]);
+  await hub("AC3 Đăng lại hidden→published (native-unpublished article)", "dtw", dtw, hid, "published");
+  // Created archived = never published, so no translation was ever queued: going live for the first
+  // time queues vi + id exactly as any first publication does (version still unchanged — see hub()).
+  await hub("AC3 Đăng lại archived→published (created archived, first time live)", "dtw", dtw, arc, "published", "probe reason ok", 2);
+
+  // AC23 over the real route: hub Ẩn, then a human Publish-save must not revive it.
+  const a23h = await mk(dtw, "a23h", "natural", "published");
+  await hub("AC23 route Ẩn", "dtw", dtw, a23h, "archived");
+  await humanPublishSave(a23h);
+  expect("AC23 route-archived + human Publish-save → stays archived, not public", [(await snap(a23h)).workflowStatus, await publicVisible(dtw, a23h)], ["archived", false]);
+
+  console.log(`\n[check3] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(state.failures === 0 ? 0 : 1);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -1025,10 +1459,14 @@ const run = flag("setup")
           ? nullorder
           : flag("check2")
             ? check2
-            : null;
+            : flag("setup3")
+              ? setup3
+              : flag("check3")
+                ? check3
+                : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>]",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only]",
   );
   process.exit(2);
 }

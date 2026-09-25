@@ -139,7 +139,9 @@ export const ContentEngines: CollectionConfig = {
      *     `/admin` is not `/console`.
      *
      * Grants read only. It never widens write access: `authenticateEngine()`
-     * (the intake/translation path) does not read this field at all.
+     * (the intake/translation path) does not read this field at all. The one
+     * hub WRITE route (`POST /api/hub/articles/{id}/status`, CMS-3) is gated by
+     * the separate `hubWrite` field below, on top of this one.
      */
     {
       name: "hubRead",
@@ -148,6 +150,25 @@ export const ContentEngines: CollectionConfig = {
       admin: {
         description:
           "Allow this engine to use the read-only cross-tenant /api/hub/* routes (reads every tenant in Allowed publications in one call). Does not grant any write.",
+      },
+    },
+    /**
+     * hubWrite — grants the ONE hub write route, `POST /api/hub/articles/{id}/status`
+     * (APCGHub P4 / CMS-3): hide (published → archived) or republish
+     * (hidden|archived → published) a single article's `workflowStatus`, one
+     * tenant per call. Checked in `src/lib/hub-write-auth.ts` ON TOP OF `hubRead`
+     * (a write key must also pass the read handshake), with strict `=== true`, so
+     * NULL/false/absent all deny. Separate boolean for the same reasons as
+     * `hubRead` above (not an ENGINE_ACTIONS value, invisible to `/console`).
+     * Never read by `authenticateEngine()` (intake/translation).
+     */
+    {
+      name: "hubWrite",
+      type: "checkbox",
+      defaultValue: false,
+      admin: {
+        description:
+          "Allow this engine to hide / republish a single article via the hub write route (/api/hub/articles/{id}/status). Requires Hub read as well. Status only — never edits content.",
       },
     },
     { name: "rateLimitPerMin", type: "number", admin: { description: "Optional. Empty = unlimited." } },

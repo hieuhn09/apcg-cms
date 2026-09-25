@@ -3,14 +3,14 @@ name: context:all-integrations
 description: "API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint"
 keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub
 related: [context:all-database]
-date: 24-09-26
+date: 25-09-26
 metadata:
   read_when: "API contract questions, auth/authorization design, engine intake, cross-tenant read design, or anything bridging into this CMS from outside"
 ---
 
 # Integrations Context
 
-Last updated: 2026-09-24 (APCGHub P4 / CMS-1 — `ENGINE_ACTIONS` 3-consumer citation completed with `actions.ts:48,73`)
+Last updated: 2026-09-25 (APCGHub P4 / CMS-3 — first hub WRITE route `POST /api/hub/articles/{id}/status`, gated by a new `ContentEngines.hubWrite` flag; see §Cross-tenant reads → WRITE subsection). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ENGINE_ACTIONS` 3-consumer citation completed with `actions.ts:48,73`)
 
 This is the canonical API-surface and auth context entrypoint for **apcg-cms** (Central CMS).
 
@@ -326,6 +326,55 @@ adding per-route permissions.
 (unchanged, now a bigger surface — see above). Live-traffic verification of all three routes is
 blocked on the project owner minting a hub credential — as of this pass, `/api/hub/*` has never been
 called outside a local Docker Postgres harness and a clean-clone `vercel-build`.
+
+### WRITE (2026-09-25, APCGHub P4 / CMS-3) — one article's status, one tenant, one call
+
+`POST /api/hub/articles/{id}/status` (`src/app/api/hub/articles/[id]/status/route.ts`) is the first
+and only hub route that writes. It changes ONE article's `workflowStatus` and nothing else:
+
+- **Two operations only** (`src/lib/hub-transition.ts`, pure): "Ẩn"/hide = `published → archived`;
+  "Đăng lại"/republish = `hidden → published` and `archived → published`. Every other pair → 422
+  `invalid_transition`. Hide writes `archived` (not `hidden`) on purpose: since apcg-cms PR #20,
+  `syncNativePublish` revives a `hidden` article when a human clicks Publish/Publish changes in
+  `/admin`, but deliberately not an `archived` one — so a hub-hidden article stays hidden until
+  someone republishes it on purpose (owner decision 25-09-26; pinned by `--check3` AC23 with a
+  naturally-`hidden` control case).
+- **Auth = `hubRead` handshake + a new `ContentEngines.hubWrite` checkbox** (`src/lib/hub-write-auth.ts`,
+  `authenticateHubWriteEngine()` → reuses `authenticateHubEngine()`, then `hubWrite === true`,
+  strict: the column is nullable like `hub_read`, NULL/false/absent all 403 + `engine_action_denied`
+  log with `action:'hub_write'`). `hub-auth.ts` is untouched and still READ ONLY. A key with only
+  `hubRead` can never write.
+- **Tenant = exactly one, named in the body, required non-empty BEFORE any lookup**
+  (`resolveHubWriteTenant`); it deliberately does NOT reuse `narrowHubTenants()` (empty = "all" is
+  right for reads, wrong for a write). Outside the grant → 403 with `allowedTenants` (never empty).
+- **Body is closed**: exactly `{tenant, to, expectedStatus, reason, actor:{email, role, id?}}`;
+  any other key (top level or inside `actor`) → 400. `reason` 5–500 chars after trim.
+- **Not found and "exists in another tenant" return the byte-identical 404 body** (no existence leak).
+- `expectedStatus` ≠ current status → 409 with `currentStatus`. Not atomic (findByID then update —
+  gap `cms3-toctou-findbyid-then-update`).
+- **Write = `payload.update({data:{workflowStatus}, overrideAccess:true, context:{hubWrite:{actor,
+  reason}, engineId}})`** — no `req.user`, no `_status`, no `draft`. Two shared-hook branches in
+  `src/hooks/article-workflow.ts` key off `context.hubWrite`: `articleBookkeeping` returns early
+  (like `translationWrite`/`systemWrite` — no `version` bump, so up-to-date translations are NOT
+  re-queued on republish); `articleActivity` sets `actorType:'engine'` and puts
+  `detail:{via:'hub', actor, reason}` on the ONE status row it already writes (`article_archived` /
+  `article_published`). The route never calls `logActivity` for a success. `actor` is hub-asserted,
+  not verified here (gap `cms3-actor-role-is-hub-asserted`; blocking `viewer` is Hub-3's job).
+- **Behavior worth knowing**: republishing an article that was NEVER published before (e.g. created
+  directly as `archived`) queues its first translation jobs (one per target locale, plus one
+  `translation_queued` ActivityLog row each) — normal first-publication behavior of
+  `enqueueTranslations`, not a hub side effect.
+- Migration `20260925_000000_add_content_engines_hub_write` (hand-written, `boolean` nullable
+  `DEFAULT false`, same shape and same "without it every `content-engines` query fails" warning as
+  `hub_read`). Same deploy rule as CMS-1: Preview shares the Production DB but does not migrate, so
+  this PR's own Preview 500s on every `content-engines` query until merge — do not verify on it.
+- Verified only on a disposable PG16 (`PAYLOAD_DB_PUSH=false`, real migrations) with
+  `scripts/hub-probe.ts --setup3 --out <file>` / `--check3 --in <file> [--hooks-only]` (tokens go to
+  a file, never stdout) plus the unchanged CMS-1/CMS-2 regression modes. Never called against a
+  deployed database; enabling `hubWrite` on the real hub key is an owner decision after merge.
+
+**Still missing after CMS-3:** content edits from the hub, bulk writes, any write other than these
+two status transitions, rate limiting (unchanged).
 
 ---
 

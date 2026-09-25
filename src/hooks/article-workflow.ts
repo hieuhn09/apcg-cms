@@ -33,6 +33,9 @@ interface EngineContext {
   engineWrite?: boolean;
   engineId?: number | string;
   processingVersion?: string;
+  /** Set only by the hub write route (POST /api/hub/articles/{id}/status,
+   *  APCGHub P4 / CMS-3): hub-asserted operator + mandatory reason. */
+  hubWrite?: { actor: { email: string; role: string; id?: number | string }; reason: string };
 }
 
 function engineCtx(context: unknown): EngineContext {
@@ -185,6 +188,11 @@ export const articleBookkeeping: CollectionBeforeChangeHook = ({
   // are metadata-only sweeps: same exemption, or every sweep would inflate
   // `version` and stamp `lastEditedBy` on articles nobody touched.
   if ((req.context as { systemWrite?: boolean })?.systemWrite) return data;
+  // Hub status-only writes (CMS-3: hide / republish one article's
+  // workflowStatus) change no content: same exemption. Bumping `version` here
+  // would make enqueueTranslations treat up-to-date translations as stale and
+  // re-queue them on republish, with no word of the article changed.
+  if ((req.context as { hubWrite?: unknown })?.hubWrite) return data;
 
   const ctx = engineCtx(req.context);
   const isHuman = Boolean(req.user);
@@ -232,7 +240,8 @@ export const articleActivity: CollectionAfterChangeHook = async ({
   operation,
 }) => {
   const ctx = engineCtx(req.context);
-  const actorType = req.user ? "human" : ctx.engineWrite ? "engine" : "system";
+  // A hub write has an authenticated engine key behind it → "engine".
+  const actorType = ctx.hubWrite ? "engine" : req.user ? "human" : ctx.engineWrite ? "engine" : "system";
   const tenantId = toId(doc.tenant);
 
   const prev = previousDoc?.workflowStatus as string | undefined;
@@ -269,6 +278,11 @@ export const articleActivity: CollectionAfterChangeHook = async ({
       targetId: doc.id,
       fromStatus: prev,
       toStatus: next,
+      // Hub writes carry who clicked and why — onto THIS row, so one hub call
+      // still yields exactly one ActivityLog row.
+      detail: ctx.hubWrite
+        ? { via: "hub", actor: ctx.hubWrite.actor, reason: ctx.hubWrite.reason }
+        : undefined,
     });
   }
   return doc;
