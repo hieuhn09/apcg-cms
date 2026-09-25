@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-09-25 (APCGHub P4 / CMS-3 — first hub WRITE route `POST /api/hub/articles/{id}/status` (hide = published→archived, republish = hidden|archived→published), gated by the new `ContentEngines.hubWrite` flag on top of `hubRead`; see **Key Patterns** and `integrations/all-integrations.md` §Cross-tenant reads → WRITE)
+Last updated: 2026-09-25 (APCGHub P4 / CMS-4 — read route `GET /api/hub/articles/{id}?tenant=` returning ONE article in full (body as Markdown + `bodyState`, every `workflowStatus`), `hubRead` only; see `integrations/all-integrations.md` §Cross-tenant reads → READ ONE ARTICLE)
+
+Previously: 2026-09-25 (APCGHub P4 / CMS-3 — first hub WRITE route `POST /api/hub/articles/{id}/status` (hide = published→archived, republish = hidden|archived→published), gated by the new `ContentEngines.hubWrite` flag on top of `hubRead`; see **Key Patterns** and `integrations/all-integrations.md` §Cross-tenant reads → WRITE)
 
 Previously: 2026-09-24 (APCGHub P4 / CMS-2 — the `/api/hub/*` read routes are now the cross-tenant machine-read pattern (`hubRead` token); tenant slug list corrected to `gcv`/`wad`/`dtw`/`brief-asia`/`world-travel-brief`; see **Key Patterns** and **Open Questions**, plus `integrations/all-integrations.md` §Cross-tenant reads and `tests/all-tests.md` for the probe + disposable-Postgres recipe)
 
@@ -472,7 +474,7 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
   `GET /api/hub/tenants`, and `GET /api/hub/taxonomy` read across every tenant a single
   `ContentEngines.hubRead` token is allowed to see, in one authenticated call each. Cross-tenant
   **write** still does not exist anywhere in this codebase except (2026-09-25, CMS-3) the single-article
-  status route `POST /api/hub/articles/{id}/status` gated by `ContentEngines.hubWrite`; no other `/api/hub/*` route exists.
+  status route `POST /api/hub/articles/{id}/status` gated by `ContentEngines.hubWrite`. CMS-4 (2026-09-25) added one more READ route, `GET /api/hub/articles/{id}?tenant=` (one article in full, `hubRead` only); no other `/api/hub/*` route exists.
   Full write-up, allowlist pattern, and the D14 null-ordering fix:
   `process/context/integrations/all-integrations.md` §Cross-tenant reads (see the EXTENDED
   2026-09-24/CMS-2 subsection for the current state — do not stop reading at the original gap
