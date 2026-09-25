@@ -65,13 +65,25 @@ function statusOf(data: Record<string, unknown>, fallback?: unknown): ArticleSta
  *   - "scheduled" is exempt: the publish-scheduled cron owns that transition
  *     at `scheduledFor`; Publish on a scheduled article just saves edits.
  *
+ * The syncable set below is every status from which "clicking Publish" plainly
+ * means "put this live". "hidden" is one of them: it is exactly the state
+ * `syncNativeUnpublish` leaves a taken-down article in, so clicking Publish on
+ * an unpublished article means "put it back live" and the unpublish/republish
+ * round trip closes. Without it the take-down was a one-way door — Publish
+ * raised `_status` but left workflowStatus at "hidden", so the article stayed
+ * off the public API with no way back via the Publish button.
+ *
+ * "archived" is deliberately NOT syncable: it is a terminal state, and
+ * un-archiving must be a deliberate act — an explicit workflowStatus select
+ * change, which the explicit-change carve-out above already honours.
+ *
  * Runs BEFORE enforceStatusAuthority in beforeValidate, so a contributor
  * without publish rights who clicks Publish is still rejected by the authority
  * gate (their sync target "published" is not in CONTRIBUTOR_ALLOWED_STATUSES).
  * Engine/system writes (no req.user) are untouched — the engine must never
  * publish directly.
  */
-const SYNCABLE_STATUSES: ArticleStatus[] = ["draft", "pending_review", "approved"];
+const SYNCABLE_STATUSES: ArticleStatus[] = ["draft", "pending_review", "approved", "hidden"];
 
 export const syncNativePublish: CollectionBeforeValidateHook = ({ data, originalDoc, operation, req }) => {
   if (!data || !req.user) return data;
