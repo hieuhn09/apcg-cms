@@ -10,7 +10,16 @@ metadata:
 
 # Integrations Context
 
-Last updated: 2026-09-25 (APCGHub P4 / CMS-3 — first hub WRITE route `POST /api/hub/articles/{id}/status`, gated by a new `ContentEngines.hubWrite` flag; see §Cross-tenant reads → WRITE subsection). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ENGINE_ACTIONS` 3-consumer citation completed with `actions.ts:48,73`)
+Last updated: 2026-09-25 (APCGHub P4 / CMS-4 EVL + review complete — `#22` draft PR open; corrected a
+CMS-3 review note: an id past `int4` returns HTTP 500 on both the CMS-3 write route and the CMS-4
+read route, not 404 as previously claimed; see the "Known gap" notes under §Cross-tenant reads →
+WRITE and → READ ONE ARTICLE). Previously: 2026-09-25 (APCGHub P4 / CMS-3 — PR `#21` **MERGED**
+into `main` at 08:32 UTC, merge commit `5b40bc9`; first hub WRITE route
+`POST /api/hub/articles/{id}/status`, gated by a new `ContentEngines.hubWrite` flag; see
+§Cross-tenant reads → WRITE subsection). Previously: 2026-09-25 (APCGHub P4 / CMS-4 — read route
+`GET /api/hub/articles/{id}?tenant=` returning ONE article in full, body as Markdown; see
+§Cross-tenant reads → READ ONE ARTICLE subsection). Previously: 2026-09-24 (APCGHub P4 / CMS-1 —
+`ENGINE_ACTIONS` 3-consumer citation completed with `actions.ts:48,73`)
 
 This is the canonical API-surface and auth context entrypoint for **apcg-cms** (Central CMS).
 
@@ -110,6 +119,7 @@ Update this group when:
 | `GET /api/cron/publish-scheduled`, `/unpin-expired`, `/refresh-ai-leaderboard` | `CRON_SECRET` bearer (fail-**closed** in production if unset; open in non-production for local `curl`) | **Internal** — Vercel Cron only | Run across **all tenants** in one pass; there is no per-tenant cron entry. |
 | `GET /api/preview/mint` | Payload human session (`payload.auth()`) | **Internal** — the admin "Preview" button | Verifies the signed-in user can access the article's tenant, mints a short-lived HMAC token (`signPayload`, 10 min), redirects to that tenant's own `frontendUrl`. |
 | `GET /api/hub/articles` | Hub engine bearer token (`authenticateHubEngine`, requires `ContentEngines.hubRead`) | **Internal** — consumed by APCGHub in the separate `content-engine` repo | The ONLY multi-tenant machine read in this repo (APCGHub P4 / CMS-1, 2026-09-24). Read-only. Filters `workflowStatus`, never `_status`. A tenant outside the engine's grant is a 403, never a silent drop. No rate limit (see §Cross-tenant reads). |
+| `GET /api/hub/articles/{id}?tenant=<slug>` | Hub engine bearer token (`authenticateHubEngine`, `hubRead` only — no `hubWrite`) | **Internal** — consumed by APCGHub's article view page (content-engine Hub-3) | APCGHub P4 / CMS-4. ONE article, ONE tenant, every `workflowStatus` (hidden/archived included), full fields + body as Markdown (`bodyMarkdown` + `bodyState`). Never a 500 for a body problem. See §Cross-tenant reads → READ ONE ARTICLE. |
 | `/(payload)` route group | Payload's own admin session | **Framework-managed** | Payload-generated `/admin` UI + its own REST/GraphQL under `/api` — not a hand-written contract, changes with the Payload version. |
 | `/(console)/console/*` | Payload human session (reused, `src/console/auth.ts`) | **Internal** — staff-only alternate admin UI | See §Cross-tenant reads — this is the one surface with an existing "see multiple tenants at once" shape, and it is human-session-only. |
 
@@ -375,6 +385,66 @@ and only hub route that writes. It changes ONE article's `workflowStatus` and no
 
 **Still missing after CMS-3:** content edits from the hub, bulk writes, any write other than these
 two status transitions, rate limiting (unchanged).
+
+**Known gap (measured 2026-09-25, during CMS-4's EVL pass):** the id regex (`^[1-9][0-9]{0,15}$`)
+accepts shapes up to 16 digits, past `int4`. A prior review note claimed this "still resolves 404";
+direct measurement disproves that — an id like `9999999999999999` on this route returns **HTTP 500**
+`internal_error` (plus one `integration_error` ActivityLog row), the same as CMS-4's GET route (see
+below). No data leak (only reachable via a hand-typed URL); proposed fix, not applied: bound the id
+to `≤ 2147483647` before the DB call on both routes.
+
+---
+
+### READ ONE ARTICLE (2026-09-25, APCGHub P4 / CMS-4) — full article, one tenant, one call
+
+`GET /api/hub/articles/{id}?tenant=<slug>` (`src/app/api/hub/articles/[id]/route.ts`) returns ONE
+article in full for the hub's article view page. Read only; coexists with the CMS-3 POST at
+`[id]/status` (different method, different depth).
+
+- **Auth = `authenticateHubEngine()` unchanged — `hubRead` only.** Viewing never needs `hubWrite`;
+  a read-only hub key can open the page, only the two action buttons need the write key.
+- **Tenant = exactly one, `?tenant=` required and non-blank BEFORE any lookup** (400 otherwise),
+  resolved with the imported pure `resolveHubWriteTenant` — never `narrowHubTenants()` (empty =
+  "all"). Outside the grant → 403 + `allowedTenants` + `engine_tenant_denied` log.
+- **Malformed id, missing article, article in another tenant: one byte-identical 404 body.** Id
+  shape `^[1-9][0-9]{0,15}$` (same as CMS-3).
+- **No `workflowStatus` filter** — hidden/archived/pending articles are returned on purpose.
+- **Two barriers, like every hub read:** `HUB_ARTICLE_DETAIL_SELECT` (allowlist select,
+  `src/lib/hub-article-detail-select.ts`) + `sanitizeHubArticleDetail` (fresh object, never spread).
+  `findByID` runs at `depth: 2` (`HUB_ARTICLE_DETAIL_DEPTH`; body Upload nodes need ≥1,
+  `resolveArticleVideo` expects 2) with `select` applied — verified to still populate body uploads,
+  `heroImage` and `video`. Emitted: id, tenant.slug, title, slug, dek, workflowStatus, publishedAt,
+  updatedAt, contentType, readMin, takeaways (the textarea split per line), pillar/subSection/tags
+  `{slug,title}`, author/coAuthors `{name,role}`, views (NULL stays null), heroImage
+  `{url,alt,caption,credit}`, video (`resolveArticleVideo`), bodyMarkdown, bodyState. Never:
+  lastEngine, assignedTo, lastEditedBy, translationStatus, any Tenants/Users/ContentEngines field.
+- **Body → Markdown** (`src/lib/hub-article-markdown.ts`): `convertLexicalToMarkdown` with
+  `editorConfigFactory.default({config})` (built once, failure not cached). `bodyState`:
+  `empty` (null / no root / only empty paragraphs — converter not called), `ok`, or `error`
+  (config or conversion threw; a non-empty body converted to "" — the converter SWALLOWS Lexical
+  parse errors such as an unregistered node type via `console.error` and returns "", so this is
+  treated as a failure, not an empty article; or the post-conversion scrub found a
+  `javascript:`/`vbscript:`/non-media `data:` link target — policy HARD BLOCK). Every error is
+  200 with `bodyMarkdown: ""` + one `integration_error` ActivityLog row (article id, tenant, kind,
+  error NAME — no body text, no token). Relationship nodes export as `"{relationTo} relation to
+  {id}"` only; `sanitizeUrl()` in the Link transformer rewrites dangerous schemes to `https://` at
+  export time (the real barrier; save-time `validateUrl()` is not a security layer).
+- **No ActivityLog on a successful read** (CMS-1/2 convention). No migration, no new field.
+- Verified only on a disposable PG16 with `scripts/hub-probe.ts --setup4 --out <file>` /
+  `--check4 --in <file> [--unit-only]` (fresh fixtures each run; tokens to a file, never stdout)
+  plus the unchanged CMS-1/2/3 regression modes.
+
+**Still unmeasured after CMS-4:** conversion cost on a long real article
+(`cms4-body-conversion-cost-unmeasured`); `linkType:'internal'` links and Block nodes not tried;
+the `bodyState:"error"` branch has never run on a real production article body — no DB access from
+the EVL/review sessions that produced this section (gap `cms4-body-error-on-real-articles-unmeasured`,
+closes when the owner opens a few real articles through the hub's article view).
+
+**Known gap (shared with CMS-3, measured 2026-09-25):** an id past `int4`
+(e.g. `9999999999999999`, still matching the `^[1-9][0-9]{0,15}$` shape check) returns HTTP 500 +
+one `integration_error` log row here too, not the byte-identical 404 body used for a genuinely
+missing/wrong-tenant article. See the WRITE section above for the same finding on the CMS-3 route
+and the proposed (unapplied) fix.
 
 ---
 
