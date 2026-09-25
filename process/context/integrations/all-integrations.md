@@ -10,7 +10,16 @@ metadata:
 
 # Integrations Context
 
-Last updated: 2026-09-25 (APCGHub P4 / CMS-4 — read route `GET /api/hub/articles/{id}?tenant=` returning ONE article in full, body as Markdown; see §Cross-tenant reads → READ ONE ARTICLE subsection). Previously: 2026-09-25 (APCGHub P4 / CMS-3 — first hub WRITE route `POST /api/hub/articles/{id}/status`, gated by a new `ContentEngines.hubWrite` flag; see §Cross-tenant reads → WRITE subsection). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ENGINE_ACTIONS` 3-consumer citation completed with `actions.ts:48,73`)
+Last updated: 2026-09-25 (APCGHub P4 / CMS-4 EVL + review complete — `#22` draft PR open; corrected a
+CMS-3 review note: an id past `int4` returns HTTP 500 on both the CMS-3 write route and the CMS-4
+read route, not 404 as previously claimed; see the "Known gap" notes under §Cross-tenant reads →
+WRITE and → READ ONE ARTICLE). Previously: 2026-09-25 (APCGHub P4 / CMS-3 — PR `#21` **MERGED**
+into `main` at 08:32 UTC, merge commit `5b40bc9`; first hub WRITE route
+`POST /api/hub/articles/{id}/status`, gated by a new `ContentEngines.hubWrite` flag; see
+§Cross-tenant reads → WRITE subsection). Previously: 2026-09-25 (APCGHub P4 / CMS-4 — read route
+`GET /api/hub/articles/{id}?tenant=` returning ONE article in full, body as Markdown; see
+§Cross-tenant reads → READ ONE ARTICLE subsection). Previously: 2026-09-24 (APCGHub P4 / CMS-1 —
+`ENGINE_ACTIONS` 3-consumer citation completed with `actions.ts:48,73`)
 
 This is the canonical API-surface and auth context entrypoint for **apcg-cms** (Central CMS).
 
@@ -377,6 +386,13 @@ and only hub route that writes. It changes ONE article's `workflowStatus` and no
 **Still missing after CMS-3:** content edits from the hub, bulk writes, any write other than these
 two status transitions, rate limiting (unchanged).
 
+**Known gap (measured 2026-09-25, during CMS-4's EVL pass):** the id regex (`^[1-9][0-9]{0,15}$`)
+accepts shapes up to 16 digits, past `int4`. A prior review note claimed this "still resolves 404";
+direct measurement disproves that — an id like `9999999999999999` on this route returns **HTTP 500**
+`internal_error` (plus one `integration_error` ActivityLog row), the same as CMS-4's GET route (see
+below). No data leak (only reachable via a hand-typed URL); proposed fix, not applied: bound the id
+to `≤ 2147483647` before the DB call on both routes.
+
 ---
 
 ### READ ONE ARTICLE (2026-09-25, APCGHub P4 / CMS-4) — full article, one tenant, one call
@@ -419,7 +435,16 @@ article in full for the hub's article view page. Read only; coexists with the CM
   plus the unchanged CMS-1/2/3 regression modes.
 
 **Still unmeasured after CMS-4:** conversion cost on a long real article
-(`cms4-body-conversion-cost-unmeasured`); `linkType:'internal'` links and Block nodes not tried.
+(`cms4-body-conversion-cost-unmeasured`); `linkType:'internal'` links and Block nodes not tried;
+the `bodyState:"error"` branch has never run on a real production article body — no DB access from
+the EVL/review sessions that produced this section (gap `cms4-body-error-on-real-articles-unmeasured`,
+closes when the owner opens a few real articles through the hub's article view).
+
+**Known gap (shared with CMS-3, measured 2026-09-25):** an id past `int4`
+(e.g. `9999999999999999`, still matching the `^[1-9][0-9]{0,15}$` shape check) returns HTTP 500 +
+one `integration_error` log row here too, not the byte-identical 404 body used for a genuinely
+missing/wrong-tenant article. See the WRITE section above for the same finding on the CMS-3 route
+and the proposed (unapplied) fix.
 
 ---
 
