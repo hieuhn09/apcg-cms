@@ -11,7 +11,8 @@
  *   2. tenant present & non-blank (400)       body whether missing or in another tenant)
  *   3. tenant ∈ engine grant (403 +        6. body → Markdown (never fails the request:
  *      allowedTenants, logged)                bodyState "ok" | "empty" | "error")
- *   4. id shape (404, same body as 5)      7. fresh-object sanitizer → 200
+ *   4. id shape + int4 range (404, same    7. fresh-object sanitizer → 200
+ *      body as 5; `isHubArticleId`)
  *
  * Tenant: resolved as ONE slug via `resolveHubWriteTenant` (a pure lookup,
  * imported, not modified). Never `narrowHubTenants`: it reads an empty value as
@@ -38,6 +39,7 @@ import {
   sanitizeHubArticleDetail,
 } from "@/lib/hub-article-detail-select";
 import { json } from "@/lib/http";
+import { isHubArticleId } from "@/lib/hub-article-id";
 import { logActivity } from "@/lib/activity";
 import { toId } from "@/access/helpers";
 
@@ -83,8 +85,9 @@ export async function GET(
     );
   }
 
-  // 4. Ids are numeric (Postgres serial); anything else cannot exist.
-  if (!/^[1-9][0-9]{0,15}$/.test(id)) return notFound();
+  // 4. Ids are int4 serials: a malformed or out-of-range id cannot exist, and
+  //    gets the same 404 without reaching Postgres (src/lib/hub-article-id.ts).
+  if (!isHubArticleId(id)) return notFound();
 
   let doc: Record<string, unknown> | null;
   try {
