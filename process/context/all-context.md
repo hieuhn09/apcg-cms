@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-09-25 (APCGHub P4 / CMS-4 — read route `GET /api/hub/articles/{id}?tenant=` returning ONE article in full (body as Markdown + `bodyState`, every `workflowStatus`), `hubRead` only; see `integrations/all-integrations.md` §Cross-tenant reads → READ ONE ARTICLE)
+Last updated: 2026-09-28 (APCGHub P4 / CMS-4b — both hub article routes now bound the id to Postgres `int4` through one shared pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`): an out-of-range id gets the ordinary 404 `not_found` body instead of HTTP 500 + an `integration_error` row (gap `hub-id-over-int4-returns-500` fixed); new probe `scripts/hub-probe.ts --check5`; see `integrations/all-integrations.md` §Cross-tenant reads → WRITE)
+
+Previously: 2026-09-25 (APCGHub P4 / CMS-4 — read route `GET /api/hub/articles/{id}?tenant=` returning ONE article in full (body as Markdown + `bodyState`, every `workflowStatus`), `hubRead` only; see `integrations/all-integrations.md` §Cross-tenant reads → READ ONE ARTICLE)
 
 Previously: 2026-09-25 (APCGHub P4 / CMS-3 — first hub WRITE route `POST /api/hub/articles/{id}/status` (hide = published→archived, republish = hidden|archived→published), gated by the new `ContentEngines.hubWrite` flag on top of `hubRead`; see **Key Patterns** and `integrations/all-integrations.md` §Cross-tenant reads → WRITE)
 
