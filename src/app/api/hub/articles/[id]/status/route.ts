@@ -12,7 +12,8 @@
  *   1. auth (401 / 403 no hubWrite)          5. transition table (422)
  *   2. body shape (400; `to` outside set 422) 6. expectedStatus === current (409 + currentStatus)
  *   3. tenant ∈ engine grant (403 + allowed)  7. payload.update(workflowStatus) with context.hubWrite
- *   4. article in THAT tenant (404, identical body whether missing or in another tenant)
+ *   4. article in THAT tenant (404, identical body whether missing, in another tenant,
+ *      malformed or outside the int4 id range — `isHubArticleId`, never reaches Postgres)
  *
  * No separate log call: the update fires `articleActivity`, which writes exactly
  * one ActivityLog row carrying actor + reason in `detail` (article-workflow.ts);
@@ -31,6 +32,7 @@ import { authenticateHubWriteEngine, resolveHubWriteTenant } from "@/lib/hub-wri
 import { isHubTargetStatus, isValidTransition } from "@/lib/hub-transition";
 import { ARTICLE_STATUSES, type ArticleStatus } from "@/lib/constants";
 import { json } from "@/lib/http";
+import { isHubArticleId } from "@/lib/hub-article-id";
 import { logActivity } from "@/lib/activity";
 import { toId } from "@/access/helpers";
 
@@ -162,9 +164,9 @@ export async function POST(
   }
 
   try {
-    // 4. The article, in THAT tenant only. Ids are numeric (Postgres serial);
-    //    anything else cannot exist, and gets the same 404.
-    if (!/^[1-9][0-9]{0,15}$/.test(id)) return notFound();
+    // 4. The article, in THAT tenant only. Ids are int4 serials: a malformed or
+    //    out-of-range id cannot exist, and gets the same 404 (src/lib/hub-article-id.ts).
+    if (!isHubArticleId(id)) return notFound();
     const doc = (await payload.findByID({
       collection: "articles",
       id: Number(id),

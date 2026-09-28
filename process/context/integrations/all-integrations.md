@@ -10,7 +10,11 @@ metadata:
 
 # Integrations Context
 
-Last updated: 2026-09-25 (APCGHub P4 / CMS-4 EVL + review complete — `#22` draft PR open; corrected a
+Last updated: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
+Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
+new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
+notes under §Cross-tenant reads → WRITE and → READ ONE ARTICLE). Previously: 2026-09-25 (APCGHub P4 / CMS-4 EVL + review complete — `#22` draft PR open; corrected a
 CMS-3 review note: an id past `int4` returns HTTP 500 on both the CMS-3 write route and the CMS-4
 read route, not 404 as previously claimed; see the "Known gap" notes under §Cross-tenant reads →
 WRITE and → READ ONE ARTICLE). Previously: 2026-09-25 (APCGHub P4 / CMS-3 — PR `#21` **MERGED**
@@ -386,12 +390,20 @@ and only hub route that writes. It changes ONE article's `workflowStatus` and no
 **Still missing after CMS-3:** content edits from the hub, bulk writes, any write other than these
 two status transitions, rate limiting (unchanged).
 
-**Known gap (measured 2026-09-25, during CMS-4's EVL pass):** the id regex (`^[1-9][0-9]{0,15}$`)
-accepts shapes up to 16 digits, past `int4`. A prior review note claimed this "still resolves 404";
-direct measurement disproves that — an id like `9999999999999999` on this route returns **HTTP 500**
-`internal_error` (plus one `integration_error` ActivityLog row), the same as CMS-4's GET route (see
-below). No data leak (only reachable via a hand-typed URL); proposed fix, not applied: bound the id
-to `≤ 2147483647` before the DB call on both routes.
+**FIXED 2026-09-28 (CMS-4b) — was gap `hub-id-over-int4-returns-500`.** History: the id regex
+(`^[1-9][0-9]{0,15}$`) accepted shapes up to 16 digits, past `int4`; an id like `2147483648` or
+`9999999999999999` reached Postgres and the route returned **HTTP 500** `internal_error` plus one
+`integration_error` ActivityLog row (measured 2026-09-25 and re-measured red-first 2026-09-28 on a
+disposable PG16; a prior review note claiming "still resolves 404" was wrong). Now both hub article
+routes call the one pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`): digits only, no
+sign / leading zero / whitespace, AND `Number(id) <= 2147483647` (`PG_INT4_MAX`). Any id failing it
+gets the route's ordinary byte-identical 404 `not_found` body, no ActivityLog row, and never reaches
+Postgres. Check order unchanged (auth, body, tenant grant all still run first). Probe:
+`scripts/hub-probe.ts --check5 --unit-only` (U1-U14) and `--check5 --in <setup4 file> --in3 <setup3
+file>` (live L1-L8 against an in-range missing-id baseline). New gap
+`hub-int4-bound-not-generalized-beyond-hub-routes`: no other route takes a raw numeric id from a
+request today (unfiltered grep of `src/app/api`, plus the Console), but any future one should import
+`isHubArticleId` instead of writing its own regex.
 
 ---
 
@@ -407,7 +419,7 @@ article in full for the hub's article view page. Read only; coexists with the CM
   resolved with the imported pure `resolveHubWriteTenant` — never `narrowHubTenants()` (empty =
   "all"). Outside the grant → 403 + `allowedTenants` + `engine_tenant_denied` log.
 - **Malformed id, missing article, article in another tenant: one byte-identical 404 body.** Id
-  shape `^[1-9][0-9]{0,15}$` (same as CMS-3).
+  check = `isHubArticleId` (shape + `int4` range, shared with CMS-3; CMS-4b).
 - **No `workflowStatus` filter** — hidden/archived/pending articles are returned on purpose.
 - **Two barriers, like every hub read:** `HUB_ARTICLE_DETAIL_SELECT` (allowlist select,
   `src/lib/hub-article-detail-select.ts`) + `sanitizeHubArticleDetail` (fresh object, never spread).
@@ -440,11 +452,9 @@ the `bodyState:"error"` branch has never run on a real production article body �
 the EVL/review sessions that produced this section (gap `cms4-body-error-on-real-articles-unmeasured`,
 closes when the owner opens a few real articles through the hub's article view).
 
-**Known gap (shared with CMS-3, measured 2026-09-25):** an id past `int4`
-(e.g. `9999999999999999`, still matching the `^[1-9][0-9]{0,15}$` shape check) returns HTTP 500 +
-one `integration_error` log row here too, not the byte-identical 404 body used for a genuinely
-missing/wrong-tenant article. See the WRITE section above for the same finding on the CMS-3 route
-and the proposed (unapplied) fix.
+**FIXED 2026-09-28 (CMS-4b, shared with CMS-3):** an id past `int4` used to return HTTP 500 + one
+`integration_error` log row here too; it now returns the same byte-identical 404 body as a missing
+or wrong-tenant article, no log row. See the WRITE section above for the helper and probe.
 
 ---
 

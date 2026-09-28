@@ -1827,6 +1827,169 @@ async function check4() {
   process.exit(state.failures === 0 ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CMS-4b (--check5): hub article ids bounded to Postgres int4
+// (gap `hub-id-over-int4-returns-500`). LOCAL / DISPOSABLE POSTGRES ONLY.
+//
+//   npx tsx scripts/hub-probe.ts --check5 --unit-only
+//   npx tsx scripts/hub-probe.ts --check5 --in <file from --setup4> --in3 <file from --setup3>
+//
+// Unit rows U1-U14 check `isHubArticleId` alone. Live rows L1-L8 call both hub
+// article routes over HTTP and compare every out-of-range answer with the answer
+// the same route gives an in-range id that does not exist (L-baseline): same
+// status, same body text, 0 new ActivityLog rows, no article's workflowStatus
+// changed. Tokens come from the --setup3/--setup4 files and are never printed.
+// Creates one fresh article per run (unique slug), so it can be re-run under
+// each red-first mutation.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function check5() {
+  const unitOnly = flag("unit-only");
+  const inFile = arg("in");
+  const in3File = arg("in3");
+  const rTokens = inFile ? (JSON.parse(readFileSync(inFile, "utf8")) as R_Tokens) : undefined;
+  const wTokens = in3File ? (JSON.parse(readFileSync(in3File, "utf8")) as W_Tokens) : undefined;
+  if (!unitOnly && (!rTokens || !wTokens)) throw new Error("--in <file from --setup4> and --in3 <file from --setup3> required (or --unit-only)");
+  const { state, expect } = makeExpect();
+  const obs = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
+  const { isHubArticleId } = await import("../src/lib/hub-article-id");
+
+  // ── Unit: isHubArticleId (U1-U14) ─────────────────────────────────────────
+  for (const [n, input, want] of [
+    ["U1", "1", true],
+    ["U2", "2147483647", true],
+    ["U3", "2147483648", false],
+    ["U4", "0", false],
+    ["U5", "01", false],
+    ["U6", "-1", false],
+    ["U7", "", false],
+    ["U8", " 1", false],
+    ["U9", "1 ", false],
+    ["U10", "1e3", false],
+    ["U11", "+1", false],
+    ["U12", "１", false],
+    ["U13", "9999999999999999", false],
+    ["U14", "99999999999999999999999", false],
+  ] as const) {
+    expect(`${n} unit isHubArticleId(${JSON.stringify(input)})`, isHubArticleId(input), want);
+  }
+
+  if (unitOnly) {
+    console.log(`\n[check5] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+
+  const r = rTokens as R_Tokens;
+  const w = wTokens as W_Tokens;
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const tenants = await tenantsBySlug(payload);
+  const dtw = need(tenants, "dtw");
+  const stamp = Date.now().toString(36);
+
+  // One real, in-range article (AC2).
+  const pillar = (await payload.find({ collection: "pillars", where: { tenant: { equals: dtw } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as { id: number } | undefined;
+  if (!pillar) throw new Error("dtw has no pillar — run `npm run db:seed` first");
+  const author = await ensureAuthor(payload, dtw, "cms4b-probe-author", "CMS-4b Probe Author");
+  const idReal = ((await payload.create({
+    collection: "articles", overrideAccess: true, locale: "en", draft: true,
+    data: { tenant: dtw, title: `CMS4b real ${stamp}`, slug: `cms4b-real-${stamp}`, pillar: pillar.id, author, workflowStatus: "published", publishedAt: iso(2026, 9, 2) } as never,
+  })) as unknown as { id: number }).id;
+  obs("fixture", { idReal });
+
+  // ── HTTP ──────────────────────────────────────────────────────────────────
+  type Reply = { status: number; text: string; body: Doc };
+  const parse = async (res: Response): Promise<Reply> => {
+    const text = await res.text();
+    let body: Doc = {};
+    try { body = JSON.parse(text) as Doc; } catch { /* non-JSON */ }
+    return { status: res.status, text, body };
+  };
+  const get = async (id: string | number, token: string | null = r.read) =>
+    parse(await fetch(`${BASE}/api/hub/articles/${id}?tenant=dtw`, { headers: token ? { authorization: `Bearer ${token}` } : {} }));
+  const actor = { email: "operator@example.com", role: "editor", id: "hub-user-4b" };
+  const post = async (id: string | number, to = "archived", expectedStatus = "published", token: string | null = w.write) =>
+    parse(await fetch(`${BASE}/api/hub/articles/${id}/status`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ tenant: "dtw", to, expectedStatus, reason: "probe reason ok", actor }),
+    }));
+  const logCount = async () => (await payload.count({ collection: "activityLog", overrideAccess: true })).totalDocs;
+  const statusSnap = async () => {
+    const res = (await db.execute(sql`SELECT md5(coalesce(string_agg(id::text || ':' || coalesce(workflow_status::text, ''), ',' ORDER BY id), '')) AS h FROM articles`)) as { rows?: { h: string }[] };
+    return res.rows?.[0]?.h ?? "";
+  };
+  /** Call, and report [reply, new ActivityLog rows, article statuses unchanged?]. */
+  const measure = async (call: () => Promise<Reply>): Promise<[Reply, number, boolean]> => {
+    const logBefore = await logCount();
+    const snapBefore = await statusSnap();
+    const reply = await call();
+    return [reply, (await logCount()) - logBefore, (await statusSnap()) === snapBefore];
+  };
+
+  // L-baseline: an in-range id that does not exist (today already 404).
+  const MISSING = "999999999";
+  const [bGet, bGetLog] = await measure(() => get(MISSING));
+  const [bPost, bPostLog, bPostSnap] = await measure(() => post(MISSING));
+  obs("L-baseline GET", { status: bGet.status, body: bGet.body, log: bGetLog });
+  obs("L-baseline POST", { status: bPost.status, body: bPost.body, log: bPostLog });
+  const NOT_FOUND = { ok: false, status: "not_found", reason: "article not found for tenant" };
+  expect("L-baseline GET missing in-range id → 404 not_found, 0 log rows", [bGet.status, bGet.body, bGetLog], [404, NOT_FOUND, 0]);
+  expect("L-baseline POST missing in-range id → 404 not_found, 0 log rows, no status change", [bPost.status, bPost.body, bPostLog, bPostSnap], [404, NOT_FOUND, 0, true]);
+
+  // L1-L3 (GET) and L4-L5 (+ 23-digit) (POST): identical to the baseline, byte for byte.
+  for (const [n, id] of [["L1", "2147483648"], ["L2", "9999999999999999"], ["L3", "99999999999999999999999"]] as const) {
+    const [g, gLog] = await measure(() => get(id));
+    expect(`${n} GET ${id} → same status + body text as L-baseline, 0 log rows`, [g.status, g.text, gLog], [bGet.status, bGet.text, 0]);
+  }
+  for (const [n, id] of [["L4", "2147483648"], ["L5", "9999999999999999"], ["L5b", "99999999999999999999999"]] as const) {
+    const [p, pLog, pSnap] = await measure(() => post(id));
+    expect(`${n} POST ${id} → same status + body text as L-baseline, 0 log rows, no workflowStatus changed`, [p.status, p.text, pLog, pSnap], [bPost.status, bPost.text, 0, true]);
+  }
+
+  // L6: int4 max itself is IN range → the ordinary "no such article" path.
+  {
+    const [g, gLog] = await measure(() => get("2147483647"));
+    expect("L6 GET 2147483647 (in range, no row) → same as L-baseline, 0 log rows", [g.status, g.text, gLog], [bGet.status, bGet.text, 0]);
+    const [p, pLog, pSnap] = await measure(() => post("2147483647"));
+    expect("L6 POST 2147483647 (in range, no row) → same as L-baseline, 0 log rows, no status change", [p.status, p.text, pLog, pSnap], [bPost.status, bPost.text, 0, true]);
+  }
+
+  // L7 / L8 (AC3): auth still runs first, whatever the id.
+  {
+    const [inG] = await measure(() => get(idReal, null));
+    const [outG, outGLog] = await measure(() => get("2147483648", null));
+    expect("L7 GET no bearer, out-of-range id → 401, same body as no bearer + real id, 0 log rows", [outG.status, outG.text, outGLog], [401, inG.text, 0]);
+    const [inP] = await measure(() => post(idReal, "archived", "published", null));
+    const [outP, outPLog, outPSnap] = await measure(() => post("2147483648", "archived", "published", null));
+    expect("L7 POST no bearer, out-of-range id → 401, same body as no bearer + real id, 0 log rows", [outP.status, outP.text, outPLog, outPSnap], [401, inP.text, 0, true]);
+    // A 403 auth denial already logs its own row today; AC3 = "exactly as today",
+    // so the out-of-range call must log exactly what the real-id call logs.
+    const [inN, inNLog] = await measure(() => post(idReal, "archived", "published", w.nowrite));
+    const [outN, outNLog, outNSnap] = await measure(() => post("2147483648", "archived", "published", w.nowrite));
+    obs("L8 POST hubWrite:false log delta (real id / out-of-range id)", [inNLog, outNLog]);
+    expect("L8 POST hubWrite:false, out-of-range id → 403, same body + same log delta as with real id, no status change", [outN.status, outN.text, outNLog, outNSnap], [403, inN.text, inNLog, true]);
+    const [inR, inRLog] = await measure(() => get(idReal, r.noread));
+    const [outR, outRLog] = await measure(() => get("2147483648", r.noread));
+    obs("L8 GET hubRead:false log delta (real id / out-of-range id)", [inRLog, outRLog]);
+    expect("L8 GET hubRead:false, out-of-range id → 403, same body + same log delta as with real id", [outR.status, outR.text, outRLog], [403, inR.text, inRLog]);
+  }
+
+  // AC2: a real in-range article is unchanged on both routes.
+  {
+    const g = await get(idReal);
+    const art = (g.body.article ?? {}) as Doc;
+    expect("AC2 GET real article → 200 ok, same id, published", [g.status, g.body.ok, art.id, art.workflowStatus], [200, true, idReal, "published"]);
+    const hide = await post(idReal, "archived", "published");
+    expect("AC2 POST hide real article → 200", [hide.status, hide.body.ok], [200, true]);
+    const rep = await post(idReal, "published", "archived");
+    expect("AC2 POST republish real article → 200", [rep.status, rep.body.ok], [200, true]);
+  }
+
+  console.log(`\n[check5] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(state.failures === 0 ? 0 : 1);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -1847,10 +2010,12 @@ const run = flag("setup")
                   ? setup4
                   : flag("check4")
                     ? check4
-                    : null;
+                    : flag("check5")
+                      ? check5
+                      : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only]",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only]",
   );
   process.exit(2);
 }
