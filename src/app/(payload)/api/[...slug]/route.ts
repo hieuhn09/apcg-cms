@@ -8,6 +8,8 @@ import {
   REST_PUT,
 } from "@payloadcms/next/routes";
 
+import { mediaRedirectLocation, resolveR2PublicBase } from "@/lib/media-redirect";
+
 const payloadGet = REST_GET(config);
 
 /**
@@ -27,10 +29,33 @@ const payloadGet = REST_GET(config);
  * The JSON API (`/api/public/*`) is deliberately NOT cached here: those
  * responses vary on the Authorization read token, and a shared cache keyed
  * only by URL could serve one tenant's payload to another.
+ *
+ * Once media is served straight from R2 (resolveR2PublicBase: the R2 creds plus
+ * a valid `R2_PUBLIC_BASE_URL`), Payload no longer serves
+ * `/api/{media,videoMedia}/file/*`, so an old link to one of those paths is
+ * answered with a 302 to the same object on R2 instead (see lib/media-redirect).
+ * With the env var unset, nothing here changes.
  */
 export const GET = async (
   ...args: Parameters<typeof payloadGet>
 ): Promise<Response> => {
+  // Same switch as payload.config.ts, read per request (no module-level cache).
+  const location = mediaRedirectLocation(args[0].url, resolveR2PublicBase());
+  if (location) {
+    // 302 (not 301) so a rollback is never cached for good; can become 301 once the flip is proven.
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: location,
+        "Cache-Control": "public, max-age=300, s-maxage=86400",
+        // Public bytes, no credentials headers. This only lets the redirect HOP pass
+        // a CORS check: after a cross-site redirect the browser sends `Origin: null`
+        // to R2, so a CORS-mode consumer (fetch(), <img crossorigin>) also needs the
+        // R2 domain itself to answer `Access-Control-Allow-Origin: *`.
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  }
   const res = await payloadGet(...args);
   const { pathname } = new URL(args[0].url);
   if (res.status === 200 && pathname.startsWith("/api/media/file/")) {

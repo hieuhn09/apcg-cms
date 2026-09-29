@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-09-28 (APCGHub P4 / CMS-4b — both hub article routes now bound the id to Postgres `int4` through one shared pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`): an out-of-range id gets the ordinary 404 `not_found` body instead of HTTP 500 + an `integration_error` row (gap `hub-id-over-int4-returns-500` fixed); new probe `scripts/hub-probe.ts --check5`; see `integrations/all-integrations.md` §Cross-tenant reads → WRITE)
+Last updated: 2026-09-29 (R2_PUBLIC_BASE_URL redirect shim + one R2 switch `resolveR2PublicBase`; `npm run test:media-redirect`, the one scoped `node:test` script; see **Environment and Configuration** → Media straight from R2)
+
+Previously: 2026-09-28 (APCGHub P4 / CMS-4b — both hub article routes now bound the id to Postgres `int4` through one shared pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`): an out-of-range id gets the ordinary 404 `not_found` body instead of HTTP 500 + an `integration_error` row (gap `hub-id-over-int4-returns-500` fixed); new probe `scripts/hub-probe.ts --check5`; see `integrations/all-integrations.md` §Cross-tenant reads → WRITE)
 
 Previously: 2026-09-25 (APCGHub P4 / CMS-4 — read route `GET /api/hub/articles/{id}?tenant=` returning ONE article in full (body as Markdown + `bodyState`, every `workflowStatus`), `hubRead` only; see `integrations/all-integrations.md` §Cross-tenant reads → READ ONE ARTICLE)
 
@@ -56,7 +58,7 @@ process/context/
   planning/
     all-planning.md                   <-- group router for plan-shape calibration
   tests/
-    all-tests.md                      <-- group router for verification (no test framework exists)
+    all-tests.md                      <-- group router for verification (no general test framework; one scoped node:test script)
 ```
 
 **How agents use it:**
@@ -116,7 +118,7 @@ can jump straight to source.
 | `database/` | `process/context/database/all-database.md` | Payload collections, Postgres schema/migrations, the tenant/engine data model, and the two data-access lanes (Payload Local API vs Console's read-only Drizzle) — database context group entrypoint |
 | `integrations/` | `process/context/integrations/all-integrations.md` | API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint |
 | `planning/` | `process/context/planning/all-planning.md` | Plan-shape calibration for apcg-cms — SIMPLE vs COMPLEX, where plans actually live (no process/features folder here), and this repo's own recent plans as real-world shape examples |
-| `tests/` | `process/context/tests/all-tests.md` | Verification quick-start for apcg-cms — there is no automated test framework here; the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified. |
+| `tests/` | `process/context/tests/all-tests.md` | Verification quick-start for apcg-cms — there is no general test framework and no CI here (one scoped `node:test` script, `npm run test:media-redirect`, covers `src/lib/media-redirect.ts` only); the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified. |
 <!-- /GENERATED:routing -->
 
 ## Task Routing Table
@@ -131,7 +133,7 @@ can jump straight to source.
 | the Console (`/console`) UI or its Drizzle read layer | `process/context/database/all-database.md` §Two data-access lanes | `src/console/`, `docs/07-website-management.md` |
 | editorial roles/permissions (who can do what) | `docs/03-roles-and-permissions.md` | `src/access/helpers.ts` for the code-level enforcement |
 | environment variables / deploy / cron | this file's **Environment and Configuration** section | `docs/11-operations.md`, `vercel.json` |
-| verification / "what test command do I run" / validate-contract test gates | this file, `process/context/tests/all-tests.md` | — (no deeper doc; the group entrypoint IS the full answer — there is no test framework to route deeper into) |
+| verification / "what test command do I run" / validate-contract test gates | this file, `process/context/tests/all-tests.md` | — (no deeper doc; the group entrypoint IS the full answer — there is no general test framework to route deeper into) |
 | creating a new plan / SIMPLE vs COMPLEX calibration | this file, `process/context/planning/all-planning.md` | the cited example PRDs + this repo's own in-repo plan examples |
 | existing plans / in-flight work | `process/general-plans/active/` (see **Current Active Work**) | the specific task folder |
 | context maintenance | this file | run the `vc-audit-context` skill after edits |
@@ -332,9 +334,25 @@ independent verification, not from guessing.
   deterministic local engine token)
 - **Media (Cloudflare R2, S3-compatible):** `R2_BUCKET`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`,
   `R2_SECRET_ACCESS_KEY` — omit all four to fall back to local-disk media in dev (not viable on
-  serverless; required in deployed environments). `R2_PUBLIC_BASE_URL` is also read
-  (`payload.config.ts:81`, serves media bytes straight from R2 instead of proxying through this
-  app's serverless functions) but is **not listed in `.env.example`** — see **Open Questions**.
+  serverless; required in deployed environments).
+- **Media straight from R2:** `R2_PUBLIC_BASE_URL` (optional; **not set in production as of
+  29-09-26**) — the bucket's public custom domain, not `r2.dev` (planned:
+  `https://media.asiapresscentre.org`); a value that is not an absolute http(s) URL is ignored with
+  a warning and media stays on `/api/media/file`. It is used in canonical URL form (parser `href`,
+  no trailing slash; query/fragment/credentials rejected) and only together with the four R2 creds:
+  ONE switch, `resolveR2PublicBase`, for Payload's URLs and the redirect. When on, media +
+  videoMedia URLs become `<base>/<tenant-prefix>/<encodeURIComponent(filename)>` (bucket root if
+  the doc has no prefix; one formula, `r2PublicUrl` in `src/lib/media-redirect.ts`), Payload stops
+  serving `/api/{media,videoMedia}/file/*` (its file handler would answer an error: 500 from the
+  local-disk fallback, or 403), and the catch-all API route answers those old links with a **302**
+  to the same R2 object, so already-cached reader pages, newsletters and search/social indexes keep
+  working (`npm run test:media-redirect`). **Order is mandatory:** attach the custom
+  domain → deploy the redirect shim → set the env var + redeploy. **Rollback:** unset the env var +
+  redeploy; keep the domain attached (URLs already handed out point at it). For CORS-mode consumers
+  (`fetch()`, `<img crossorigin>`) the R2 domain must also send `Access-Control-Allow-Origin: *`
+  (the 302's own ACAO only covers the redirect hop); note `npm run r2:cors`
+  (`scripts/set-r2-cors.ts`) REPLACES the whole bucket CORS rule set, so a hand-added rule is wiped
+  by the next run.
 - **Signing:** `CENTRAL_SIGNING_SECRET` (HMAC for preview tokens + the outbound revalidate webhook —
   must match the *same* secret on each tenant frontend)
 - **Public API CORS:** `PUBLIC_API_ALLOWED_ORIGINS` (comma-separated frontend origins)
@@ -342,7 +360,7 @@ independent verification, not from guessing.
   route fails closed with 503, never silently opens)
 - **Misc:** `PORT` (dev server port, `3508` in `.env.example`)
 
-**npm scripts (real, from `package.json` — no `test` script exists):**
+**npm scripts (real, from `package.json` — no `npm test`; the one test script is `test:media-redirect`):**
 
 | Script | What it does |
 |---|---|
@@ -352,6 +370,7 @@ independent verification, not from guessing.
 | `npm start` | `next start -p 3508` |
 | `npm run lint` | `next lint` (flat config; `next.config.ts` sets `eslint.ignoreDuringBuilds: true`, so lint is a CI/manual concern, not a deploy gate) |
 | `npm run typecheck` | `tsc --noEmit` |
+| `npm run test:media-redirect` | `tsx --test src/lib/media-redirect.test.ts` — Node's built-in `node:test`, unit tests for `src/lib/media-redirect.ts` only (R2 media URL/switch/redirect helpers); not a general test runner |
 | `npm run payload` | Payload CLI passthrough |
 | `npm run payload:generate-types` / `payload:generate-importmap` | Payload codegen |
 | `npm run payload:migrate` / `payload:migrate:create` | apply / scaffold a migration |
@@ -366,10 +385,12 @@ independent verification, not from guessing.
 ## Linting, Type-checking, and Testing
 
 - `npm run typecheck` (`tsc --noEmit`, strict) and `npm run lint` (`next lint`) are the only two
-  automated quality commands in this repo.
-- **There is no automated test framework** — no `test` script in `package.json`, and no
+  general automated quality commands in this repo.
+- **There is still no general test framework** — no `npm test`, and no
   vitest/jest/playwright/mocha dependency anywhere in `package.json`. Do not assume one exists or
-  invent a `npm test` command.
+  invent a `npm test` command. The one exception is a single `node:test` script,
+  `npm run test:media-redirect` (`tsx --test`, no new dependency), covering
+  `src/lib/media-redirect.ts` only.
 - **There is no CI configuration** — `.github/` does not exist in this repo at all (confirmed
   directly, not just an empty `workflows/`). Nothing runs lint/typecheck automatically on push or PR
   today.
@@ -458,13 +479,14 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
   path assumption with nothing behind it. This pass resolved all of them by adding the `tests/` and
   `planning/` groups (both populated with real, verified content, not stubs); the only remaining
   failure after that is the pre-existing `.agents/skills` symlink issue above.
-- **No automated test framework and no CI** — see **Linting, Type-checking, and Testing** above.
+- **No general test framework and no CI** — see **Linting, Type-checking, and Testing** above
+  (the only automated tests: `npm run test:media-redirect`, `src/lib/media-redirect.ts` only).
   Any plan/validate-contract for this repo needs to design test gates around typecheck+lint+manual/
   live verification, not a `test` command that does not exist.
-- **`R2_PUBLIC_BASE_URL` is read in code (`payload.config.ts:81`) but not documented in
-  `.env.example`** — a small, pre-existing documentation gap; this scan did not determine the
-  variable's current production value or whether the R2-direct-serving path is actually flipped on
-  (the `cms-cost-remediation` plan's Phase 3, as of its last update, says it was not).
+- **`R2_PUBLIC_BASE_URL` documentation gap — RESOLVED 29-09-26:** now in `.env.example` and in
+  **Environment and Configuration** above (incl. the 302 redirect for old `/api/media/file/*`
+  links). Still NOT set in production as of 29-09-26; the flip is Phase 3 of the
+  `cms-cost-remediation` plan (domain → shim → env var, in that order).
 - **`src/collections/Users.ts:39` (`useAsTitle:"email"`) vs `Users.ts:29-32`
   (`defaultPopulate:{name,role}`)** — a real, currently-unfixed display mismatch on populated
   `Users` relationships (e.g. an admin "Last Edited By" column may render blank/ID instead of a

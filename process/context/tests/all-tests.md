@@ -1,22 +1,23 @@
 ---
 name: context:all-tests
-description: "Verification quick-start for apcg-cms — there is no automated test framework here; the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified."
+description: "Verification quick-start for apcg-cms — there is no general test framework and no CI here (one scoped node:test script, npm run test:media-redirect, covers src/lib/media-redirect.ts only); the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified."
 keywords: test, tests, testing, verify, verification, typecheck, lint, gate, validate-contract, evl, pvl, ci
 related: [context:all-database, context:all-integrations]
-date: 24-09-26
+date: 29-09-26
 metadata:
   read_when: "running verification after implementation, deciding what a validate-contract's test gates should be, or debugging a failing typecheck/lint"
 ---
 
 # apcg-cms — All Tests
 
-Last updated: 2026-09-24 (APCGHub P4 / CMS-2 — `scripts/hub-probe.ts` gained `--setup2`/`--nullorder`/`--check2`; disposable one-shot local Postgres 16 pattern (not the Docker stack) used for CMS-2's `/api/hub/tenants`+`/api/hub/taxonomy` data-shape checks; corrected the CMS-1-era note claiming local seed tenant slugs don't match production — they do, the earlier note had the production slugs wrong, see Known Gaps). Previously: APCGHub P4 / CMS-1 — `npm run build` promoted to mandatory gate; loose-vs-strict Payload types trap + cheap `tsc` gate without `payload-types.ts`; `PAYLOAD_DB_PUSH=true` migration-hiding trap; Docker/seed/port pitfalls; unfiltered-grep lesson
+Last updated: 2026-09-29 (R2_PUBLIC_BASE_URL redirect; `npm run test:media-redirect`, the one scoped `node:test` script). Previously: 2026-09-24 (APCGHub P4 / CMS-2 — `scripts/hub-probe.ts` gained `--setup2`/`--nullorder`/`--check2`; disposable one-shot local Postgres 16 pattern (not the Docker stack) used for CMS-2's `/api/hub/tenants`+`/api/hub/taxonomy` data-shape checks; corrected the CMS-1-era note claiming local seed tenant slugs don't match production — they do, the earlier note had the production slugs wrong, see Known Gaps). Previously: APCGHub P4 / CMS-1 — `npm run build` promoted to mandatory gate; loose-vs-strict Payload types trap + cheap `tsc` gate without `payload-types.ts`; `PAYLOAD_DB_PUSH=true` migration-hiding trap; Docker/seed/port pitfalls; unfiltered-grep lesson
 
 Attach this file first when the task involves testing, verification, or gate design.
 
-**The single most important fact in this file: apcg-cms has no automated test framework and no
+**The single most important fact in this file: apcg-cms has no general test framework and no
 CI.** Do not assume `npm test` exists, do not invent a test command, and do not design a
-validate-contract around a test runner this repo does not have.
+validate-contract around a test runner this repo does not have. The one exception is a single
+`node:test` script, `npm run test:media-redirect`, covering `src/lib/media-redirect.ts` only.
 
 ---
 
@@ -63,12 +64,14 @@ it as a manual/review-quality signal, never as something that automatically gate
 
 ### There is no automated behavioral test tier
 
-No unit tests, no integration tests, no e2e tests, and no `vitest` / `jest` / `playwright` /
+No general unit/integration/e2e suite, and no `vitest` / `jest` / `playwright` /
 `mocha` dependency anywhere in `package.json` (confirmed by direct inspection, not inference). A
 validate-contract for this repo cannot cite a "run the tests" command that asserts pass/fail on
 behavior — design test gates around the tiers that actually exist here (typecheck/lint as the
 fully-automated tier; manual/live verification as the remaining tier), per the tier model in
-`.claude/skills/vc-test-coverage-plan/SKILL.md`.
+`.claude/skills/vc-test-coverage-plan/SKILL.md`. The single exception is
+`npm run test:media-redirect` (Node's built-in `node:test` via `tsx`, no new dependency): unit
+tests for `src/lib/media-redirect.ts` only — cite it only for changes to that file.
 
 ### Use manual/live verification for
 
@@ -122,12 +125,14 @@ iteration reports (`cms-cost-remediation-pvl-iteration-*.md`, `results.tsv`).
 | `npm run lint` | `next lint` (flat config, `eslint.config.mjs`) | not a deploy gate |
 | `npm run build` | `payload generate:importmap && next build` | **MANDATORY gate as of 24-09-26** (see §Default Verification Order #3) — closest thing to an integration check; a bad Payload config, an import cycle, or a Next route-typing issue can fail here even when `typecheck` passed clean. Green locally ≠ green on Vercel — local builds see strict Payload types, Vercel builds loose ones (see §Default Verification Order #3 for the cheap loose-type gate). |
 | `npm run db:status` | `tsx scripts/db-status.ts` | quick live DB-connectivity/migration-state check — closest thing to a smoke test |
+| `npm run test:media-redirect` | `tsx --test src/lib/media-redirect.test.ts` (Node's built-in `node:test`) | unit tests for `src/lib/media-redirect.ts` only (R2 public URL formula, the shared R2 switch, the 302 redirect for old `/api/media/file` links); no DB, no network; not a general test runner |
 | `npx tsx scripts/hub-probe.ts --setup / --check / --paging` | one-shot data-layer probe for the `/api/hub/*` route family (added APCGHub P4 / CMS-1, kept in `scripts/` for reuse by future CMS-N hub routes) | requires the Docker Postgres local stack running (see §Debugging Quick Reference); `--setup` seeds two `ContentEngines` fixture rows + articles and prints a fresh test token (never hardcode a token in code/plan/report); `--check` runs the read/leak/filter assertions; `--paging` runs mutation-based red/green checks on `scopedFindMultiTenant`'s pagination invariants. Not a general test runner — scoped to this one route family. |
 | `npx tsx scripts/hub-probe.ts --setup2 / --nullorder / --check2` | CMS-2 (24-09-26) extensions to the same probe, for `/api/hub/tenants`+`/api/hub/taxonomy`+the extended `/api/hub/articles` (`q`/`pillar`/`sort=views`) | **run order matters and is NOT interchangeable with the CMS-1 trio**: `--setup`/`--check`/`--paging` must run BEFORE `--setup2` (which adds 201 pillars to `wad`, 12+ authors to `dtw`, and writes values into `dtw`'s previously-empty withheld fields — `contact`/`themeTokens`/`dashboards`/`socials`/`additionalDomains` — specifically so the `/tenants` leak-check test has something to leak if the allowlist regresses); `--paging`'s "at most 10 articles" assumption goes red for the wrong reason if run AFTER `--setup2`. `--nullorder` isolates the D14 null-ordering fix (see `process/context/integrations/all-integrations.md` §Cross-tenant reads EXTENDED) — run it on the unfixed helper first to confirm a genuine red (wrong article ids, not a crash), then again after the fix for green. `--check2` is the umbrella: 125 assertions across search-escaping, pillar filtering, tenant/taxonomy allowlists (recursive key-set diff + raw-body string grep for `readTokens`/`tokenHash`/`contact`/etc.), and auth (401/403) on all three routes. |
 
 There is no `npm test`. Do not add one to a plan's test-gate list without first adding an actual
 test framework as its own, explicitly-scoped piece of work — that is a real, separate project, not
-a one-line addition.
+a one-line addition. (`npm run test:media-redirect` is one scoped `node:test` script, not a
+framework.)
 
 ## Debugging Quick Reference
 
@@ -221,8 +226,8 @@ a one-line addition.
 
 ## Known Gaps
 
-- No automated test framework of any kind (unit / integration / e2e) — the single largest testing
-  gap in this repo.
+- No general test framework (unit / integration / e2e) — the single largest testing gap in this
+  repo; the only automated tests are `npm run test:media-redirect` (`src/lib/media-redirect.ts`).
 - No CI.
 - No automated regression check for the public API's response *shape* (the cross-repo wire
   contracts in `process/context/integrations/all-integrations.md`) — a field accidentally dropped or
