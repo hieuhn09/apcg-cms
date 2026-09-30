@@ -9,6 +9,7 @@ import sharp from "sharp";
 
 import { PAYLOAD_LOCALES } from "@/lib/locales";
 import { MEMBERSHIP_ROLES } from "@/lib/constants";
+import { normalizeR2PublicBase, r2PublicUrl, resolveR2PublicBase } from "@/lib/media-redirect";
 
 // Global / config collections (NOT tenant-scoped).
 import { Tenants } from "@/collections/Tenants";
@@ -76,9 +77,20 @@ const allowedOrigins = (process.env.PUBLIC_API_ALLOWED_ORIGINS ?? "")
 // bytes stop streaming through this deployment's serverless functions (which
 // was billed as Vercel fast origin transfer on every reader page view — R2
 // egress is free and Cloudflare CDN-caches it). When unset, behavior is
-// unchanged: URLs stay on the Payload API path. Object keys are
-// `<tenant-prefix>/<filename>`, mirrored by generateFileURL below.
-const r2PublicBaseUrl = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, "");
+// unchanged: URLs stay on the Payload API path. It comes from
+// resolveR2PublicBase, the SAME switch the redirect route uses: canonical form,
+// and only together with the four R2_* creds. A value that is not an absolute
+// http(s) URL is ignored with a warning, so a mistyped value cannot break media.
+// Object keys are `<tenant-prefix>/<filename>`, mirrored by generateFileURL below.
+const r2PublicBaseUrl = resolveR2PublicBase();
+if (
+  process.env.R2_PUBLIC_BASE_URL?.trim() &&
+  !normalizeR2PublicBase(process.env.R2_PUBLIC_BASE_URL)
+) {
+  console.warn(
+    "[payload.config] R2_PUBLIC_BASE_URL ignored: it must be a plain http(s) URL (no query string, fragment or credentials), e.g. https://img.apcgmedia.com. Media stays on /api/media/file.",
+  );
+}
 
 export default buildConfig({
   admin: {
@@ -216,7 +228,7 @@ export default buildConfig({
                     // `() => true` (published hero images are public bytes).
                     disablePayloadAccessControl: true,
                     generateFileURL: ({ filename, prefix }) =>
-                      `${r2PublicBaseUrl}/${prefix ? `${prefix}/` : ""}${encodeURIComponent(filename)}`,
+                      r2PublicUrl(r2PublicBaseUrl, prefix, filename),
                   }
                 : true,
               // Same treatment for video: same bucket, same per-doc tenant
@@ -226,7 +238,7 @@ export default buildConfig({
                 ? {
                     disablePayloadAccessControl: true,
                     generateFileURL: ({ filename, prefix }) =>
-                      `${r2PublicBaseUrl}/${prefix ? `${prefix}/` : ""}${encodeURIComponent(filename)}`,
+                      r2PublicUrl(r2PublicBaseUrl, prefix, filename),
                   }
                 : true,
             },

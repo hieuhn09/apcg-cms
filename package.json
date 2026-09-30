@@ -11,6 +11,7 @@
     "start": "next start -p 3508",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test:media-redirect": "tsx --test src/lib/media-redirect.test.ts",
     "payload": "payload",
     "payload:generate-types": "payload generate:types",
     "payload:generate-importmap": "payload generate:importmap",
