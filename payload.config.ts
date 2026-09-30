@@ -88,7 +88,7 @@ if (
   !normalizeR2PublicBase(process.env.R2_PUBLIC_BASE_URL)
 ) {
   console.warn(
-    "[payload.config] R2_PUBLIC_BASE_URL ignored: it must be a plain http(s) URL (no query string, fragment or credentials), e.g. https://media.asiapresscentre.org. Media stays on /api/media/file.",
+    "[payload.config] R2_PUBLIC_BASE_URL ignored: it must be a plain http(s) URL (no query string, fragment or credentials), e.g. https://img.apcgmedia.com. Media stays on /api/media/file.",
   );
 }
 

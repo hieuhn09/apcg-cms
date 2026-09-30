@@ -13,7 +13,7 @@ import {
   resolveR2PublicBase,
 } from "./media-redirect";
 
-const BASE = "https://media.asiapresscentre.org";
+const BASE = "https://img.apcgmedia.com";
 const CMS = "https://apcg-cms.vercel.app";
 const PREFIXES = ["brief-asia", "dtw", "gcv", "wad", "world-travel-brief"];
 
@@ -85,7 +85,7 @@ const FILENAMES = [
 
 describe("feature off: no redirect unless the base is an absolute http(s) URL", () => {
   const media = "/api/media/file/photo.jpg?prefix=gcv";
-  for (const base of [undefined, "", "media.asiapresscentre.org", "//media.asiapresscentre.org", "ftp://media.asiapresscentre.org", " https://media.asiapresscentre.org"]) {
+  for (const base of [undefined, "", "img.apcgmedia.com", "//img.apcgmedia.com", "ftp://img.apcgmedia.com", " https://img.apcgmedia.com"]) {
     it(`base ${JSON.stringify(base)} -> null`, () => {
       assert.equal(mediaRedirectLocation(`${CMS}${media}`, base), null);
     });
@@ -186,10 +186,10 @@ describe("base URL shapes", () => {
     );
   });
   it("upper-case scheme still counts as http(s)", () => {
-    assert.equal(loc("/api/media/file/photo.jpg?prefix=gcv", "HTTPS://media.asiapresscentre.org"), `${BASE}/gcv/photo.jpg`);
+    assert.equal(loc("/api/media/file/photo.jpg?prefix=gcv", "HTTPS://img.apcgmedia.com"), `${BASE}/gcv/photo.jpg`);
   });
   it("a stray newline/tab in the env value cannot produce an illegal Location header", () => {
-    for (const base of [`${BASE}\n`, `${BASE}\t`, "https://media.asiapresscentre\n.org"]) {
+    for (const base of [`${BASE}\n`, `${BASE}\t`, "https://img.apcgmedia\n.com"]) {
       const got = loc("/api/media/file/photo.jpg?prefix=gcv", base);
       assert.equal(got, `${BASE}/gcv/photo.jpg`);
       assert.doesNotThrow(() => new Headers({ Location: got ?? "" }));
@@ -333,10 +333,10 @@ describe("normalizeR2PublicBase: R2_PUBLIC_BASE_URL in canonical form, or undefi
     "   ",
     "\n",
     "\t\r\n",
-    "media.asiapresscentre.org",
-    "//media.asiapresscentre.org",
-    "https//media.asiapresscentre.org",
-    "https:/media.asiapresscentre.org",
+    "img.apcgmedia.com",
+    "//img.apcgmedia.com",
+    "https//img.apcgmedia.com",
+    "https:/img.apcgmedia.com",
     "https://",
     "https:///",
     "https:///x",
@@ -347,19 +347,19 @@ describe("normalizeR2PublicBase: R2_PUBLIC_BASE_URL in canonical form, or undefi
     "https://user@",
     "https://[",
     "ftp://x",
-    "ftp://media.asiapresscentre.org",
+    "ftp://img.apcgmedia.com",
     "https://x.example?x=1",
     "https://x.example/#h",
     "https://x.example?",
     "https://x.example#",
     "https://user:pw@x.example",
     "https://user@x.example",
-    "https://media.asia presscentre.org",
-    "https://media.asiapresscentre.org/a b",
-    "https://media\t.asiapresscentre.org",
-    "https://media.asia\npresscentre.org",
-    `https://media.asiapresscentre.org${NUL}`,
-    `https://media.asiapresscentre.org/${ZWSP}`,
+    "https://img.apcg media.com",
+    "https://img.apcgmedia.com/a b",
+    "https://img\t.apcgmedia.com",
+    "https://img.apcg\nmedia.com",
+    `https://img.apcgmedia.com${NUL}`,
+    `https://img.apcgmedia.com/${ZWSP}`,
   ];
   // Valid values -> the canonical base both switches use.
   const ON: Array<[string, string]> = [
@@ -369,8 +369,8 @@ describe("normalizeR2PublicBase: R2_PUBLIC_BASE_URL in canonical form, or undefi
     [` ${BASE}/\n`, BASE],
     [`\t${BASE}\r\n`, BASE],
     [`${BOM}${BASE}`, BASE],
-    ["HTTPS://media.asiapresscentre.org", BASE],
-    ["HTTPS://Media.Asiapresscentre.ORG:443/", BASE],
+    ["HTTPS://img.apcgmedia.com", BASE],
+    ["HTTPS://Img.Apcgmedia.COM:443/", BASE],
     ["https://x.example/media", "https://x.example/media"],
     ["https://x.example/media/", "https://x.example/media"],
     ["https://x.example/a/../media/", "https://x.example/media"],
@@ -405,7 +405,7 @@ describe("normalizeR2PublicBase: R2_PUBLIC_BASE_URL in canonical form, or undefi
     assert.equal(
       mediaRedirectLocation(
         `${CMS}/api/media/file/Building%20exterior%201.jpg?prefix=gcv`,
-        normalizeR2PublicBase(" https://media.asiapresscentre.org/\n"),
+        normalizeR2PublicBase(" https://img.apcgmedia.com/\n"),
       ),
       `${BASE}/gcv/Building%20exterior%201.jpg`,
     );
@@ -457,8 +457,8 @@ describe("resolveR2PublicBase: ONE switch = the four R2 creds + a valid base", (
     undefined,
     "",
     BASE,
-    " HTTPS://Media.Asiapresscentre.ORG/\n",
-    "media.asiapresscentre.org",
+    " HTTPS://Img.Apcgmedia.COM/\n",
+    "img.apcgmedia.com",
     "https://x.example?x=1",
   ];
   const old = `${CMS}/api/media/file/photo.jpg?prefix=gcv`;

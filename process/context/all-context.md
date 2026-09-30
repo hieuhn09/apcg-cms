@@ -337,7 +337,9 @@ independent verification, not from guessing.
   serverless; required in deployed environments).
 - **Media straight from R2:** `R2_PUBLIC_BASE_URL` (optional; **not set in production as of
   29-09-26**) — the bucket's public custom domain, not `r2.dev` (planned:
-  `https://media.asiapresscentre.org`); a value that is not an absolute http(s) URL is ignored with
+  `https://img.apcgmedia.com`, a subdomain of the dedicated domain `apcgmedia.com` bought at
+  Cloudflare in the same account as the R2 bucket; `asiapresscentre.org` stays on Tenten DNS and
+  cannot be attached to R2); a value that is not an absolute http(s) URL is ignored with
   a warning and media stays on `/api/media/file`. It is used in canonical URL form (parser `href`,
   no trailing slash; query/fragment/credentials rejected) and only together with the four R2 creds:
   ONE switch, `resolveR2PublicBase`, for Payload's URLs and the redirect. When on, media +
