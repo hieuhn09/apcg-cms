@@ -1990,6 +1990,710 @@ async function check5() {
   process.exit(state.failures === 0 ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// P5.1 / Stage 0.5 — `--explore6` (APCGHub P5.1, nháp chữ). OBSERVE ONLY.
+//
+// Prints `OBS` lines and NEVER asserts: these measurements feed the frozen
+// values of Stage 0.6 (node allow-list P-4, round-trip comparator key sets
+// P-1b, D20 branch P-14, body / depth caps P-15, slug pre-check P-19, slugify
+// vectors). Nothing here is a pass/fail gate; `--check6` (Stage 3) is.
+//
+//   npx tsx scripts/hub-probe.ts --explore6 --in4 <setup4.json> [--only P-1,P-15] [--vec <name>]
+//
+// Writes fixtures (articles, one tenant frontendUrl / readTokens entry restored
+// at the end) — LOCAL DATABASE ONLY, guarded below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function assertLocalTargets(): void {
+  const local = (u: string) => {
+    try {
+      const h = new URL(u).hostname;
+      return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+    } catch {
+      return false;
+    }
+  };
+  if (!local(process.env.DATABASE_URL ?? "") || !local(BASE)) {
+    console.error("[explore6] refusing: DATABASE_URL and HUB_PROBE_BASE must both point at localhost / 127.0.0.1 / ::1");
+    process.exit(2);
+  }
+}
+
+/** W = the JS `\s` class ∪ C0 (Public Contracts §Kiểm thân bài (0)). */
+const isWs6 = (c: number): boolean => c <= 0x1f || /\s/.test(String.fromCharCode(c));
+
+function maxWsRun(s: string): number {
+  let best = 0;
+  let cur = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (isWs6(s.charCodeAt(i))) {
+      cur++;
+      if (cur > best) best = cur;
+    } else cur = 0;
+  }
+  return best;
+}
+
+interface TreeStats {
+  nodes: number;
+  maxDepth: number;
+  maxListNest: number;
+  types: Record<string, number>;
+  links: { type: string; url: unknown; fields: unknown }[];
+  text: string;
+}
+
+/** Iterative walk of a Lexical editor state (no recursion: deep trees are part of the test). */
+function treeStats(state: unknown): TreeStats {
+  const out: TreeStats = { nodes: 0, maxDepth: 0, maxListNest: 0, types: {}, links: [], text: "" };
+  const root = (state as { root?: unknown } | null)?.root;
+  if (!root) return out;
+  const texts: string[] = [];
+  const stack: { n: Record<string, unknown>; d: number; l: number }[] = [{ n: root as Record<string, unknown>, d: 0, l: 0 }];
+  while (stack.length) {
+    const { n, d, l } = stack.pop()!;
+    out.nodes++;
+    const type = String(n.type);
+    out.types[type] = (out.types[type] ?? 0) + 1;
+    if (d > out.maxDepth) out.maxDepth = d;
+    const nl = type === "list" ? l + 1 : l;
+    if (nl > out.maxListNest) out.maxListNest = nl;
+    if (type === "link" || type === "autolink") {
+      const f = n.fields as Record<string, unknown> | undefined;
+      out.links.push({ type, url: f?.url ?? n.url, fields: f ?? null });
+    }
+    if (typeof n.text === "string") texts.push(n.text);
+    const kids = n.children;
+    if (Array.isArray(kids)) for (let i = kids.length - 1; i >= 0; i--) stack.push({ n: kids[i] as Record<string, unknown>, d: d + 1, l: nl });
+  }
+  out.text = texts.join("");
+  return out;
+}
+
+/** Structural diff → the set of KEY NAMES whose values differ (key-level, not path-level). */
+function diffKeyNames(a: unknown, b: unknown, key: string, out: Set<string>): void {
+  if (a === b) return;
+  const ao = typeof a === "object" && a !== null;
+  const bo = typeof b === "object" && b !== null;
+  if (!ao || !bo) {
+    out.add(key);
+    return;
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) {
+    out.add(key);
+    return;
+  }
+  if (Array.isArray(a)) {
+    const bb = b as unknown[];
+    if (a.length !== bb.length) out.add(`${key}[len]`);
+    for (let i = 0; i < Math.min(a.length, bb.length); i++) diffKeyNames(a[i], bb[i], key, out);
+    return;
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(ar), ...Object.keys(br)])) {
+    if (!(k in ar) || !(k in br)) out.add(`${k}(${k in ar ? "lost" : "added"})`);
+    else diffKeyNames(ar[k], br[k], k, out);
+  }
+}
+
+async function explore6() {
+  assertLocalTargets();
+  const only = arg("only")?.split(",").map((s) => s.trim());
+  const want = (p: string) => !only || only.includes(p);
+  const vecOnly = arg("vec");
+  const in4 = arg("in4");
+  const readTok = in4 ? (JSON.parse(readFileSync(in4, "utf8")) as R_Tokens).read : undefined;
+
+  const payload = await getPayload({ config });
+  const lexical = await import("@payloadcms/richtext-lexical");
+  const { loadHubEditorConfig, countDangerousLinkTargets } = await import("../src/lib/hub-article-markdown");
+  const { slugify } = await import("../src/lib/http");
+  const { sha256Hex } = await import("../src/lib/crypto");
+  const editorConfig = await loadHubEditorConfig(payload.config);
+  type Conv = (a: Record<string, unknown>) => unknown;
+  const md2lex = (markdown: string) => (lexical.convertMarkdownToLexical as unknown as Conv)({ editorConfig, markdown }) as Record<string, unknown>;
+  const lex2md = (data: unknown) => (lexical.convertLexicalToMarkdown as unknown as Conv)({ data, editorConfig }) as string;
+  const obs = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
+  const ms = (t0: number) => Math.round(performance.now() - t0);
+
+  const tenants = await tenantsBySlug(payload);
+  const T = need(tenants, "dtw");
+  const pillarDoc = (
+    await payload.find({ collection: "pillars", where: { tenant: { equals: T } }, limit: 1, depth: 0, overrideAccess: true })
+  ).docs[0] as unknown as { id: number; slug: string };
+  const authorDoc = (
+    await payload.find({ collection: "authors", where: { tenant: { equals: T } }, limit: 1, depth: 0, overrideAccess: true })
+  ).docs[0] as unknown as { id: number };
+  if (!pillarDoc || !authorDoc) throw new Error("dtw needs a pillar + author — run --setup / --setup2 first");
+
+  let seq = 0;
+  const uniq = (p: string) => `e6-${p}-${Date.now().toString(36)}-${++seq}`.toLowerCase();
+  const mk = async (
+    extra: Record<string, unknown> = {},
+    opts: { draft?: boolean; context?: Record<string, unknown>; noDefaults?: boolean } = {},
+  ): Promise<Doc> => {
+    const slug = (extra.slug as string | undefined) ?? uniq("a");
+    const base = opts.noDefaults
+      ? { tenant: T, title: `E6 ${slug}`, slug }
+      : { tenant: T, title: `E6 ${slug}`, slug, pillar: pillarDoc.id, author: authorDoc.id, workflowStatus: "draft", origin: "manual" };
+    return (await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      locale: "en",
+      ...(opts.draft ? { draft: true } : {}),
+      context: { disableRevalidate: true, ...(opts.context ?? {}) },
+      data: { ...base, ...extra } as never,
+    })) as unknown as Doc;
+  };
+  const pick = (d: Doc | null) =>
+    d && { version: d.version, title: d.title, dek: d.dek ?? null, slug: d.slug, workflowStatus: d.workflowStatus, _status: d._status, sponsor: d.sponsor ?? null };
+  const both = async (id: number) => {
+    const main = (await payload.findByID({ collection: "articles", id, depth: 0, locale: "en", overrideAccess: true })) as unknown as Doc;
+    const latest = (await payload.findByID({ collection: "articles", id, depth: 0, locale: "en", overrideAccess: true, draft: true })) as unknown as Doc;
+    return { main: pick(main), latest: pick(latest) };
+  };
+  const tryW = async <R>(f: () => Promise<R>): Promise<{ ok: true; v: R } | { ok: false; name: string; msg: string }> => {
+    try {
+      return { ok: true, v: await f() };
+    } catch (e) {
+      return { ok: false, name: (e as Error)?.name ?? typeof e, msg: String((e as Error)?.message ?? e).slice(0, 160) };
+    }
+  };
+  const hubGet = async (id: number, timeoutMs = 120_000) => {
+    if (!readTok) return { skipped: "no --in4" };
+    const t0 = performance.now();
+    try {
+      const res = await fetch(`${BASE}/api/hub/articles/${id}?tenant=dtw`, {
+        headers: { Authorization: `Bearer ${readTok}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const j = (await res.json()) as { article?: { bodyState?: string; bodyMarkdown?: string } };
+      return { status: res.status, ms: ms(t0), bodyState: j.article?.bodyState, mdLen: j.article?.bodyMarkdown?.length };
+    } catch (e) {
+      return { error: (e as Error).name, ms: ms(t0) };
+    }
+  };
+
+  // ── P-4 inventory of what the editor registers ──────────────────────────
+  const allTypes = new Set<string>();
+  const addTypes = (s: TreeStats) => Object.keys(s.types).forEach((t) => allTypes.add(t));
+  if (want("P-4")) {
+    const ec = editorConfig as unknown as { resolvedFeatureMap?: Map<string, unknown>; editorConfig?: { lexical?: unknown } };
+    obs("P-4 registered features", ec.resolvedFeatureMap ? [...ec.resolvedFeatureMap.keys()] : "n/a");
+  }
+
+  // ── P-1 Markdown-only samples: md → lex → md → lex ─────────────────────
+  const ignoreKeys = new Set<string>();
+  if (want("P-1") || want("P-1b") || want("P-4")) {
+    const samples: Record<string, string> = {
+      paragraph_vi: "Đoạn văn tiếng Việt có dấu: Hà Nội, Đà Nẵng, Thừa Thiên Huế. Ơ ư ă â ê ô đ Đ.",
+      bold_italic: "Chữ **đậm** và *nghiêng* và ***cả hai*** và _gạch dưới nghiêng_ và __đậm gạch__.",
+      bold_only: "Chữ **đậm** ở giữa.",
+      italic_only: "Chữ *nghiêng* ở giữa.",
+      triple_star: "***cả hai***",
+      bold_wraps_italic: "**_cả hai_**",
+      italic_wraps_bold: "*__cả hai__*",
+      bold_then_italic: "**đậm** *nghiêng*",
+      bold_inside_italic_word: "*nghiêng **đậm** nghiêng*",
+      headings: "## Tiêu đề H2\n\nĐoạn một.\n\n### Tiêu đề H3\n\nĐoạn hai.",
+      quote: "> Trích dẫn một dòng.\n> Dòng hai của trích dẫn.",
+      bullet: "- mục một\n- mục hai\n- mục ba",
+      ordered: "1. một\n2. hai\n3. ba",
+      nested_list: "- a\n  - b\n    - c\n- d",
+      link: "Có [một link](https://example.com/a?b=1#c) ở đây.",
+      link_kinds: "[mail](mailto:a@b.com) [tel](tel:+84123) [rel](/duong-dan) [hash](#muc) [q](?q=1)",
+      hard_break: "Dòng một  \nDòng hai",
+      soft_break: "Dòng một\nDòng hai",
+      emoji: "Emoji 😀🎉 và 👍🏽 ở giữa câu.",
+      blank_lines: "Đoạn A\n\n\n\n\nĐoạn B",
+      article:
+        "## Mở đầu\n\nĐoạn mở đầu với **điểm nhấn** và [nguồn](https://example.com).\n\n> Một trích dẫn.\n\n- ý một\n- ý hai\n\n1. bước một\n2. bước hai\n\n### Kết\n\nĐoạn kết *nhẹ nhàng*.",
+    };
+    for (const [name, md0] of Object.entries(samples)) {
+      const lex1 = md2lex(md0);
+      const md1 = lex2md(lex1);
+      const lex2 = md2lex(md1);
+      const md2 = lex2md(lex2);
+      const s1 = treeStats(lex1);
+      const s2 = treeStats(lex2);
+      addTypes(s1);
+      const d = new Set<string>();
+      diffKeyNames(lex1, lex2, "root", d);
+      d.forEach((k) => ignoreKeys.add(k));
+      const counts = (s: TreeStats) => ({ heading: s.types.heading ?? 0, list: s.types.list ?? 0, link: (s.types.link ?? 0) + (s.types.autolink ?? 0) });
+      if (want("P-1"))
+        obs(`P-1 ${name}`, {
+          md0EqMd1: md0 === md1,
+          fixedPoint_md2EqMd1: md2 === md1,
+          textEq: s1.text === s2.text,
+          countsEq: JSON.stringify(counts(s1)) === JSON.stringify(counts(s2)),
+          counts: counts(s1),
+          types: s1.types,
+          lexDiffKeys: [...d],
+          md1,
+        });
+    }
+    if (want("P-1")) obs("P-1 union of differing keys on Markdown-only samples (candidate IGNORE set)", [...ignoreKeys]);
+  }
+
+  // ── P-1b CMS-admin-authored Lexical (hand-built, CMS-4 FEASIBILITY builders) ─
+  if (want("P-1b") || want("P-4")) {
+    const t = lx.text;
+    const el = lx.el;
+    const li = (children: unknown[], extra: Record<string, unknown> = {}) => el("listitem", children, { value: 1, ...extra });
+    const cms: Record<string, unknown> = {
+      align_center: lx.root(el("paragraph", [t("canh giữa")], { format: "center", textFormat: 0, textStyle: "" })),
+      align_right_heading: lx.root(el("heading", [t("tiêu đề phải")], { tag: "h2", format: "right" })),
+      indent_2: lx.root(el("paragraph", [t("thụt lề")], { indent: 2, textFormat: 0, textStyle: "" })),
+      underline: lx.root(lx.p(t("gạch dưới", 8))),
+      strikethrough: lx.root(lx.p(t("gạch ngang", 4))),
+      inline_code: lx.root(lx.p(t("mã", 16))),
+      subscript: lx.root(lx.p(t("dưới", 32))),
+      superscript: lx.root(lx.p(t("trên", 64))),
+      text_style_color: lx.root(lx.p({ ...(t("màu") as object), style: "color: red" })),
+      link_newtab: lx.root(
+        lx.p(el("link", [t("tab mới")], { version: 3, id: "aa11", fields: { linkType: "custom", url: "https://example.com/x", newTab: true } })),
+      ),
+      link_internal: lx.root(
+        lx.p(el("link", [t("nội bộ")], { version: 3, id: "bb22", fields: { linkType: "internal", doc: { relationTo: "articles", value: 1 }, newTab: false } })),
+      ),
+      checklist: lx.root(el("list", [li([t("việc 1")], { checked: true }), li([t("việc 2")], { checked: false, value: 2 })], { listType: "check", start: 1, tag: "ul" })),
+      ordered_start3: lx.root(el("list", [li([t("ba")], { value: 3 })], { listType: "number", start: 3, tag: "ol" })),
+      hr: lx.root(lx.p(t("trên")), { type: "horizontalrule", version: 1 }, lx.p(t("dưới"))),
+      upload: lx.root(lx.p(t("ảnh:")), lx.upload("media", 1)),
+      relationship: lx.root(lx.p(t("quan hệ:")), lx.rel("articles", 1)),
+      plain_reference: lx.root(lx.p(t("đoạn thường "), t("đậm", 1), t(" và "), t("nghiêng", 2))),
+    };
+    const lost = new Set<string>();
+    for (const [name, lex] of Object.entries(cms)) {
+      const r = await tryW(async () => {
+        const md = lex2md(lex);
+        const back = md2lex(md);
+        const d = new Set<string>();
+        diffKeyNames(lex, back, "root", d);
+        const sIn = treeStats(lex);
+        const sBack = treeStats(back);
+        return { md, diffKeys: [...d], typesIn: sIn.types, typesBack: sBack.types, textEq: sIn.text === sBack.text };
+      });
+      if (r.ok) {
+        r.v.diffKeys.filter((k) => !ignoreKeys.has(k)).forEach((k) => lost.add(k));
+        Object.keys(r.v.typesIn).forEach((k) => allTypes.add(`(cms-admin) ${k}`));
+      }
+      if (want("P-1b")) obs(`P-1b ${name}`, r.ok ? { ...r.v, lostBeyondIgnore: r.v.diffKeys.filter((k) => !ignoreKeys.has(k)) } : r);
+    }
+    if (want("P-1b")) obs("P-1b union of keys differing on CMS-admin samples beyond the P-1 ignore set (candidate LOST set)", [...lost]);
+  }
+
+  // ── P-2 images, P-3 raw HTML + disguised links, P-4 syntax coverage ─────
+  if (want("P-2") || want("P-3") || want("P-4")) {
+    const probeMd = (label: string, md: string) => {
+      const r = (() => {
+        try {
+          const lex = md2lex(md);
+          const s = treeStats(lex);
+          addTypes(s);
+          const out = lex2md(lex);
+          return { types: s.types, links: s.links, text: s.text.slice(0, 120), mdOut: out.slice(0, 200), readRegexHits: countDangerousLinkTargets(out) };
+        } catch (e) {
+          return { threw: (e as Error).name, msg: String((e as Error).message).slice(0, 120) };
+        }
+      })();
+      obs(label, r);
+    };
+    if (want("P-2")) {
+      probeMd("P-2 inline image", "![alt chữ](https://example.com/a.png)");
+      probeMd("P-2 reference image", "![alt][ref]\n\n[ref]: https://example.com/b.png");
+      probeMd("P-2 image inside link", "[![a](https://e.com/i.png)](https://e.com)");
+    }
+    if (want("P-3")) {
+      const v: Record<string, string> = {
+        html_b: "chữ <b>đậm</b> html",
+        html_script: "trước <script>alert(1)</script> sau",
+        html_img: "<img src=x onerror=alert(1)>",
+        js: "[x](javascript:alert(1))",
+        js_upper: "[x](JaVaScRiPt:alert(1))",
+        js_tab: "[x](java\tscript:alert(1))",
+        js_newline: "[x](java\nscript:alert(1))",
+        js_nbsp: "[x](java script:alert(1))",
+        js_space_before: "[x]( javascript:alert(1))",
+        js_angle: "[x](<javascript:alert(1)>)",
+        ref_def: "[x][r]\n\n[r]: javascript:alert(1)",
+        autolink_js: "<javascript:alert(1)>",
+        entity_j: "[x](&#106;avascript:alert(1))",
+        entity_mixed: "[x](java&#115;cript&#58;alert(1))",
+        c0_lead: "[x](\u0001javascript:alert(1))",
+        proto_rel: "[x](//evil.com)",
+        backslash: "[x](\\/\\/evil.com)",
+        data_html: "[x](data:text/html,<script>alert(1)</script>)",
+        vbscript: "[x](vbscript:msgbox(1))",
+        bare_url: "xem https://example.com/z nhé",
+        autolink_https: "<https://example.com/y>",
+      };
+      for (const [k, md] of Object.entries(v)) probeMd(`P-3 ${k}`, md);
+    }
+    if (want("P-4")) {
+      probeMd(
+        "P-4 syntax coverage",
+        "# h1\n\n## h2\n\n### h3\n\n#### h4\n\n##### h5\n\n###### h6\n\n---\n\n```js\nconst a = 1;\n```\n\n`inline` ~~gạch~~ <u>u</u> <sub>s</sub> <sup>s</sup>\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- [ ] việc\n- [x] xong\n\n<https://auto.example>\n\nhttps://bare.example\n\n***\n\ndòng  \nngắt\n\n> > lồng quote",
+      );
+      obs("P-4 union of node types seen (markdown imports + (cms-admin) samples)", [...allTypes].sort());
+    }
+  }
+
+  // ── P-5 required fields on draft + lastEngine persistence ──────────────
+  if (want("P-5")) {
+    const engId = await engineIdByName(payload, R_ENGINES.read);
+    const a = await tryW(() => mk({ workflowStatus: "draft" }, { draft: true, noDefaults: true }));
+    obs("P-5 create draft:true WITHOUT pillar/author", a.ok ? { id: a.v.id, pillar: a.v.pillar ?? null, author: a.v.author ?? null, _status: a.v._status } : a);
+    const b = await tryW(() => mk({ workflowStatus: "draft" }, { noDefaults: true }));
+    obs("P-5 create (no draft flag) WITHOUT pillar/author", b.ok ? { id: b.v.id } : b);
+    if (a.ok) obs("P-5 GET hub detail of pillar-less draft", await hubGet(a.v.id as number));
+    const c = await tryW(() => mk({ lastEngine: engId }));
+    if (c.ok) {
+      const id = c.v.id as number;
+      const r0 = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      await payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: "P5 edited" } as never });
+      const r1 = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      await payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true, hubAuthor: { actor: "probe" }, engineId: engId }, data: { title: "P5 draft edit" } as never });
+      const r2 = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, draft: true })) as unknown as Doc;
+      obs("P-5 lastEngine passed in create data", { engineId: engId, afterCreate: r0.lastEngine, afterPlainUpdate: r1.lastEngine, afterDraftUpdateWithUnknownCtx: r2.lastEngine, version: [r0.version, r1.version, r2.version], _status: r0._status });
+    } else obs("P-5 lastEngine create", c);
+  }
+
+  // ── P-6a two concurrent Local-API creates with the same slug ────────────
+  if (want("P-6a")) {
+    const res: unknown[] = [];
+    for (let i = 0; i < 5; i++) {
+      const slug = uniq("race");
+      const rr = await Promise.allSettled([mk({ slug }), mk({ slug })]);
+      const n = (await payload.find({ collection: "articles", where: { and: [{ tenant: { equals: T } }, { slug: { equals: slug } }] }, depth: 0, limit: 5, overrideAccess: true, locale: "en" })).totalDocs;
+      res.push({ fulfilled: rr.filter((x) => x.status === "fulfilled").length, rowsWithSlug: n, errors: rr.filter((x) => x.status === "rejected").map((x) => String((x as PromiseRejectedResult).reason?.message ?? "").slice(0, 90)) });
+    }
+    obs("P-6a 5 trials of 2 parallel creates same slug", res);
+  }
+
+  // ── P-10 exclusive / translationAssisted with overrideAccess ───────────
+  if (want("P-10")) {
+    const r = await tryW(() => mk({ exclusive: true, translationAssisted: true }));
+    obs("P-10 create with exclusive:true translationAssisted:true (overrideAccess)", r.ok ? { exclusive: r.v.exclusive, translationAssisted: r.v.translationAssisted } : r);
+  }
+
+  // ── P-11 locale + sourceLanguage ─────────────────────────────────────────
+  if (want("P-11")) {
+    const tDoc = (await payload.findByID({ collection: "tenants", id: T, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const slug = uniq("p11");
+    const created = (await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { tenant: T, title: "P11 tiêu đề không locale", slug, pillar: pillarDoc.id, author: authorDoc.id, workflowStatus: "draft", sourceLanguage: tDoc.defaultLanguage } as never,
+    })) as unknown as Doc;
+    const en = (await payload.findByID({ collection: "articles", id: created.id as number, depth: 0, locale: "en", overrideAccess: true })) as unknown as Doc;
+    const noSrc = await mk({});
+    obs("P-11", { tenantDefaultLanguage: tDoc.defaultLanguage, titleReadEn: en.title, slugReadEn: en.slug, sourceLanguage: en.sourceLanguage, sourceLanguageWhenNotPassed: noSrc.sourceLanguage ?? null });
+  }
+
+  // ── P-12 disableRevalidate really suppresses the webhook (+ positive control) ─
+  if (want("P-12")) {
+    const http = await import("node:http");
+    let hits = 0;
+    const server = http.createServer((req, res) => {
+      if (req.method === "POST") hits++;
+      req.resume();
+      res.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as { port: number }).port;
+    const tDoc = (await payload.findByID({ collection: "tenants", id: T, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const prevUrl = tDoc.frontendUrl ?? null;
+    await payload.update({ collection: "tenants", id: T, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: `http://127.0.0.1:${port}` } as never });
+    const counts: Record<string, number> = { signingSecretSet: process.env.CENTRAL_SIGNING_SECRET ? 1 : 0 };
+    try {
+      let h0 = hits;
+      const a = await mk({}, { context: { disableRevalidate: true } });
+      counts.createWithFlag = hits - h0;
+      h0 = hits;
+      await payload.update({ collection: "articles", id: a.id as number, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { dek: "x" } as never });
+      counts.draftUpdateWithFlag = hits - h0;
+      h0 = hits;
+      const b = (await payload.create({ collection: "articles", overrideAccess: true, locale: "en", data: { tenant: T, title: "P12 control", slug: uniq("p12"), pillar: pillarDoc.id, author: authorDoc.id, workflowStatus: "draft" } as never })) as unknown as Doc;
+      counts.createNoFlag_positiveControl = hits - h0;
+      h0 = hits;
+      await payload.update({ collection: "articles", id: b.id as number, overrideAccess: true, locale: "en", draft: true, data: { dek: "y" } as never });
+      counts.draftUpdateNoFlag = hits - h0;
+    } finally {
+      await payload.update({ collection: "tenants", id: T, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: prevUrl } as never });
+      server.close();
+    }
+    obs("P-12 webhook POSTs received", counts);
+  }
+
+  // public read token for dtw (sha256 stored, raw kept in memory only)
+  const pubTok = randomBytes(24).toString("hex");
+  let pubAdded = false;
+  const ensurePub = async () => {
+    if (pubAdded) return;
+    const tDoc = (await payload.findByID({ collection: "tenants", id: T, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const prev = (tDoc.readTokens as unknown[] | undefined) ?? [];
+    await payload.update({
+      collection: "tenants",
+      id: T,
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { readTokens: [...prev, { label: "explore6", tokenHash: sha256Hex(pubTok), tokenPrefix: pubTok.slice(0, 6), status: "active" }] } as never,
+    });
+    pubAdded = true;
+  };
+  const pubGet = async (slug: string) => {
+    await ensurePub();
+    const res = await fetch(`${BASE}/api/public/articles/${encodeURIComponent(slug)}`, { headers: { Authorization: `Bearer ${pubTok}` } });
+    const j = (await res.json().catch(() => ({}))) as { title?: string; data?: { title?: string }; doc?: { title?: string } };
+    return { status: res.status, title: j.title ?? j.data?.title ?? j.doc?.title ?? null };
+  };
+
+  // ── P-14 two faces of a Payload draft; branch A (no draft flag) vs B (draft:true) ─
+  if (want("P-14")) {
+    const upd = (id: number, data: Record<string, unknown>, draft: boolean) =>
+      tryW(() => payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", ...(draft ? { draft: true } : {}), context: { disableRevalidate: true }, data: data as never }));
+    for (const scen of [
+      { name: "S1 SaveDraft{title:X}", save: { title: "X" } },
+      { name: "S2 SaveDraft{title:X,workflowStatus:published}", save: { title: "X", workflowStatus: "published" } },
+    ]) {
+      for (const branch of ["A", "B"] as const) {
+        const a = await mk({ dek: "d0" });
+        const id = a.id as number;
+        const created = await both(id);
+        const sd = await upd(id, scen.save, true);
+        const afterSave = await both(id);
+        const patch = await upd(id, { dek: `${branch}-dek`, workflowStatus: "draft", _status: "draft" }, branch === "B");
+        const afterPatch = await both(id);
+        obs(`P-14 ${scen.name} branch ${branch}`, { created, saveDraftOk: sd.ok, afterSave, patchOk: patch.ok ? true : patch, afterPatch, publicGet: await pubGet(a.slug as string) });
+      }
+    }
+    // validation behaviour per branch: sponsored without sponsor
+    for (const branch of ["A", "B"] as const) {
+      const a = await mk({});
+      const r = await upd(a.id as number, { sponsored: true, workflowStatus: "draft", _status: "draft" }, branch === "B");
+      obs(`P-14 validation sponsored-without-sponsor branch ${branch}`, r.ok ? { ok: true, stored: await both(a.id as number) } : r);
+    }
+  }
+
+  // ── P-14b the "unpublish a live article" case ───────────────────────────
+  if (want("P-14b")) {
+    const upd = (id: number, data: Record<string, unknown>, draft: boolean) =>
+      tryW(() => payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", ...(draft ? { draft: true } : {}), context: { disableRevalidate: true }, data: data as never }));
+    for (const branch of ["A", "B"] as const) {
+      const a = await mk({ dek: "d0", title: `P14b live ${branch}` });
+      const id = a.id as number;
+      const slug = a.slug as string;
+      const pub = await upd(id, { _status: "published", workflowStatus: "published" }, false);
+      const afterPublish = await both(id);
+      const pubAfterPublish = await pubGet(slug);
+      const sd = await upd(id, { title: "Y-draft", workflowStatus: "draft" }, true);
+      const afterSave = await both(id);
+      const pubAfterSave = await pubGet(slug);
+      const patch = await upd(id, { dek: `${branch}-dek`, workflowStatus: "draft", _status: "draft" }, branch === "B");
+      const afterPatch = await both(id);
+      obs(`P-14b branch ${branch}`, { publishOk: pub.ok ? true : pub, afterPublish, pubAfterPublish, saveDraftOk: sd.ok, afterSave, pubAfterSave, patchOk: patch.ok ? true : patch, afterPatch, pubAfterPatch: await pubGet(slug) });
+    }
+  }
+
+  // ── P-15 timings on adversarial / large bodies ──────────────────────────
+  if (want("P-15")) {
+    const rep = (s: string, n: number) => s.repeat(n);
+    const C = (cp: number) => String.fromCharCode(cp);
+    const vec: Record<string, () => string> = {};
+    for (const [k, c] of [["20", " "], ["a0", C(0xa0)], ["3000", C(0x3000)], ["feff", C(0xfeff)], ["2028", C(0x2028)]] as const) {
+      vec[`w${k}_190k_x`] = () => "](" + rep(c, 190000) + "x)";
+      vec[`w${k}_190k_bare`] = () => "](" + rep(c, 190000);
+    }
+    vec.walt_190k_x = () => "](" + rep(" " + C(0xa0), 95000) + "x)";
+    for (const [k, cp] of [["180e", 0x180e], ["200b", 0x200b], ["0085", 0x85], ["2060", 0x2060]] as const) vec[`nonw${k}_190k_x`] = () => "](" + rep(C(cp), 190000) + "x)";
+    const deepList = (indent: (lvl: number) => string, levels: number, target = 200000) => {
+      let s = "";
+      while (s.length < target) for (let l = 0; l < levels && s.length < target; l++) s += indent(l) + "- x](\n";
+      return s;
+    };
+    vec.deep_tab_256 = () => deepList((l) => "\t".repeat(l), 256);
+    vec.deep_tab_64 = () => deepList((l) => "\t".repeat(l), 64);
+    vec.deep_sp4_63 = () => deepList((l) => "    ".repeat(l), 63);
+    vec.deep_sp4_70 = () => deepList((l) => "    ".repeat(l), 70);
+    vec.zigzag_tab63 = () => {
+      let s = "";
+      while (s.length < 200000) s += "\t".repeat(63) + "- x\n- y\n";
+      return s.slice(0, 200000);
+    };
+    vec.lbracket_100k = () => rep("[", 100000);
+    vec.star_100k = () => rep("*", 100000);
+    vec.underscore_100k = () => rep("_", 100000);
+    vec.quote_nest_10k = () => rep(">", 10000) + " x";
+    vec.quote_nest_100k = () => rep(">", 100000) + " x";
+    vec.dash_nest_50k = () => rep("- ", 50000) + "x";
+    vec.one_line_200k = () => rep("lorem ", 33333);
+    vec.normal_200k = () => {
+      const para = "Đây là một đoạn văn **bình thường** với [liên kết](https://example.com/a) và *nghiêng*, dài vừa phải cho một bài báo. ";
+      let s = "";
+      while (s.length < 199000) s += rep(para, 4) + "\n\n";
+      return s;
+    };
+    vec.links_40k = () => rep("[a](b)", 40000);
+    vec.links_rel_28k = () => rep("[a](/b) ", 24000);
+    vec.bold_30k = () => rep("**a**", 30000);
+    vec.lines_100k = () => rep("a\n", 100000);
+    vec.dash_lines_50k = () => rep("- a\n", 50000);
+    vec.crlf_33k = () => rep("line\r\n", 33000);
+    vec.ws256_block_775 = () => rep("](" + rep(" ", 256), 775);
+    vec.ws256_x = () => "](" + rep(" ", 256) + "x)";
+    vec.ws257_x = () => "](" + rep(" ", 257) + "x)";
+    vec.nl300_end = () => "Bài.\n" + rep("\n", 300);
+    vec.nl300_mid = () => "Bài.\n" + rep("\n", 300) + "Tiếp.";
+    // scaling curves for the slow importer cases (chars = n × unit)
+    for (const n of [10000, 25000, 50000]) vec[`star_${n}`] = () => rep("*", n);
+    for (const n of [12500, 25000, 50000]) vec[`lines_${n}`] = () => rep("a\n", n);
+    for (const n of [5000, 10000, 20000]) vec[`bold_${n}`] = () => rep("**a**", n);
+    for (const n of [12500, 25000]) vec[`dash_lines_${n}`] = () => rep("- a\n", n);
+    for (const n of [10000, 20000]) vec[`para_lines_${n}`] = () => rep("Một câu văn bình thường có độ dài vừa phải.\n", n);
+
+    for (const [name, gen] of Object.entries(vec)) {
+      if (vecOnly && vecOnly !== name) continue;
+      const raw = gen();
+      const rec: Record<string, unknown> = { inputLen: raw.length };
+      // Frozen order, partially simulated (size, C0/surrogate, trim, W-run, image). The linear link scanner does not exist at base.
+      const trimmed = raw.trim();
+      const c0 = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(raw);
+      const verdict = raw.length > 200000 ? "422 too_large" : c0 ? "422 c0" : trimmed === "" ? "201 empty" : maxWsRun(trimmed) > 256 ? "422 ws_run" : trimmed.includes("![") ? "422 image" : "pass-pure(1)(2) (link scan not simulated)";
+      rec.predicted = verdict;
+      rec.maxWsRunIn = maxWsRun(trimmed);
+      let t0 = performance.now();
+      const lex = md2lex(trimmed);
+      rec.md2lexMs = ms(t0);
+      const st = treeStats(lex);
+      rec.lexJsonLen = JSON.stringify(lex).length;
+      rec.nodes = st.nodes;
+      rec.maxDepth = st.maxDepth;
+      rec.maxListNest = st.maxListNest;
+      t0 = performance.now();
+      let out = "";
+      try {
+        out = lex2md(lex);
+      } catch (e) {
+        rec.exportThrew = (e as Error).name;
+      }
+      rec.lex2mdMs = ms(t0);
+      rec.exportLen = out.length;
+      rec.maxWsRunOut = maxWsRun(out);
+      t0 = performance.now();
+      try {
+        md2lex(out);
+      } catch (e) {
+        rec.reimportThrew = (e as Error).name;
+      }
+      rec.roundTripMs = (rec.lex2mdMs as number) + ms(t0);
+      rec.E14_stop = raw.length <= 200000 && ((rec.lexJsonLen as number) > 2_000_000 || st.nodes > 50_000);
+      const store = verdict.startsWith("201") || verdict.startsWith("pass") || arg("store-all") === name;
+      if (store) {
+        t0 = performance.now();
+        const c = await tryW(() => mk({ body: lex }));
+        rec.createMs = ms(t0);
+        if (c.ok) rec.get = await hubGet(c.v.id as number);
+        else rec.createError = c;
+      }
+      obs(`P-15 ${name}`, rec);
+    }
+  }
+
+  // ── P-16 URL validation / sanitisation vs the importer ──────────────────
+  if (want("P-16")) {
+    const urls = [
+      "\u0001javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,<script>alert(1)</script>", "vbscript:x",
+      "java&#115;cript&#58;alert(1)", "&#106;avascript:alert(1)", "//evil.com", "\\/\\/evil.com", "?q=1", "tel:+84123",
+      "mailto:a@b.c", "/rel", "#h", "foo/bar", "https://ok.com/a", "http://ok.com", " javascript:x",
+    ];
+    for (const u of urls) {
+      const lex = md2lex(`[x](${u})`);
+      const st = treeStats(lex);
+      const v = (lexical as unknown as { validateUrl: (s: string) => boolean }).validateUrl(u);
+      const s = (lexical as unknown as { sanitizeUrl: (s: string) => string }).sanitizeUrl(u);
+      const nonDraft = await tryW(() => mk({ body: lex }));
+      const draft = await tryW(() => mk({ body: lex }, { draft: true }));
+      obs(`P-16 ${JSON.stringify(u)}`, { validateUrl: v, sanitizeUrl: s, importedLinks: st.links, types: st.types, createNoDraft: nonDraft.ok ? "ok" : nonDraft.msg, createDraft: draft.ok ? "ok" : draft.msg });
+    }
+  }
+
+  // ── P-18 findByID with select on `version` / `origin` ───────────────────
+  if (want("P-18")) {
+    const a = await mk({});
+    const id = a.id as number;
+    for (const sel of [{ version: true }, { origin: true }, { version: true, origin: true, lastEngine: true, workflowStatus: true }]) {
+      for (const draft of [false, true]) {
+        const r = await tryW(() => payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, ...(draft ? { draft: true } : {}), select: sel as never }));
+        obs(`P-18 select ${JSON.stringify(sel)} draft=${draft}`, r.ok ? r.v : r);
+      }
+    }
+  }
+
+  // ── P-19 (+ P-17) slug pre-check over main table vs latest draft ────────
+  if (want("P-19") || want("P-17")) {
+    const X = uniq("slugx");
+    const Y = uniq("slugy");
+    const a = await mk({ slug: X });
+    const id = a.id as number;
+    await payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { slug: Y } as never });
+    const q = async (slug: string, draft: boolean) => {
+      const r = await payload.find({ collection: "articles", ...(draft ? { draft: true } : {}), where: { and: [{ tenant: { equals: T } }, { slug: { equals: slug } }] }, limit: 2, depth: 0, locale: "en", overrideAccess: true });
+      return r.docs.map((d) => ({ id: (d as unknown as Doc).id, slug: (d as unknown as Doc).slug }));
+    };
+    const { scopedFind } = await import("../src/lib/scoped");
+    const sf = async (slug: string) =>
+      (await (scopedFind as unknown as (a: Record<string, unknown>) => Promise<{ docs: Doc[] }>)({ payload, collection: "articles", tenantId: T, where: { slug: { equals: slug } }, limit: 2, depth: 0, locale: "en" })).docs.map((d) => ({ id: d.id, slug: d.slug }));
+    if (want("P-19"))
+      obs("P-19", {
+        articleId: id,
+        both: await both(id),
+        i_findDraft_Y: await q(Y, true),
+        ii_findDraft_X: await q(X, true),
+        findMain_X: await q(X, false),
+        findMain_Y: await q(Y, false),
+        iii_scopedFind_X: await sf(X).catch((e) => String(e).slice(0, 100)),
+        iii_scopedFind_Y: await sf(Y).catch((e) => String(e).slice(0, 100)),
+      });
+    if (want("P-17")) {
+      const engTok = process.env.SEED_ENGINE_TOKEN;
+      const intake = async (slug: string) => {
+        const res = await fetch(`${BASE}/api/engine/intake`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${engTok}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ publicationId: "dtw", title: `P17 ${slug}`, pillarSlug: pillarDoc.slug, body_markdown: "Thân P17.", byline: "P17 Probe Byline", slug, engineDraftId: uniq("eng") }),
+        });
+        const j = (await res.json().catch(() => ({}))) as { status?: string; reason?: string; id?: unknown };
+        return { http: res.status, status: j.status, reason: typeof j.reason === "string" ? j.reason.slice(0, 120) : j.reason };
+      };
+      obs("P-17 intake with slug X (main table of hub draft still X)", engTok ? await intake(X) : "SEED_ENGINE_TOKEN unset");
+      obs("P-17 intake with slug Y (only on latest draft)", engTok ? await intake(Y) : "SEED_ENGINE_TOKEN unset");
+      obs("P-17 rows per slug after intake", { X: await q(X, false), Y: await q(Y, false) });
+    }
+  }
+
+  // ── slugify vector table (hub copies these into hub-composer-draft.test.ts) ─
+  if (want("slugify")) {
+    const inputs = [
+      "Hello World", "  Trim  me  ", "Spain's Best Beaches", "Rock ’n’ Roll", "O‘Brien`s ʼTest", "Málaga & Córdoba",
+      "Đà Nẵng đẹp", "ĐỒNG ĐỀU", "Việt Nam 2026: Tăng trưởng 6,5%", "a--b__c", "---", "!!!", "", "Ñandú über straße",
+      "x".repeat(100), `${"word ".repeat(30)}end`, "C++ / C# — guide", "émoji 😀 test", "UPPER lower 123",
+    ];
+    obs("slugify vectors", inputs.map((i) => [i, slugify(i)]));
+  }
+
+  if (pubAdded) {
+    const tDoc = (await payload.findByID({ collection: "tenants", id: T, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const kept = ((tDoc.readTokens as Doc[] | undefined) ?? []).filter((r) => r.label !== "explore6");
+    await payload.update({ collection: "tenants", id: T, overrideAccess: true, context: { disableRevalidate: true }, data: { readTokens: kept } as never });
+  }
+  console.log("\n[explore6] done (observations only — no assertions)");
+  process.exit(0);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -2012,10 +2716,12 @@ const run = flag("setup")
                     ? check4
                     : flag("check5")
                       ? check5
-                      : null;
+                      : flag("explore6")
+                        ? explore6
+                        : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only]",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15] [--vec <name>]",
   );
   process.exit(2);
 }
