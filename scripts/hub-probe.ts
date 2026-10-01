@@ -2130,7 +2130,7 @@ const P1_SAMPLES6: Record<string, string> = {
 // process:   --explore6 --only P-22 --vec <name>   (list names with --list).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BODY6_PROBES = ["P-20", "P-21", "P-22", "P-23", "P-24"];
+const BODY6_PROBES = ["P-20", "P-21", "P-22", "P-23", "P-24", "P-25", "P-26"];
 /** Proposed (temporary) pre-check limits under test: lines, `*`+`_`, `](`. */
 const LIM6 = { lines: 5000, starUnd: 3000, links: 1000 };
 /** Revised proposal under test (after the P-22 / P-23 measurements): total lines, `*`+`_` chars, mark runs, `](`, per-paragraph-unit runs / links, tree caps. */
@@ -2545,6 +2545,8 @@ function body6Vectors(lim: { lines: number; starUnd: number; links: number } = L
 }
 
 interface Body6Ctx {
+  /** the editor config the converters use (P-25 compares it before / after terminations) */
+  editorConfig?: unknown;
   md2lex: (m: string) => Record<string, unknown>;
   lex2md: (d: unknown) => string;
   obs: (label: string, v: unknown) => void;
@@ -2595,6 +2597,405 @@ function formatSeq6(state: unknown): string {
   return out.join("|");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// P5.1 / Stage 0.5c — hard time guard feasibility (OBSERVE ONLY).
+//   P-25 : wrap the WHOLE conversion in `vm` with `timeout` (H6a hard stop, H6b same process stays healthy,
+//          H6c overhead, H6d importer / exporter are synchronous).
+//   P-26 : `worker_threads` + `terminate()` fallback (H6e) — only measured when P-25 does not hold.
+// Run each vector in its OWN process, with an outer `timeout 60` (a vector the guard cannot interrupt must not hang the shell):
+//   --explore6 --only P-25 --vec <label> --T 1000,1500,2000 [--ctx new|reuse]
+//   --explore6 --only P-25 --mode redos|native|sync|overhead|cycle [--T ..] [--cycles 50]
+//   --explore6 --list    (labels `P-25 p25_*`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** P-25 vector labels → generators. Reuses the P-22/P-23/P-24 generators by name; adds only the vectors that did not exist. */
+function p25Vectors(v: Record<string, V6>): Record<string, () => string> {
+  const rep = (s: string, n: number) => s.repeat(n);
+  const reuse = (name: string): (() => string) => {
+    const g = v[name]?.gen;
+    if (!g) throw new Error(`P-25: unknown base vector ${name}`);
+    return g;
+  };
+  return {
+    p25_star_a_3000: () => rep("*a ", 3000),
+    p25_star_a_1000: () => rep("*a ", 1000),
+    p25_star_link_200: () => rep("*[a](/b) ", 200),
+    p25_star_link_400: () => rep("*[a](/b) ", 400),
+    p25_backtick_200k: reuse("p23_backtick"),
+    p25_tilde_33333: reuse("p23_tilde"),
+    p25_tab_200k: reuse("p23_tab"),
+    p25_fence_5000: reuse("p23c_fence_L5000"),
+    p25_tablerow_5000: reuse("p23c_tablerow_L5000"),
+    p25_star_100k: reuse("p22_block_star_100000"),
+    p25_block_lf_100100: reuse("p22_block_a_100100"),
+    p25_codespan_66667: reuse("p23_codespan"),
+    p25_hash_200k: reuse("p23_hash_a"),
+    p25_hr_dash_200k: reuse("p23_hr_dash"),
+    // real-like (must NOT be interrupted) and the unguarded-but-heavy cases from the P-24 measurements
+    p25_real_40k: reuse("p24_real_40k"),
+    p25_real_200k_para: reuse("p24_real_200k_para"),
+    p25_real_dense_200k_para: reuse("p24_real_dense_200k_para"),
+    p25_normal_199k: reuse("p24_normal_199k"),
+    p25_zigzag255_200k: reuse("p24_nodes_zigzag255"),
+    p25_nodes_dash_lines: reuse("p24_nodes_dash_lines"),
+  };
+}
+
+async function p25p26(c: Body6Ctx, v: Record<string, V6>): Promise<void> {
+  const { md2lex, lex2md, obs, ms } = c;
+  const vm = await import("node:vm");
+  const { createHash } = await import("node:crypto");
+  const v8 = await import("node:v8");
+  const ah = await import("node:async_hooks");
+  const vecs = p25Vectors(v);
+  const Ts = (arg("T") ?? "1000,1500,2000").split(",").map((x) => Number(x));
+  const mode = arg("mode") ?? "vec";
+  const sha = (s: string) => createHash("sha1").update(s).digest("hex").slice(0, 12);
+  /** link nodes carry a random 24-hex `id` (the ONLY key that differs between two conversions of one body — see `--mode nondet`): blank it before hashing */
+  const canon = (json: string) => json.replace(/"id":"[0-9a-f]{24}"/g, '"id":"#"');
+
+  /** The whole conversion as one SYNCHRONOUS function: md→lex, tree walk, JSON, lex→md, stability pass (md→lex, lex→md). */
+  const work = (md: string) => {
+    const lex1 = md2lex(md);
+    const st = treeStats(lex1);
+    const json = JSON.stringify(lex1);
+    const md1 = lex2md(lex1);
+    const lex2 = md2lex(md1);
+    const md2 = lex2md(lex2);
+    return { nodes: st.nodes, json, md1, md2 };
+  };
+
+  // guard variants (all synchronous): new context per call, or one reused context + precompiled Script
+  const guardNew = <A, R>(fn: (a: A) => R, a: A, T: number): R => vm.runInNewContext("fn(a)", { fn, a }, { timeout: T }) as R;
+  const reuseSandbox: Record<string, unknown> = {};
+  const reuseCtx = vm.createContext(reuseSandbox);
+  const reuseScript = new vm.Script("fn(a)");
+  const guardReuse = <A, R>(fn: (a: A) => R, a: A, T: number): R => {
+    reuseSandbox.fn = fn;
+    reuseSandbox.a = a;
+    try {
+      return reuseScript.runInContext(reuseCtx, { timeout: T }) as R;
+    } finally {
+      reuseSandbox.fn = undefined;
+      reuseSandbox.a = undefined;
+    }
+  };
+  const guard = (kind: string) => (kind === "reuse" ? guardReuse : guardNew);
+  const run = <A, R>(kind: string, fn: (a: A) => R, a: A, T: number) => {
+    const t0 = performance.now();
+    try {
+      const r = guard(kind)(fn, a, T);
+      return { ok: true as const, ms: performance.now() - t0, r };
+    } catch (e) {
+      const err = e as { code?: string; name?: string; message?: string };
+      return { ok: false as const, ms: performance.now() - t0, code: err.code ?? null, name: err.name ?? typeof e, msg: String(err.message ?? "").slice(0, 120) };
+    }
+  };
+  const r1 = (x: number) => Math.round(x * 10) / 10;
+
+  if (c.only?.includes("P-26")) {
+    obs("P-26 (worker_threads + terminate) NOT run: H6e is only measured when P-25 H6a or H6b is NOT-VIABLE / INCONCLUSIVE (see report)", {});
+    return;
+  }
+
+  // which key names differ between two conversions of the SAME input (random ids, etc.)? — needed to compare trees across runs
+  if (mode === "nondet") {
+    const body = vecs.p25_real_40k!();
+    const a = md2lex(body);
+    const b = md2lex(body);
+    const ks = new Set<string>();
+    diffKeyNames(a, b, "root", ks);
+    const sample = (JSON.stringify(a).match(/"id":"[^"]*"/g) ?? []).slice(0, 3);
+    obs("P-25 nondeterministic key names between two conversions of the same body", { keys: [...ks], sampleIds: sample });
+    return;
+  }
+
+  // ── H6a (breadth): random hostile bodies under a SHORT guard — does ANY input run past the timeout? (max overshoot = slowest interrupt) ──
+  if (mode === "fuzz") {
+    const T = Ts[0]!;
+    const kind = arg("ctx") ?? "new";
+    const trials = Number(arg("trials") ?? 300);
+    const rnd = seeded6(Number(arg("seed") ?? 31));
+    const inl = ["*", "**", "_", "__", "[a]", "(/b)", "](/b)", "[", "]", "a ", " ", "a", "`", "~~", "\\", "<", "*a", "a*", "_a", "a_", "[a](/b)", "](", "(", ")", "**a", "a**", "[a](/b)*", "*[a]", "\t", "&amp;", "<b>", "|", "!", "#", "==", "$", "\u2028", "\u00a0"];
+    const lin = ["a", "# a", "## a", "|a|b|", "|---|---|", "```", "~~~", "---", "***", "___", "- a", "* a", "+ a", "1. a", "> a", ">", "[r]: /x", "a  ", "    a", "a\\", "===", "-", "a **b**", "[a](/b)", "`a`", "", "- [ ] a", "  - b", "\t- c", "<div>", "![i](/x.png)"];
+    const res: { shape: string; len: number; elapsedMs: number; overshootMs: number; timedOut: boolean; ok: boolean }[] = [];
+    for (let i = 0; i < trials; i++) {
+      let body: string;
+      let shape: string;
+      if (rnd() < 0.5) {
+        const k = 1 + Math.floor(rnd() * 5);
+        const unit = Array.from({ length: k }, () => inl[Math.floor(rnd() * inl.length)]!).join("");
+        const n = Math.max(1, Math.floor((50 + rnd() * 200_000) / Math.max(1, unit.length + 1)));
+        body = (unit + " ").repeat(n).slice(0, 200_000);
+        shape = `inline ${JSON.stringify(unit)} x${n}`;
+      } else {
+        const pick = Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => lin[Math.floor(rnd() * lin.length)]!);
+        const L = 50 + Math.floor(rnd() * 20_000);
+        body = Array.from({ length: L }, () => pick[Math.floor(rnd() * pick.length)]!).join("\n").slice(0, 200_000);
+        shape = `lines ${JSON.stringify(pick)} x${L}`;
+      }
+      const r = run<string, ReturnType<typeof work>>(kind, work, body, T);
+      res.push({ shape: shape.slice(0, 90), len: body.length, elapsedMs: r1(r.ms), overshootMs: r1(r.ms - T), timedOut: !r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT", ok: r.ok });
+    }
+    const timed = res.filter((x) => x.timedOut);
+    const unexpected = res.filter((x) => !x.ok && !x.timedOut);
+    const fin = res.filter((x) => x.ok);
+    const worst = timed.slice().sort((a, b) => b.overshootMs - a.overshootMs);
+    const finMax = fin.reduce((m, x) => Math.max(m, x.elapsedMs), 0);
+    obs(`P-25 fuzz T=${T} ctx=${kind} trials=${trials}`, { finishedWithinT: fin.length, timedOut: timed.length, otherFailures: unexpected.length, slowestFinishedMs: finMax, overshootMs: { max: worst[0]?.overshootMs ?? null, p90: worst[Math.floor(worst.length * 0.1)]?.overshootMs ?? null, median: worst[Math.floor(worst.length / 2)]?.overshootMs ?? null }, worst5: worst.slice(0, 5), otherFailureExamples: unexpected.slice(0, 3) });
+    return;
+  }
+
+  // ── H6d: is the conversion synchronous? (no promise / microtask / timer created during md→lex→md) ──
+  if (mode === "sync") {
+    const counts: Record<string, number> = {};
+    const hook = ah.createHook({
+      init(_id, type) {
+        counts[type] = (counts[type] ?? 0) + 1;
+      },
+    });
+    const body = vecs.p25_real_40k!();
+    hook.enable();
+    const out = work(body);
+    hook.disable();
+    // positive control: the same hook DOES see a microtask / promise / timer when one is created
+    const ctl: Record<string, number> = {};
+    const hook2 = ah.createHook({
+      init(_id, type) {
+        ctl[type] = (ctl[type] ?? 0) + 1;
+      },
+    });
+    hook2.enable();
+    queueMicrotask(() => undefined);
+    void Promise.resolve().then(() => undefined);
+    clearTimeout(setTimeout(() => undefined, 1));
+    hook2.disable();
+    obs("P-25 H6d positive control (hook sees queueMicrotask / Promise / setTimeout)", ctl);
+    const isP = (x: unknown) => typeof (x as { then?: unknown } | null)?.then === "function";
+    obs("P-25 H6d async resources created while converting a 40k body (empty object = fully synchronous)", { counts, outputIsThenable: isP(out) || isP(out.json) || isP(out.md1), nodes: out.nodes, md1Len: out.md1.length, stable: out.md1 === out.md2 });
+    // does a `discrete` update commit before it returns? (the JSON is complete right after md2lex)
+    const lex = md2lex("## a\n\n**b** [c](/d)");
+    obs("P-25 H6d editor state complete immediately after md2lex return", { rootChildren: ((lex as { root: { children: unknown[] } }).root.children ?? []).length, md: lex2md(lex) });
+    return;
+  }
+
+  // ── pure-JS and native control cases (vm timeout vs things that are not importer code) ──
+  if (mode === "redos") {
+    for (const T of Ts) {
+      const r = run<string, boolean>("new", (s) => /^(a+)+$/.test(s), "a".repeat(40) + "!", T);
+      obs(`P-25 redos /^(a+)+$/ x 40a+! T=${T}`, { timedOut: !r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT", elapsedMs: r1(r.ms), overshootMs: r1(r.ms - T), ...(r.ok ? { result: r.r } : { code: r.code, name: r.name }) });
+    }
+    return;
+  }
+  if (mode === "native") {
+    const bigArr = Array.from({ length: 3_000_000 }, (_, i) => ({ x: i, y: [i, "a"] }));
+    const nums = Array.from({ length: 4_000_000 }, (_, i) => (i * 7919) % 1_000_003);
+    const bigStr = "a".repeat(100_000_000);
+    const cases: Record<string, () => unknown> = {
+      json_stringify_3M_objects: () => JSON.stringify(bigArr).length,
+      array_sort_default_4M: () => nums.slice().sort().length,
+      string_replaceAll_100M: () => bigStr.replaceAll("a", "bb").length,
+      string_split_join: () => "a,".repeat(20_000_000).split(",").join(";").length,
+      normalize_100M: () => bigStr.normalize("NFD").length,
+      js_infinite_loop: () => {
+        for (;;) {
+          /* spin */
+        }
+      },
+    };
+    // the same builtins at input sizes the hub can actually feed them (body <= 200 000 chars, <= ~100 000 pieces): unguarded wall time
+    const small: Record<string, () => unknown> = {
+      array_sort_default_200k: () => nums.slice(0, 200_000).sort().length,
+      string_replaceAll_200k: () => bigStr.slice(0, 200_000).replaceAll("a", "bb").length,
+      string_split_join_100k: () => "a,".repeat(100_000).split(",").join(";").length,
+      normalize_200k: () => bigStr.slice(0, 200_000).normalize("NFD").length,
+      json_stringify_tree_1_4MB: () => JSON.stringify(bigArr.slice(0, 30_000)).length,
+    };
+    if (arg("small") !== undefined || flag("small")) {
+      for (const [name, fn] of Object.entries(small)) {
+        const times: number[] = [];
+        for (let i = 0; i < 5; i++) {
+          const t0 = performance.now();
+          fn();
+          times.push(performance.now() - t0);
+        }
+        obs(`P-25 native@hub-scale ${name} (ms, 5 runs)`, { min: r1(Math.min(...times)), max: r1(Math.max(...times)) });
+      }
+      return;
+    }
+    const only = arg("case");
+    for (const [name, fn] of Object.entries(cases)) {
+      if (only && only !== name) continue;
+      for (const T of Ts) {
+        const r = run<undefined, unknown>("new", () => fn(), undefined, T);
+        obs(`P-25 native ${name} T=${T}`, { timedOut: !r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT", elapsedMs: r1(r.ms), overshootMs: r1(r.ms - T), ...(r.ok ? { finishedWithin: true } : { code: r.code }) });
+      }
+    }
+    return;
+  }
+
+  // ── H6c: overhead on normal bodies, new context vs reused context ──
+  if (mode === "overhead") {
+    const N = Number(arg("n") ?? 15);
+    const bodies: Record<string, string> = { real_40k: vecs.p25_real_40k!(), real_200k_para: vecs.p25_real_200k_para!(), small_2k: vecs.p25_real_40k!().slice(0, 2000) };
+    const T = Number(arg("Tg") ?? 5000);
+    const stat = (xs: number[]) => {
+      const s = xs.slice().sort((a, b) => a - b);
+      return { min: r1(s[0]!), median: r1(s[Math.floor(s.length / 2)]!), p90: r1(s[Math.floor(s.length * 0.9)]!), max: r1(s[s.length - 1]!) };
+    };
+    for (const [bn, body] of Object.entries(bodies)) {
+      const t: Record<string, number[]> = { unguarded: [], guardNew: [], guardReuse: [] };
+      for (let i = 0; i < N; i++) {
+        // rotate the order so no variant always runs first / last
+        const order = ["unguarded", "guardNew", "guardReuse"];
+        for (let k = 0; k < i % 3; k++) order.push(order.shift()!);
+        for (const m of order) {
+          const t0 = performance.now();
+          if (m === "unguarded") work(body);
+          else guard(m === "guardNew" ? "new" : "reuse")(work, body, T);
+          t[m]!.push(performance.now() - t0);
+        }
+      }
+      const base = stat(t.unguarded!);
+      obs(`P-25 H6c overhead body=${bn} (${body.length} chars) n=${N}`, {
+        unguarded: base,
+        guardNew: { ...stat(t.guardNew!), deltaMedianMs: r1(stat(t.guardNew!).median - base.median), pct: r1(((stat(t.guardNew!).median - base.median) / base.median) * 100) },
+        guardReuse: { ...stat(t.guardReuse!), deltaMedianMs: r1(stat(t.guardReuse!).median - base.median), pct: r1(((stat(t.guardReuse!).median - base.median) / base.median) * 100) },
+      });
+    }
+    // cost of the context itself (trivial script)
+    const mk: number[] = [];
+    const mkR: number[] = [];
+    for (let i = 0; i < 300; i++) {
+      let t0 = performance.now();
+      vm.runInNewContext("1+1", {}, { timeout: 1000 });
+      mk.push(performance.now() - t0);
+      t0 = performance.now();
+      guardReuse(() => 1, 1, 1000);
+      mkR.push(performance.now() - t0);
+    }
+    obs("P-25 H6c context cost, trivial fn: runInNewContext vs reused context (ms)", { newContext: stat(mk), reusedContext: stat(mkR) });
+    // memory: 300 fresh contexts, then gc
+    v8.setFlagsFromString("--expose_gc");
+    const gc = vm.runInNewContext("gc") as () => void;
+    gc();
+    const h0 = process.memoryUsage().heapUsed;
+    for (let i = 0; i < 300; i++) vm.runInNewContext("fn(a)", { fn: (x: number) => x, a: i }, { timeout: 1000 });
+    gc();
+    obs("P-25 H6c heap after 300 fresh contexts + gc (KB delta)", { deltaKB: Math.round((process.memoryUsage().heapUsed - h0) / 1024) });
+    return;
+  }
+
+  // ── H6b: 50 alternating cycles (catastrophic vector terminated, then normal bodies) in ONE process ──
+  if (mode === "cycle") {
+    const T = Ts[0]!;
+    const kind = arg("ctx") ?? "new";
+    const cycles = Number(arg("cycles") ?? 50);
+    v8.setFlagsFromString("--expose_gc");
+    const gc = vm.runInNewContext("gc") as () => void;
+    const bads = ["p25_star_link_200", "p25_star_a_1000", "p25_backtick_200k", "p25_tilde_33333", "p25_fence_5000"];
+    const normals: Record<string, string> = { real_40k: vecs.p25_real_40k!(), real_200k_para: vecs.p25_real_200k_para!() };
+    const sampleBodies = Object.entries(P1_SAMPLES6);
+    /** signature of the editor config's markdown transformers (type, format, regexes, handlers by source text) */
+    const trSig = () => {
+      const tr = ((c.editorConfig as { features?: { markdownTransformers?: unknown[] } } | undefined)?.features?.markdownTransformers ?? []) as Record<string, unknown>[];
+      const rx = (x: unknown) => (x instanceof RegExp ? x.source + "/" + x.flags : x === undefined ? "" : typeof x === "object" ? JSON.stringify(Object.keys(x as object)) : String(x));
+      const fn = (x: unknown) => (typeof x === "function" ? sha(Function.prototype.toString.call(x)) : "");
+      return sha(JSON.stringify(tr.map((t) => [t.type, t.format, t.tag, t.trigger, rx(t.regExp), rx(t.regExpStart), rx(t.regExpEnd), rx(t.importRegExp), fn(t.replace), fn(t.export), fn(t.importer)])));
+    };
+    const battery = () => sha(sampleBodies.map(([n, m]) => `${n}:${canon(JSON.stringify(md2lex(m)))}:${lex2md(md2lex(m))}`).join("|"));
+    // baseline (no guard, before any termination)
+    const base: Record<string, { jsonSha: string; md1Sha: string; ms: number }> = {};
+    for (const [n, body] of Object.entries(normals)) {
+      work(body); // extra warm run
+      const t0 = performance.now();
+      const o = work(body);
+      base[n] = { jsonSha: sha(canon(o.json)), md1Sha: sha(o.md1), ms: performance.now() - t0 };
+    }
+    const baseBattery = battery();
+    const baseTr = trSig();
+    gc();
+    const heap0 = process.memoryUsage().heapUsed;
+    obs("P-25 H6b baseline (unguarded, before any termination)", { base: Object.fromEntries(Object.entries(base).map(([k, x]) => [k, { ...x, ms: r1(x.ms) }])), batterySha: baseBattery, transformersSig: baseTr, transformerCount: ((c.editorConfig as { features?: { markdownTransformers?: unknown[] } } | undefined)?.features?.markdownTransformers ?? []).length, heapKB: Math.round(heap0 / 1024) });
+    let terminated = 0, notTerminated = 0, mismatches = 0, batteryMismatches = 0, transformerMismatches = 0;
+    const slow: Record<string, number[]> = { real_40k: [], real_200k_para: [] };
+    const killMs: number[] = [];
+    const heapTrace: number[] = [];
+    for (let i = 0; i < cycles; i++) {
+      const bad = bads[i % bads.length]!;
+      const r = run<string, ReturnType<typeof work>>(kind, work, vecs[bad]!(), T);
+      if (!r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") {
+        terminated++;
+        killMs.push(r.ms);
+      } else {
+        notTerminated++;
+        obs(`P-25 H6b cycle ${i} bad=${bad} NOT terminated`, { ok: r.ok, elapsedMs: r1(r.ms), ...(r.ok ? { nodes: r.r.nodes } : { code: r.code, name: r.name }) });
+      }
+      for (const [n, body] of Object.entries(normals)) {
+        const t0 = performance.now();
+        const g = run<string, ReturnType<typeof work>>(kind, work, body, 20000);
+        const dt = performance.now() - t0;
+        slow[n]!.push(dt);
+        if (!g.ok || sha(canon(g.r.json)) !== base[n]!.jsonSha || sha(g.r.md1) !== base[n]!.md1Sha) {
+          mismatches++;
+          obs(`P-25 H6b cycle ${i} normal=${n} MISMATCH`, { ok: g.ok, ...(g.ok ? { jsonSha: sha(canon(g.r.json)), md1Sha: sha(g.r.md1) } : { code: g.code, name: g.name }) });
+        }
+      }
+      if (i % 5 === 4) {
+        const b = battery();
+        if (b !== baseBattery) {
+          batteryMismatches++;
+          obs(`P-25 H6b cycle ${i} P-1 sample battery MISMATCH`, { sha: b });
+        }
+        if (trSig() !== baseTr) {
+          transformerMismatches++;
+          obs(`P-25 H6b cycle ${i} editor-config transformers CHANGED`, {});
+        }
+      }
+      if (i % 10 === 9 || i === cycles - 1) {
+        gc();
+        heapTrace.push(Math.round(process.memoryUsage().heapUsed / 1024));
+      }
+    }
+    const med = (xs: number[]) => r1(xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)]!);
+    const sortedKill = killMs.slice().sort((a, b) => a - b);
+    obs(`P-25 H6b summary T=${T} ctx=${kind} cycles=${cycles}`, {
+      terminated, notTerminated, normalMismatches: mismatches, batteryMismatches, transformerMismatches,
+      killElapsedMs: { min: r1(sortedKill[0] ?? 0), median: med(killMs), max: r1(sortedKill[sortedKill.length - 1] ?? 0) },
+      normalMs: Object.fromEntries(Object.entries(slow).map(([k, xs]) => [k, { baselineMs: r1(base[k]!.ms), firstHalfMedian: med(xs.slice(0, Math.floor(xs.length / 2))), secondHalfMedian: med(xs.slice(Math.floor(xs.length / 2))), max: r1(Math.max(...xs)) }])),
+      heapKB_afterGc_every10Cycles: heapTrace, heapBaselineKB: Math.round(heap0 / 1024),
+    });
+    return;
+  }
+
+  // ── H6a (default): one vector × several T, each in the same process ──
+  const label = c.vecOnly;
+  if (!label || !vecs[label]) {
+    obs("P-25 needs --vec <label>; labels", Object.keys(vecs));
+    return;
+  }
+  const kind = arg("ctx") ?? "new";
+  const body = vecs[label]!();
+  const t0s = performance.now();
+  const pre = pre6(body);
+  const scanMs = ms(t0s);
+  const memBase = process.resourceUsage().maxRSS;
+  for (const T of Ts) {
+    const r = run<string, ReturnType<typeof work>>(kind, work, body, T);
+    const mu = process.memoryUsage();
+    obs(`P-25 ${label} T=${T} ctx=${kind}`, {
+      mem: { heapUsedMB: Math.round(mu.heapUsed / 1048576), rssMB: Math.round(mu.rss / 1048576), maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024), maxRssGrowthMB: Math.round((process.resourceUsage().maxRSS - memBase) / 1024) },
+      len: body.length, lines: pre.lines, starUnd: pre.starUnd, links: pre.links, scanMs,
+      timedOut: !r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT",
+      elapsedMs: r1(r.ms), overshootMs: r1(r.ms - T),
+      ...(r.ok ? { finished: true, nodes: r.r.nodes, jsonLen: r.r.json.length, stable: r.r.md1 === r.r.md2 } : { code: r.code, name: r.name, msg: r.msg }),
+    });
+  }
+  // after the (last) termination the same process must still convert a normal body correctly
+  const sane = run<string, ReturnType<typeof work>>(kind, work, vecs.p25_real_40k!(), 20000);
+  obs(`P-25 ${label} post-termination sanity (real_40k, same process)`, sane.ok ? { ok: true, ms: r1(sane.ms), nodes: sane.r.nodes, stable: sane.r.md1 === sane.r.md2 } : { ok: false, code: sane.code });
+}
+
 async function body6(c: Body6Ctx): Promise<void> {
   const { md2lex, lex2md, obs, ms } = c;
   const want = (p: string) => !c.only || c.only.includes(p);
@@ -2602,6 +3003,10 @@ async function body6(c: Body6Ctx): Promise<void> {
   const w0 = performance.now();
   lex2md(md2lex("Khởi động **đậm** *nghiêng* [liên kết](/x)\n\n- a\n- b"));
   obs("warmup (one-off init, excluded from vectors)", { ms: ms(w0) });
+  if (c.only?.includes("P-25") || c.only?.includes("P-26")) {
+    await p25p26(c, body6Vectors(parseLim6()));
+    return;
+  }
 
   const rt = (md0: string) => {
     const lex1 = md2lex(md0);
@@ -2890,7 +3295,9 @@ function parseLim6(): { lines: number; starUnd: number; links: number } {
 async function explore6() {
   assertLocalTargets();
   if (flag("list")) {
-    for (const [name, { probe }] of Object.entries(body6Vectors(parseLim6()))) console.log(`${probe} ${name}`);
+    const bv = body6Vectors(parseLim6());
+    for (const [name, { probe }] of Object.entries(bv)) console.log(`${probe} ${name}`);
+    for (const name of Object.keys(p25Vectors(bv))) console.log(`P-25 ${name}`);
     process.exit(0);
   }
   const only = arg("only")?.split(",").map((s) => s.trim());
@@ -2899,23 +3306,25 @@ async function explore6() {
   const in4 = arg("in4");
   const readTok = in4 ? (JSON.parse(readFileSync(in4, "utf8")) as R_Tokens).read : undefined;
 
-  const payload = await getPayload({ config });
+  // P-20 … P-26 are pure-conversion probes: they only need the sanitized config (no DB connection, no schema push).
+  const bodyOnly = !!only && only.every((o) => BODY6_PROBES.includes(o));
+  const payload0 = bodyOnly ? null : await getPayload({ config });
   const lexical = await import("@payloadcms/richtext-lexical");
   const { loadHubEditorConfig, countDangerousLinkTargets } = await import("../src/lib/hub-article-markdown");
   const { slugify } = await import("../src/lib/http");
   const { sha256Hex } = await import("../src/lib/crypto");
-  const editorConfig = await loadHubEditorConfig(payload.config);
+  const editorConfig = await loadHubEditorConfig(payload0 ? payload0.config : await config);
   type Conv = (a: Record<string, unknown>) => unknown;
   const md2lex = (markdown: string) => (lexical.convertMarkdownToLexical as unknown as Conv)({ editorConfig, markdown }) as Record<string, unknown>;
   const lex2md = (data: unknown) => (lexical.convertLexicalToMarkdown as unknown as Conv)({ data, editorConfig }) as string;
   const obs = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
   const ms = (t0: number) => Math.round(performance.now() - t0);
 
-  // P-20 … P-24 are pure-conversion probes: no tenant / DB fixtures needed.
-  if (only && only.every((o) => BODY6_PROBES.includes(o))) {
-    await body6({ md2lex, lex2md, obs, ms, only, vecOnly });
+  if (bodyOnly) {
+    await body6({ md2lex, lex2md, obs, ms, only, vecOnly, editorConfig });
     process.exit(0);
   }
+  const payload = payload0!;
 
   const tenants = await tenantsBySlug(payload);
   const T = need(tenants, "dtw");
