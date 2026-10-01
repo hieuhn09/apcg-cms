@@ -31,7 +31,7 @@ import { scopedFindMultiTenant, HubPageOutOfRangeError } from "../src/lib/hub-sc
 // SyntaxError and take the whole probe down. Feature-detect instead.
 import * as hubScoped from "../src/lib/hub-scoped";
 // CMS-3 (--setup3 / --check3).
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { sql } from "@payloadcms/db-postgres";
 import { isValidTransition } from "../src/lib/hub-transition";
 import { ARTICLE_STATUSES, type ArticleStatus } from "../src/lib/constants";
@@ -1990,6 +1990,1896 @@ async function check5() {
   process.exit(state.failures === 0 ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// P5.1 / Stage 0.5 — `--explore6` (APCGHub P5.1, nháp chữ). OBSERVE ONLY.
+//
+// Prints `OBS` lines and NEVER asserts: these measurements feed the frozen
+// values of Stage 0.6 (node allow-list P-4, round-trip comparator key sets
+// P-1b, D20 branch P-14, body / depth caps P-15, slug pre-check P-19, slugify
+// vectors). Nothing here is a pass/fail gate; `--check6` (Stage 3) is.
+//
+//   npx tsx scripts/hub-probe.ts --explore6 --in4 <setup4.json> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links]
+//
+// Writes fixtures (articles, one tenant frontendUrl / readTokens entry restored
+// at the end) — LOCAL DATABASE ONLY, guarded below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function assertLocalTargets(): void {
+  const local = (u: string) => {
+    try {
+      const h = new URL(u).hostname;
+      return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+    } catch {
+      return false;
+    }
+  };
+  if (!local(process.env.DATABASE_URL ?? "") || !local(BASE)) {
+    console.error("[explore6] refusing: DATABASE_URL and HUB_PROBE_BASE must both point at localhost / 127.0.0.1 / ::1");
+    process.exit(2);
+  }
+}
+
+/** W = the JS `\s` class ∪ C0 (Public Contracts §Kiểm thân bài (0)). */
+const isWs6 = (c: number): boolean => c <= 0x1f || /\s/.test(String.fromCharCode(c));
+
+function maxWsRun(s: string): number {
+  let best = 0;
+  let cur = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (isWs6(s.charCodeAt(i))) {
+      cur++;
+      if (cur > best) best = cur;
+    } else cur = 0;
+  }
+  return best;
+}
+
+interface TreeStats {
+  nodes: number;
+  maxDepth: number;
+  maxListNest: number;
+  types: Record<string, number>;
+  links: { type: string; url: unknown; fields: unknown }[];
+  text: string;
+}
+
+/** Iterative walk of a Lexical editor state (no recursion: deep trees are part of the test). */
+function treeStats(state: unknown): TreeStats {
+  const out: TreeStats = { nodes: 0, maxDepth: 0, maxListNest: 0, types: {}, links: [], text: "" };
+  const root = (state as { root?: unknown } | null)?.root;
+  if (!root) return out;
+  const texts: string[] = [];
+  const stack: { n: Record<string, unknown>; d: number; l: number }[] = [{ n: root as Record<string, unknown>, d: 0, l: 0 }];
+  while (stack.length) {
+    const { n, d, l } = stack.pop()!;
+    out.nodes++;
+    const type = String(n.type);
+    out.types[type] = (out.types[type] ?? 0) + 1;
+    if (d > out.maxDepth) out.maxDepth = d;
+    const nl = type === "list" ? l + 1 : l;
+    if (nl > out.maxListNest) out.maxListNest = nl;
+    if (type === "link" || type === "autolink") {
+      const f = n.fields as Record<string, unknown> | undefined;
+      out.links.push({ type, url: f?.url ?? n.url, fields: f ?? null });
+    }
+    if (typeof n.text === "string") texts.push(n.text);
+    const kids = n.children;
+    if (Array.isArray(kids)) for (let i = kids.length - 1; i >= 0; i--) stack.push({ n: kids[i] as Record<string, unknown>, d: d + 1, l: nl });
+  }
+  out.text = texts.join("");
+  return out;
+}
+
+/** Structural diff → the set of KEY NAMES whose values differ (key-level, not path-level). */
+function diffKeyNames(a: unknown, b: unknown, key: string, out: Set<string>): void {
+  if (a === b) return;
+  const ao = typeof a === "object" && a !== null;
+  const bo = typeof b === "object" && b !== null;
+  if (!ao || !bo) {
+    out.add(key);
+    return;
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) {
+    out.add(key);
+    return;
+  }
+  if (Array.isArray(a)) {
+    const bb = b as unknown[];
+    if (a.length !== bb.length) out.add(`${key}[len]`);
+    for (let i = 0; i < Math.min(a.length, bb.length); i++) diffKeyNames(a[i], bb[i], key, out);
+    return;
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(ar), ...Object.keys(br)])) {
+    if (!(k in ar) || !(k in br)) out.add(`${k}(${k in ar ? "lost" : "added"})`);
+    else diffKeyNames(ar[k], br[k], k, out);
+  }
+}
+
+const P1_SAMPLES6: Record<string, string> = {
+  paragraph_vi: "Đoạn văn tiếng Việt có dấu: Hà Nội, Đà Nẵng, Thừa Thiên Huế. Ơ ư ă â ê ô đ Đ.",
+  bold_italic: "Chữ **đậm** và *nghiêng* và ***cả hai*** và _gạch dưới nghiêng_ và __đậm gạch__.",
+  bold_only: "Chữ **đậm** ở giữa.",
+  italic_only: "Chữ *nghiêng* ở giữa.",
+  triple_star: "***cả hai***",
+  bold_wraps_italic: "**_cả hai_**",
+  italic_wraps_bold: "*__cả hai__*",
+  bold_then_italic: "**đậm** *nghiêng*",
+  bold_inside_italic_word: "*nghiêng **đậm** nghiêng*",
+  headings: "## Tiêu đề H2\n\nĐoạn một.\n\n### Tiêu đề H3\n\nĐoạn hai.",
+  quote: "> Trích dẫn một dòng.\n> Dòng hai của trích dẫn.",
+  bullet: "- mục một\n- mục hai\n- mục ba",
+  ordered: "1. một\n2. hai\n3. ba",
+  nested_list: "- a\n  - b\n    - c\n- d",
+  link: "Có [một link](https://example.com/a?b=1#c) ở đây.",
+  link_kinds: "[mail](mailto:a@b.com) [tel](tel:+84123) [rel](/duong-dan) [hash](#muc) [q](?q=1)",
+  hard_break: "Dòng một  \nDòng hai",
+  soft_break: "Dòng một\nDòng hai",
+  emoji: "Emoji 😀🎉 và 👍🏽 ở giữa câu.",
+  blank_lines: "Đoạn A\n\n\n\n\nĐoạn B",
+  article:
+    "## Mở đầu\n\nĐoạn mở đầu với **điểm nhấn** và [nguồn](https://example.com).\n\n> Một trích dẫn.\n\n- ý một\n- ý hai\n\n1. bước một\n2. bước hai\n\n### Kết\n\nĐoạn kết *nhẹ nhàng*.",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P5.1 / Stage 0.5b — body-limit feasibility probes P-20 … P-24 (OBSERVE ONLY).
+// Pure-conversion measurements (no DB writes, no dev server): they feed the
+// pre-check thresholds (lines / `*`+`_` / `](`), the tree caps (nodes / JSON) and
+// the stability gate F (md2 === md1). Each vector is meant to run in its OWN
+// process:   --explore6 --only P-22 --vec <name>   (list names with --list).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BODY6_PROBES = ["P-20", "P-21", "P-22", "P-23", "P-24", "P-25", "P-26"];
+/** Proposed (temporary) pre-check limits under test: lines, `*`+`_`, `](`. */
+const LIM6 = { lines: 5000, starUnd: 3000, links: 1000 };
+/** Revised proposal under test (after the P-22 / P-23 measurements): total lines, `*`+`_` chars, mark runs, `](`, per-paragraph-unit runs / links, tree caps. */
+const REV6 = (() => {
+  const d = { lines: 1200, starUnd: 5000, runs: 2500, links: 500, unitRuns: 30, unitLinks: 20, markChars: 5000, nodes: 12000, json: 1_500_000, indent: 16 };
+  const o = process.argv.includes("--rev") ? process.argv[process.argv.indexOf("--rev") + 1] : undefined; // lines,starUnd,runs,links,unitRuns,unitLinks,markChars,nodes,json,indent
+  if (o) {
+    const k = Object.keys(d) as (keyof typeof d)[];
+    o.split(",").forEach((v, i) => {
+      if (v !== "" && k[i]) d[k[i]!] = Number(v);
+    });
+  }
+  return d;
+})();
+
+interface Pre6 {
+  len: number;
+  lines: number;
+  lf: number;
+  cr: number;
+  ls: number;
+  ps: number;
+  starUnd: number;
+  runs: number;
+  maxRun: number;
+  links: number;
+  maxUnitLines: number;
+  maxUnitRuns: number;
+  maxUnitLinks: number;
+  backticks: number;
+  tildes: number;
+  maxIndent: number;
+}
+
+/**
+ * O(n) pre-check counters: lines (LF, CR, U+2028, U+2029 each one), `*`+`_` characters, mark RUNS (maximal runs of ONE of `*` `_` `` ` `` `~`),
+ * `](`, plus the per-UNIT maxima. A unit = what the importer converts as one text node: consecutive non-blank lines of one paragraph;
+ * a blank line ends a unit, and a line that starts a list item / quote / heading (`-`,`+`,`*␠`,`>`,`#`, `1.`/`1)`) is its own unit.
+ */
+function pre6(s: string): Pre6 {
+  let lf = 0, cr = 0, ls = 0, ps = 0, starUnd = 0, links = 0, runs = 0, maxRun = 0, curRun = 0, curCh = 0, backticks = 0, tildes = 0, indent = 0, maxIndent = 0;
+  let ul = 0, ur = 0, uk = 0, mul = 0, mur = 0, muk = 0;
+  const flush = () => {
+    if (ul > mul) mul = ul;
+    if (ur > mur) mur = ur;
+    if (uk > muk) muk = uk;
+    ul = ur = uk = 0;
+  };
+  let atLineStart = true;
+  let lineHasText = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 10 || c === 13 || c === 0x2028 || c === 0x2029) {
+      if (c === 10) lf++;
+      else if (c === 13) cr++;
+      else if (c === 0x2028) ls++;
+      else ps++;
+      if (!lineHasText) flush();
+      lineHasText = false;
+      atLineStart = true;
+      indent = 0;
+      curRun = 0;
+      curCh = 0;
+      continue;
+    }
+    if (atLineStart && (c === 32 || c === 9)) {
+      indent++;
+      if (indent > maxIndent) maxIndent = indent;
+    }
+    if (atLineStart && c !== 32 && c !== 9) {
+      atLineStart = false;
+      const n1 = s.charCodeAt(i + 1);
+      let digitsEnd = i;
+      while (s.charCodeAt(digitsEnd) >= 48 && s.charCodeAt(digitsEnd) <= 57) digitsEnd++;
+      const startsUnit =
+        c === 45 || c === 43 || c === 62 || c === 35 || (c === 42 && (n1 === 32 || n1 === 9)) ||
+        (digitsEnd > i && digitsEnd - i <= 9 && (s.charCodeAt(digitsEnd) === 46 || s.charCodeAt(digitsEnd) === 41) && s.charCodeAt(digitsEnd + 1) === 32);
+      if (startsUnit) flush();
+      lineHasText = true;
+      ul++; // approximate: counts unit lines
+    } else if (c !== 32 && c !== 9) lineHasText = true;
+    if (c === 42 || c === 95 || c === 96 || c === 126) {
+      if (c === 42 || c === 95) starUnd++;
+      if (c === 96) backticks++;
+      else if (c === 126) tildes++;
+      if (c === curCh) curRun++;
+      else {
+        curCh = c;
+        curRun = 1;
+        runs++;
+        ur++;
+      }
+      if (curRun > maxRun) maxRun = curRun;
+    } else {
+      curCh = 0;
+      curRun = 0;
+      if (c === 93 && s.charCodeAt(i + 1) === 40) {
+        links++;
+        uk++;
+      }
+    }
+  }
+  flush();
+  return { len: s.length, lines: lf + cr + ls + ps + 1, lf, cr, ls, ps, starUnd, runs, maxRun, links, maxUnitLines: mul, maxUnitRuns: mur, maxUnitLinks: muk, backticks, tildes, maxIndent };
+}
+
+function seeded6(seed: number): () => number {
+  let x = seed >>> 0 || 1;
+  return () => {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    return x / 4294967296;
+  };
+}
+
+const VI_WORDS6 = ("hành trình khám phá những điểm đến mới giữa lòng thành phố cổ kính nơi ánh sáng buổi sớm chạm vào mái ngói rêu phong " +
+  "du khách thường chọn đi bộ qua các con phố nhỏ thưởng thức cà phê và ngắm nhìn nhịp sống chậm rãi của người dân địa phương " +
+  "kiến trúc thuộc địa hoà quyện cùng nét hiện đại tạo nên bức tranh đô thị độc đáo mỗi mùa mang đến một sắc thái riêng biệt").split(" ");
+
+/** Article-like Markdown: Vietnamese words, a bold phrase / link / line break at the given average spacing (chars), occasional lists and headings. */
+function realBody6(target: number, o: { line: number; bold: number; link: number; ital: number; seed: number }): string {
+  const rnd = seeded6(o.seed);
+  const word = () => VI_WORDS6[Math.floor(rnd() * VI_WORDS6.length)]!;
+  const phrase = (n: number) => Array.from({ length: n }, word).join(" ");
+  let out = "";
+  let sinceBold = 0, sinceLink = 0, sinceItal = 0, sinceLine = 0, block = 0;
+  while (out.length < target) {
+    block++;
+    if (block % 25 === 0) {
+      out += `## ${phrase(4)}\n\n`;
+      continue;
+    }
+    if (block % 15 === 0) {
+      for (let k = 0; k < 4; k++) out += `- ${phrase(6)}\n`;
+      out += "\n";
+      continue;
+    }
+    const lines = 1 + Math.floor(rnd() * 4);
+    for (let l = 0; l < lines; l++) {
+      let line = "";
+      while (line.length < o.line) {
+        let tok = word();
+        if (sinceBold >= o.bold) {
+          tok = `**${phrase(2)}**`;
+          sinceBold = 0;
+        } else if (sinceLink >= o.link) {
+          tok = `[${phrase(2)}](https://example.com/${word()}/${Math.floor(rnd() * 9999)})`;
+          sinceLink = 0;
+        } else if (sinceItal >= o.ital) {
+          tok = `*${word()}*`;
+          sinceItal = 0;
+        }
+        line += (line ? " " : "") + tok;
+        sinceBold += tok.length + 1;
+        sinceLink += tok.length + 1;
+        sinceItal += tok.length + 1;
+      }
+      out += line + (l < lines - 1 ? "\n" : "\n\n");
+      sinceLine += line.length;
+    }
+  }
+  return out.slice(0, target);
+}
+
+interface V6 {
+  probe: string;
+  gen: () => string;
+}
+
+function body6Vectors(lim: { lines: number; starUnd: number; links: number } = LIM6): Record<string, V6> {
+  const v: Record<string, V6> = {};
+  const rep = (s: string, n: number) => s.repeat(n);
+  const add = (probe: string, name: string, gen: () => string) => {
+    v[name] = { probe, gen };
+  };
+  // ── P-22: calibrate the allowed region, and per-paragraph vs whole-body ──
+  for (const n of [200, 400, 750, 1000, 1500]) {
+    add("P-22", `p22_bold_${n}`, () => rep("**a**", n));
+    add("P-22", `p22_bold_sp_${n}`, () => rep("**a** ", n));
+    add("P-22", `p22_ital_${n}`, () => rep("*a*", n));
+    add("P-22", `p22_ital_sp_${n}`, () => rep("*a* ", n));
+  }
+  for (const n of [1000, 2000, 3000, 5000, 8000]) {
+    add("P-22", `p22_star_${n}`, () => rep("*", n));
+    add("P-22", `p22_und_${n}`, () => rep("_", n));
+  }
+  for (const n of [150, 430, 700]) add("P-22", `p22_mixed_${n}`, () => rep("*a _b_ **c** ", n));
+  for (const n of [5, 20, 100]) {
+    add("P-22", `p22_para_a1000_x${n}`, () => rep(rep("a\n", 1000) + "\n", n));
+    add("P-22", `p22_block_a_${1001 * n}`, () => rep("a\n", 1001 * n));
+  }
+  for (const n of [10, 50]) {
+    add("P-22", `p22_para_star2000_x${n}`, () => rep(rep("*", 2000) + "\n\n", n));
+    add("P-22", `p22_block_star_${2000 * n}`, () => rep("*", 2000 * n));
+  }
+  for (const n of [5, 20]) {
+    add("P-22", `p22_para_bold750_x${n}`, () => rep(rep("**a** ", 750) + "\n\n", n));
+    add("P-22", `p22_block_bold_sp_${750 * n}`, () => rep("**a** ", 750 * n));
+  }
+  for (const n of [2000, 5000, 8000, 12000]) {
+    add("P-22", `p22_lf_${n}`, () => rep("a\n", n));
+    add("P-22", `p22_crlf_${n}`, () => rep("line\r\n", n));
+  }
+  for (const n of [5000, 10000]) add("P-22", `p22_dash_${n}`, () => rep("- a\n", n));
+  const zig = (tabs: number, lines: number, cap = 200000) => {
+    let s = "";
+    let l = 0;
+    while (l < lines && s.length < cap) {
+      s += rep("\t", tabs) + "- x\n- y\n";
+      l += 2;
+    }
+    return s.slice(0, cap);
+  };
+  for (const n of [2000, 5000, 10000]) add("P-22", `p22_zigzag63_${n}`, () => zig(63, n));
+  for (const n of [500, 1000, 2000, 5000]) {
+    add("P-22", `p22_link_${n}`, () => rep("[a](/b) ", n));
+    add("P-22", `p22_linkref_${n}`, () => rep("[a][r] ", n) + "\n\n[r]: /x");
+    add("P-22", `p22_autolink_${n}`, () => rep("<https://a.b> ", n));
+  }
+  // ── P-22 hunt: does the `*`+`_` count alone bound the cost? (delimiter-ambiguity families, one block) ──
+  const fam: [string, string, number, number][] = [
+    ["f1", "*a _b_ **c** ", 7, 0],
+    ["f2", "*a ", 1, 0],
+    ["f3", "**a ", 2, 0],
+    ["f4", "_a ", 1, 0],
+    ["f5", "*a **b ", 3, 0],
+    ["f6", "**a *b ", 3, 0],
+    ["f7", "*_*_ ", 4, 0],
+    ["f8", "**a** *b* ", 6, 0],
+    ["f9", "*a**b* ", 3, 0],
+    ["f10", "*a _b* c_ ", 4, 0],
+    ["f11", "***a** ", 3, 0],
+    ["f12", "*a __b__ ", 5, 0],
+    ["f13", "*[a](/b) ", 1, 1],
+    ["f14", "[*a*](/b) ", 2, 1],
+  ];
+  for (const [id, unit, su] of fam) for (const N of [200, 400, 800]) add("P-22", `p22h_${id}_${N}`, () => rep(unit, Math.ceil(N / su)));
+  for (const n of [200, 250, 300, 350]) add("P-22", `p22f1_${n}`, () => rep("*a _b_ **c** ", n));
+  for (const [u, k] of [[100, 5], [200, 5], [300, 5], [400, 5], [400, 25], [200, 25]] as const) add("P-22", `p22blk_f2_u${u}_x${k}`, () => rep(rep("*a ", u) + "\n\n", k));
+  for (const [u, k] of [[35, 6], [70, 6], [70, 20], [100, 14]] as const) add("P-22", `p22blk_f1_u${u}_x${k}`, () => rep(rep("*a _b_ **c** ", u) + "\n\n", k));
+  // star × link interaction grid (unclosed stars first, then links, one block) + interleaved variants
+  for (const R of [0, 50, 100, 200]) for (const K of [0, 50, 100, 200]) if (R + K > 0) add("P-22", `p22g_r${R}_k${K}`, () => rep("*a ", R) + rep("[a](/b) ", K));
+  for (const N of [25, 50, 100, 150]) add("P-22", `p22gi_star_${N}`, () => rep("*[a](/b) ", N));
+  for (const N of [50, 100, 150]) {
+    add("P-22", `p22gi_und_${N}`, () => rep("_[a](/b) ", N));
+    add("P-22", `p22gi_bold_${N}`, () => rep("**[a](/b) ", N));
+    add("P-22", `p22gi_word_${N}`, () => rep("*a [b](/c) ", N));
+    add("P-22", `p22gi_closing_${N}`, () => rep("[a](/b)* ", N));
+    add("P-22", `p22gi_linkopen_${N}`, () => rep("[*a](/b) ", N));
+  }
+  // what is the unit of the quartic cost: a list item, a soft-wrapped paragraph, a blank-line-separated paragraph?
+  for (const N of [100, 200, 400]) {
+    add("P-22", `p22L_list_star_${N}`, () => rep("- *[a](/b)\n", N));
+    add("P-22", `p22L_para_star_${N}`, () => rep("*[a](/b)\n", N));
+    add("P-22", `p22L_blank_star_${N}`, () => rep("*[a](/b)\n\n", N));
+    add("P-22", `p22L_heading_star_${N}`, () => rep("## *[a](/b)\n\n", N));
+    add("P-22", `p22L_quote_star_${N}`, () => rep("> *[a](/b)\n>\n", N));
+  }
+  add("P-22", "p22L_list_item_100_in_one", () => "- " + rep("*[a](/b) ", 100) + "\n");
+  add("P-22", "p22L_list_5items_x50", () => rep("- " + rep("*[a](/b) ", 50) + "\n", 5));
+  add("P-22", "p22L_blank_50x5", () => rep(rep("*[a](/b) ", 50) + "\n\n", 5));
+  add("P-22", "p22L_blank_30x20", () => rep(rep("*[a](/b) ", 30) + "\n\n", 20));
+  add("P-22", "p22L_blank_40x15", () => rep(rep("*[a](/b) ", 40) + "\n\n", 15));
+  // unclosed backtick / tilde next to links (same interplay as `*[a](/b)`), per-paragraph
+  for (const N of [50, 100, 150]) {
+    add("P-22", `p22x_bt_link_${N}`, () => rep("`[a](/b) ", N));
+    add("P-22", `p22x_tilde_link_${N}`, () => rep("~~[a](/b) ", N));
+    add("P-22", `p22x_bt_star_${N}`, () => rep("`a *[b](/c) ", N));
+    add("P-22", `p22x_bt_only_${N * 4}`, () => rep("`a ", N * 4));
+    add("P-22", `p22x_tilde_only_${N * 4}`, () => rep("~~a ", N * 4));
+  }
+  // ── P-23: syntax not yet probed, 200 000 chars each ──────────────────────
+  const to200 = (unit: string) => () => rep(unit, Math.ceil(200000 / unit.length)).slice(0, 200000);
+  const syn: Record<string, string> = {
+    backtick: "`",
+    codespan: "`a` ",
+    fence: "```\ncode\n```\n",
+    tilde: "~~a~~ ",
+    escstar: "\\*",
+    amp: "&amp;",
+    htmlb: "<b>x</b>",
+    tablerow: "|a|b|\n",
+    hash: "#",
+    hash_a: "# a\n",
+    quote_nest: "> ",
+    quote_a: "> a\n",
+    setext: "a\n===\n",
+    ordered: "1. a\n",
+    hr_dash: "---\n",
+    hr_star: "***\n",
+    hr_under: "___\n",
+    plus_item: "+ a\n",
+    star_item: "* a\n",
+    task_item: "- [ ] a\n",
+    indented_code: "    code\n",
+    hard_break: "a  \n",
+    bang: "!",
+    lt: "<",
+    backslash: "\\",
+    bracket_pair: "[]",
+    paren_pair: "()",
+    ref_def: "[r]: /x\n",
+    entity_num: "&#106;",
+    tab: "\t",
+    emoji: "😀",
+  };
+  for (const [k, u] of Object.entries(syn)) add("P-23", `p23_${k}`, to200(u));
+  // calibration for the P-23 vectors that did not finish at 200 000 chars, and the line-based ones at the proposed 5 000-line cap
+  for (const k of ["backtick", "codespan", "tilde", "tab"]) for (const n of [250, 500, 1000, 2000, 4000, 8000]) add("P-23", `p23c_${k}_${n}`, () => rep(syn[k]!, n));
+  add("P-23", "p23c_tab_a_100k", () => rep("a\t", 100000));
+  add("P-23", "p23c_tab_a_2k", () => rep("a\t", 2000));
+  for (const [k, u] of Object.entries(syn)) {
+    const per = (u.match(/\n/g) ?? []).length;
+    if (per > 0) add("P-23", `p23c_${k}_L${lim.lines}`, () => rep(u, Math.ceil(lim.lines / per)));
+  }
+  // line-count calibration of the syntaxes that blew the 1 s budget at 5 000 lines
+  for (const k of ["fence", "tablerow", "hash_a", "hr_star", "hr_under", "ordered", "setext", "hr_dash"]) {
+    const u = syn[k]!;
+    const per = (u.match(/\n/g) ?? []).length;
+    for (const L of [500, 1000, 1500, 2000]) add("P-23", `p23d_${k}_L${L}`, () => rep(u, Math.ceil(L / per)));
+  }
+  // ── P-24: worst-case at the proposed limits, real-like bodies, tree caps ─
+  const worst = (spread: boolean, nested = false) => () => {
+    const L = lim.lines;
+    const rows: string[] = [];
+    const starLines = Math.floor(lim.starUnd / 2);
+    for (let i = 0; i < L; i++) {
+      if (spread && i % 50 === 49) {
+        rows.push("");
+        continue;
+      }
+      const parts = ["w"];
+      if (nested && i < lim.starUnd / 6) parts.push("*a **b _c_ d** e*");
+      else if (!nested && i < starLines) parts.push("*x*");
+      if (i < lim.links) parts.push("[a](/b)");
+      rows.push(parts.join(" "));
+    }
+    return rows.join("\n");
+  };
+  add("P-24", "p24_worst_single", worst(false));
+  add("P-24", "p24_worst_spread", worst(true));
+  add("P-24", "p24_worst_f1_single", () => {
+    const rows: string[] = [];
+    const f1Lines = Math.ceil(lim.starUnd / 7);
+    for (let i = 0; i < lim.lines; i++) {
+      const parts = ["w"];
+      if (i < f1Lines) parts.push("*a _b_ **c**");
+      if (i < lim.links) parts.push("[a](/b)");
+      rows.push(parts.join(" "));
+    }
+    return rows.join("\n");
+  });
+  add("P-24", "p24_worst_f1_oneline", () => rep("*a _b_ **c** ", Math.ceil(lim.starUnd / 7)) + "\n" + rep("[a](/b) ", lim.links) + "\n" + rep("a\n", lim.lines - 2));
+  add("P-24", "p24_worst_nested", worst(false, true));
+  add("P-24", "p24_worst_unbalanced", () => {
+    const rows = ["*".repeat(lim.starUnd), "](".repeat(lim.links)];
+    while (rows.length < lim.lines) rows.push("a");
+    return rows.join("\n");
+  });
+  // vectors that PASS the revised pre-check at its limits (per-unit caps stuffed, then the totals)
+  const unitsJoin = (unit: string, n: number, k: number) => Array.from({ length: k }, () => rep(unit + " ", n).trim()).join("\n\n");
+  const nLinkUnits = Math.floor(REV6.links / REV6.unitLinks);
+  const nRunUnits = Math.floor(REV6.runs / REV6.unitRuns);
+  add("P-24", "p24_cap_f13_units", () => unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), nLinkUnits));
+  add("P-24", "p24_cap_f13b_units", () => unitsJoin("[a](/b)*\\**", REV6.unitLinks, nLinkUnits));
+  add("P-24", "p24_cap_star_link_units", () => unitsJoin("*[a](/b)", REV6.unitLinks, nLinkUnits));
+  add("P-24", "p24_cap_bt_star_units", () => unitsJoin("`a *[b](/c)", Math.floor(REV6.unitRuns / 2), nLinkUnits));
+  add("P-24", "p24_cap_tilde_link_units", () => unitsJoin("~~[a](/b)", REV6.unitLinks, nLinkUnits));
+  add("P-24", "p24_cap_runs_units", () => unitsJoin("*a", REV6.unitRuns, nRunUnits));
+  add("P-24", "p24_cap_bt_runs_units", () => unitsJoin("`a", REV6.unitRuns, nRunUnits));
+  add("P-24", "p24_cap_f1_units", () => unitsJoin("*a _b_ **c**", Math.floor(REV6.unitRuns / 5), nRunUnits));
+  add("P-24", "p24_cap_lines_fence", () => rep("```\ncode\n```\n", Math.ceil(REV6.lines / 3)));
+  add("P-24", "p24_cap_lines_fence_plus_units", () => rep("```\ncode\n```\n", Math.floor(REV6.lines / 6)) + "\n" + unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), nLinkUnits));
+  add("P-24", "p24_cap_tablerows", () => rep("|a|b|\n", REV6.lines));
+  add("P-24", "p24_cap_headings", () => rep("# a\n", REV6.lines));
+  add("P-24", "p24_cap_backticks", () => rep("`a` ", Math.floor(REV6.markChars / 8)) + "\n\n" + rep("~~a~~ ", Math.floor(REV6.markChars / 12)));
+  add("P-24", "p24_cap_combo_table_f13", () => rep("|a|b|\n", REV6.lines - 100) + "\n" + unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), nLinkUnits));
+  add("P-24", "p24_cap_combo_zigzag_units", () => zig(31, REV6.lines - 100) + "\n\n" + unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), Math.floor(nLinkUnits / 2)) + "\n\n" + unitsJoin("`a *[b](/c)", Math.floor(REV6.unitRuns / 2), Math.floor(nLinkUnits / 2)));
+  add("P-24", "p24_cap_combo_headings_units", () => rep("# a\n", REV6.lines - 100) + "\n" + unitsJoin("*[a](/b)", REV6.unitLinks, nLinkUnits) + "\n\n" + unitsJoin("*a", REV6.unitRuns, nRunUnits - 5));
+  add("P-24", "p24_cap_combo_zigzag_edge", () => zig(31, Math.floor((REV6.nodes - 600) / 9)) + "\n\n" + unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), nLinkUnits));
+  add("P-24", "p24_cap_combo_zigzag15_units", () => zig(REV6.indent, REV6.lines - 80) + "\n\n" + unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), nLinkUnits));
+  add("P-24", "p24_cap_combo_fence_free", () => rep("|a|b|\n", Math.floor((REV6.lines - 80) / 2)) + "\n" + rep("# a\n", Math.floor((REV6.lines - 80) / 2)) + "\n\n" + unitsJoin("*[a](/b)", REV6.unitLinks, nLinkUnits));
+  add("P-24", "p24_cap_combo_table_f13b", () => rep("|a|b|\n", REV6.lines - 100) + "\n" + unitsJoin("[a](/b)*\\**", REV6.unitLinks, nLinkUnits));
+  add("P-24", "p24_cap_combo_zigzag15_f13b", () => zig(REV6.indent, REV6.lines - 80) + "\n\n" + unitsJoin("[a](/b)*\\**", REV6.unitLinks, nLinkUnits));
+  add("P-24", "p24_cap_zigzag_nodes", () => zig(31, REV6.lines));
+  add("P-24", "p24_cap_list_items", () => rep("- a **b** [c](/d)\n", REV6.lines));
+  add("P-24", "p24_normal_199k", () => {
+    const para = "Đây là một đoạn văn **bình thường** với [liên kết](https://example.com/a) và *nghiêng*, dài vừa phải cho một bài báo. ";
+    let s = "";
+    while (s.length < 199000) s += rep(para, 4) + "\n\n";
+    return s;
+  });
+  add("P-21", "p21_normal_199k", v.p24_normal_199k!.gen);
+  add("P-21", "p21_real_40k", () => realBody6(40000, { line: 150, bold: 300, link: 1000, ital: 600, seed: 40 }));
+  add("P-24", "p24_real_40k", () => realBody6(40000, { line: 150, bold: 300, link: 1000, ital: 600, seed: 40 }));
+  add("P-24", "p24_real_200k", () => realBody6(200000, { line: 150, bold: 300, link: 1000, ital: 600, seed: 200 }));
+  add("P-24", "p24_real_200k_para", () => realBody6(200000, { line: 600, bold: 300, link: 1000, ital: 600, seed: 203 }));
+  add("P-24", "p24_real_dense_200k_para", () => realBody6(200000, { line: 600, bold: 100, link: 400, ital: 250, seed: 204 }));
+  add("P-24", "p24_real_sparse_200k", () => realBody6(200000, { line: 150, bold: 800, link: 2500, ital: 1500, seed: 201 }));
+  add("P-24", "p24_real_dense_200k", () => realBody6(200000, { line: 80, bold: 100, link: 400, ital: 250, seed: 202 }));
+  add("P-24", "p24_docs_concat", () => {
+    const dir = "docs";
+    const names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    return names.map((f) => readFileSync(`${dir}/${f}`, "utf8")).join("\n\n");
+  });
+  for (const k of [15, 31, 63, 127, 255]) add("P-24", `p24_nodes_zigzag${k}`, () => zig(k, lim.lines));
+  add("P-24", "p24_nodes_dash_lines", () => rep("- a\n", lim.lines));
+  add("P-24", "p24_nodes_text_lines", () => rep("a\n", lim.lines));
+  add("P-24", "p24_nodes_ital_words", () => rep("a *b* ", Math.floor(lim.starUnd / 2)));
+  add("P-24", "p24_nodes_links", () => rep("[a](/b) ", lim.links));
+  add("P-24", "p24_nodes_quote_nest", () => rep("> ", 5000) + "x");
+  return v;
+}
+
+interface Body6Ctx {
+  /** the editor config the converters use (P-25 compares it before / after terminations) */
+  editorConfig?: unknown;
+  md2lex: (m: string) => Record<string, unknown>;
+  lex2md: (d: unknown) => string;
+  obs: (label: string, v: unknown) => void;
+  ms: (t0: number) => number;
+  only?: string[];
+  vecOnly?: string;
+}
+
+/** Compact (type, format, text) rendering of a small Lexical tree. */
+function flat6(n: unknown): string {
+  const o = n as Record<string, unknown>;
+  const kids = Array.isArray(o.children) ? (o.children as unknown[]).map(flat6).join(" ") : "";
+  if (o.type === "text") return `t(f=${o.format})${JSON.stringify(o.text)}`;
+  const tag = o.type === "heading" ? `h${String(o.tag).slice(1)}` : String(o.type);
+  return `${tag}[${kids}]`;
+}
+
+/** Semantic signature: element open/close markers + adjacent same-format text runs merged (node splitting is NOT a difference). */
+function formatSeq6(state: unknown): string {
+  const out: string[] = [];
+  let runFmt: unknown = null;
+  let runTxt = "";
+  const flush = () => {
+    if (runTxt !== "") out.push(`${runFmt}:${runTxt}`);
+    runTxt = "";
+  };
+  const stack: unknown[] = [(state as { root?: unknown })?.root];
+  while (stack.length) {
+    const n = stack.pop() as Record<string, unknown> | string | undefined;
+    if (!n) continue;
+    if (typeof n === "string") {
+      flush();
+      out.push(n);
+      continue;
+    }
+    if (n.type === "text") {
+      if (runTxt !== "" && runFmt !== n.format) flush();
+      runFmt = n.format;
+      runTxt += String(n.text);
+      continue;
+    }
+    flush();
+    out.push(`<${n.type}${n.tag ? n.tag : ""}${n.listType ? n.listType : ""}${(n.fields as { url?: string } | undefined)?.url ?? ""}>`);
+    stack.push(`</${n.type}>`);
+    if (Array.isArray(n.children)) for (let i = n.children.length - 1; i >= 0; i--) stack.push(n.children[i]);
+  }
+  flush();
+  return out.join("|");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P5.1 / Stage 0.5c — hard time guard feasibility (OBSERVE ONLY).
+//   P-25 : wrap the WHOLE conversion in `vm` with `timeout` (H6a hard stop, H6b same process stays healthy,
+//          H6c overhead, H6d importer / exporter are synchronous).
+//   P-26 : `worker_threads` + `terminate()` fallback (H6e) — only measured when P-25 does not hold.
+// Run each vector in its OWN process, with an outer `timeout 60` (a vector the guard cannot interrupt must not hang the shell):
+//   --explore6 --only P-25 --vec <label> --T 1000,1500,2000 [--ctx new|reuse]
+//   --explore6 --only P-25 --mode redos|native|sync|overhead|cycle [--T ..] [--cycles 50]
+//   --explore6 --list    (labels `P-25 p25_*`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** P-25 vector labels → generators. Reuses the P-22/P-23/P-24 generators by name; adds only the vectors that did not exist. */
+function p25Vectors(v: Record<string, V6>): Record<string, () => string> {
+  const rep = (s: string, n: number) => s.repeat(n);
+  const reuse = (name: string): (() => string) => {
+    const g = v[name]?.gen;
+    if (!g) throw new Error(`P-25: unknown base vector ${name}`);
+    return g;
+  };
+  return {
+    p25_star_a_3000: () => rep("*a ", 3000),
+    p25_star_a_1000: () => rep("*a ", 1000),
+    p25_star_link_200: () => rep("*[a](/b) ", 200),
+    p25_star_link_400: () => rep("*[a](/b) ", 400),
+    p25_backtick_200k: reuse("p23_backtick"),
+    p25_tilde_33333: reuse("p23_tilde"),
+    p25_tab_200k: reuse("p23_tab"),
+    p25_fence_5000: reuse("p23c_fence_L5000"),
+    p25_tablerow_5000: reuse("p23c_tablerow_L5000"),
+    p25_star_100k: reuse("p22_block_star_100000"),
+    p25_block_lf_100100: reuse("p22_block_a_100100"),
+    p25_codespan_66667: reuse("p23_codespan"),
+    p25_hash_200k: reuse("p23_hash_a"),
+    p25_hr_dash_200k: reuse("p23_hr_dash"),
+    // real-like (must NOT be interrupted) and the unguarded-but-heavy cases from the P-24 measurements
+    p25_real_40k: reuse("p24_real_40k"),
+    p25_real_200k_para: reuse("p24_real_200k_para"),
+    p25_real_dense_200k_para: reuse("p24_real_dense_200k_para"),
+    p25_normal_199k: reuse("p24_normal_199k"),
+    p25_zigzag255_200k: reuse("p24_nodes_zigzag255"),
+    p25_nodes_dash_lines: reuse("p24_nodes_dash_lines"),
+  };
+}
+
+async function p25p26(c: Body6Ctx, v: Record<string, V6>): Promise<void> {
+  const { md2lex, lex2md, obs, ms } = c;
+  const vm = await import("node:vm");
+  const { createHash } = await import("node:crypto");
+  const v8 = await import("node:v8");
+  const ah = await import("node:async_hooks");
+  const vecs = p25Vectors(v);
+  const Ts = (arg("T") ?? "1000,1500,2000").split(",").map((x) => Number(x));
+  const mode = arg("mode") ?? "vec";
+  const sha = (s: string) => createHash("sha1").update(s).digest("hex").slice(0, 12);
+  /** link nodes carry a random 24-hex `id` (the ONLY key that differs between two conversions of one body — see `--mode nondet`): blank it before hashing */
+  const canon = (json: string) => json.replace(/"id":"[0-9a-f]{24}"/g, '"id":"#"');
+
+  /** The whole conversion as one SYNCHRONOUS function: md→lex, tree walk, JSON, lex→md, stability pass (md→lex, lex→md). */
+  const work = (md: string) => {
+    const lex1 = md2lex(md);
+    const st = treeStats(lex1);
+    const json = JSON.stringify(lex1);
+    const md1 = lex2md(lex1);
+    const lex2 = md2lex(md1);
+    const md2 = lex2md(lex2);
+    return { nodes: st.nodes, json, md1, md2 };
+  };
+
+  // guard variants (all synchronous): new context per call, or one reused context + precompiled Script
+  const guardNew = <A, R>(fn: (a: A) => R, a: A, T: number): R => vm.runInNewContext("fn(a)", { fn, a }, { timeout: T }) as R;
+  const reuseSandbox: Record<string, unknown> = {};
+  const reuseCtx = vm.createContext(reuseSandbox);
+  const reuseScript = new vm.Script("fn(a)");
+  const guardReuse = <A, R>(fn: (a: A) => R, a: A, T: number): R => {
+    reuseSandbox.fn = fn;
+    reuseSandbox.a = a;
+    try {
+      return reuseScript.runInContext(reuseCtx, { timeout: T }) as R;
+    } finally {
+      reuseSandbox.fn = undefined;
+      reuseSandbox.a = undefined;
+    }
+  };
+  const guard = (kind: string) => (kind === "reuse" ? guardReuse : guardNew);
+  const run = <A, R>(kind: string, fn: (a: A) => R, a: A, T: number) => {
+    const t0 = performance.now();
+    try {
+      const r = guard(kind)(fn, a, T);
+      return { ok: true as const, ms: performance.now() - t0, r };
+    } catch (e) {
+      const err = e as { code?: string; name?: string; message?: string };
+      return { ok: false as const, ms: performance.now() - t0, code: err.code ?? null, name: err.name ?? typeof e, msg: String(err.message ?? "").slice(0, 120) };
+    }
+  };
+  const r1 = (x: number) => Math.round(x * 10) / 10;
+
+  if (c.only?.includes("P-26")) {
+    obs("P-26 (worker_threads + terminate) NOT run: H6e is only measured when P-25 H6a or H6b is NOT-VIABLE / INCONCLUSIVE (see report)", {});
+    return;
+  }
+
+  // which key names differ between two conversions of the SAME input (random ids, etc.)? — needed to compare trees across runs
+  if (mode === "nondet") {
+    const body = vecs.p25_real_40k!();
+    const a = md2lex(body);
+    const b = md2lex(body);
+    const ks = new Set<string>();
+    diffKeyNames(a, b, "root", ks);
+    const sample = (JSON.stringify(a).match(/"id":"[^"]*"/g) ?? []).slice(0, 3);
+    obs("P-25 nondeterministic key names between two conversions of the same body", { keys: [...ks], sampleIds: sample });
+    return;
+  }
+
+  // ── H6a (breadth): random hostile bodies under a SHORT guard — does ANY input run past the timeout? (max overshoot = slowest interrupt) ──
+  if (mode === "fuzz") {
+    const T = Ts[0]!;
+    const kind = arg("ctx") ?? "new";
+    const trials = Number(arg("trials") ?? 300);
+    const rnd = seeded6(Number(arg("seed") ?? 31));
+    const inl = ["*", "**", "_", "__", "[a]", "(/b)", "](/b)", "[", "]", "a ", " ", "a", "`", "~~", "\\", "<", "*a", "a*", "_a", "a_", "[a](/b)", "](", "(", ")", "**a", "a**", "[a](/b)*", "*[a]", "\t", "&amp;", "<b>", "|", "!", "#", "==", "$", "\u2028", "\u00a0"];
+    const lin = ["a", "# a", "## a", "|a|b|", "|---|---|", "```", "~~~", "---", "***", "___", "- a", "* a", "+ a", "1. a", "> a", ">", "[r]: /x", "a  ", "    a", "a\\", "===", "-", "a **b**", "[a](/b)", "`a`", "", "- [ ] a", "  - b", "\t- c", "<div>", "![i](/x.png)"];
+    const res: { shape: string; len: number; elapsedMs: number; overshootMs: number; timedOut: boolean; ok: boolean }[] = [];
+    for (let i = 0; i < trials; i++) {
+      let body: string;
+      let shape: string;
+      if (rnd() < 0.5) {
+        const k = 1 + Math.floor(rnd() * 5);
+        const unit = Array.from({ length: k }, () => inl[Math.floor(rnd() * inl.length)]!).join("");
+        const n = Math.max(1, Math.floor((50 + rnd() * 200_000) / Math.max(1, unit.length + 1)));
+        body = (unit + " ").repeat(n).slice(0, 200_000);
+        shape = `inline ${JSON.stringify(unit)} x${n}`;
+      } else {
+        const pick = Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => lin[Math.floor(rnd() * lin.length)]!);
+        const L = 50 + Math.floor(rnd() * 20_000);
+        body = Array.from({ length: L }, () => pick[Math.floor(rnd() * pick.length)]!).join("\n").slice(0, 200_000);
+        shape = `lines ${JSON.stringify(pick)} x${L}`;
+      }
+      const r = run<string, ReturnType<typeof work>>(kind, work, body, T);
+      res.push({ shape: shape.slice(0, 90), len: body.length, elapsedMs: r1(r.ms), overshootMs: r1(r.ms - T), timedOut: !r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT", ok: r.ok });
+    }
+    const timed = res.filter((x) => x.timedOut);
+    const unexpected = res.filter((x) => !x.ok && !x.timedOut);
+    const fin = res.filter((x) => x.ok);
+    const worst = timed.slice().sort((a, b) => b.overshootMs - a.overshootMs);
+    const finMax = fin.reduce((m, x) => Math.max(m, x.elapsedMs), 0);
+    obs(`P-25 fuzz T=${T} ctx=${kind} trials=${trials}`, { finishedWithinT: fin.length, timedOut: timed.length, otherFailures: unexpected.length, slowestFinishedMs: finMax, overshootMs: { max: worst[0]?.overshootMs ?? null, p90: worst[Math.floor(worst.length * 0.1)]?.overshootMs ?? null, median: worst[Math.floor(worst.length / 2)]?.overshootMs ?? null }, worst5: worst.slice(0, 5), otherFailureExamples: unexpected.slice(0, 3) });
+    return;
+  }
+
+  // ── H6d: is the conversion synchronous? (no promise / microtask / timer created during md→lex→md) ──
+  if (mode === "sync") {
+    const counts: Record<string, number> = {};
+    const hook = ah.createHook({
+      init(_id, type) {
+        counts[type] = (counts[type] ?? 0) + 1;
+      },
+    });
+    const body = vecs.p25_real_40k!();
+    hook.enable();
+    const out = work(body);
+    hook.disable();
+    // positive control: the same hook DOES see a microtask / promise / timer when one is created
+    const ctl: Record<string, number> = {};
+    const hook2 = ah.createHook({
+      init(_id, type) {
+        ctl[type] = (ctl[type] ?? 0) + 1;
+      },
+    });
+    hook2.enable();
+    queueMicrotask(() => undefined);
+    void Promise.resolve().then(() => undefined);
+    clearTimeout(setTimeout(() => undefined, 1));
+    hook2.disable();
+    obs("P-25 H6d positive control (hook sees queueMicrotask / Promise / setTimeout)", ctl);
+    const isP = (x: unknown) => typeof (x as { then?: unknown } | null)?.then === "function";
+    obs("P-25 H6d async resources created while converting a 40k body (empty object = fully synchronous)", { counts, outputIsThenable: isP(out) || isP(out.json) || isP(out.md1), nodes: out.nodes, md1Len: out.md1.length, stable: out.md1 === out.md2 });
+    // does a `discrete` update commit before it returns? (the JSON is complete right after md2lex)
+    const lex = md2lex("## a\n\n**b** [c](/d)");
+    obs("P-25 H6d editor state complete immediately after md2lex return", { rootChildren: ((lex as { root: { children: unknown[] } }).root.children ?? []).length, md: lex2md(lex) });
+    return;
+  }
+
+  // ── pure-JS and native control cases (vm timeout vs things that are not importer code) ──
+  if (mode === "redos") {
+    for (const T of Ts) {
+      const r = run<string, boolean>("new", (s) => /^(a+)+$/.test(s), "a".repeat(40) + "!", T);
+      obs(`P-25 redos /^(a+)+$/ x 40a+! T=${T}`, { timedOut: !r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT", elapsedMs: r1(r.ms), overshootMs: r1(r.ms - T), ...(r.ok ? { result: r.r } : { code: r.code, name: r.name }) });
+    }
+    return;
+  }
+  if (mode === "native") {
+    const bigArr = Array.from({ length: 3_000_000 }, (_, i) => ({ x: i, y: [i, "a"] }));
+    const nums = Array.from({ length: 4_000_000 }, (_, i) => (i * 7919) % 1_000_003);
+    const bigStr = "a".repeat(100_000_000);
+    const cases: Record<string, () => unknown> = {
+      json_stringify_3M_objects: () => JSON.stringify(bigArr).length,
+      array_sort_default_4M: () => nums.slice().sort().length,
+      string_replaceAll_100M: () => bigStr.replaceAll("a", "bb").length,
+      string_split_join: () => "a,".repeat(20_000_000).split(",").join(";").length,
+      normalize_100M: () => bigStr.normalize("NFD").length,
+      js_infinite_loop: () => {
+        for (;;) {
+          /* spin */
+        }
+      },
+    };
+    // the same builtins at input sizes the hub can actually feed them (body <= 200 000 chars, <= ~100 000 pieces): unguarded wall time
+    const small: Record<string, () => unknown> = {
+      array_sort_default_200k: () => nums.slice(0, 200_000).sort().length,
+      string_replaceAll_200k: () => bigStr.slice(0, 200_000).replaceAll("a", "bb").length,
+      string_split_join_100k: () => "a,".repeat(100_000).split(",").join(";").length,
+      normalize_200k: () => bigStr.slice(0, 200_000).normalize("NFD").length,
+      json_stringify_tree_1_4MB: () => JSON.stringify(bigArr.slice(0, 30_000)).length,
+    };
+    if (arg("small") !== undefined || flag("small")) {
+      for (const [name, fn] of Object.entries(small)) {
+        const times: number[] = [];
+        for (let i = 0; i < 5; i++) {
+          const t0 = performance.now();
+          fn();
+          times.push(performance.now() - t0);
+        }
+        obs(`P-25 native@hub-scale ${name} (ms, 5 runs)`, { min: r1(Math.min(...times)), max: r1(Math.max(...times)) });
+      }
+      return;
+    }
+    const only = arg("case");
+    for (const [name, fn] of Object.entries(cases)) {
+      if (only && only !== name) continue;
+      for (const T of Ts) {
+        const r = run<undefined, unknown>("new", () => fn(), undefined, T);
+        obs(`P-25 native ${name} T=${T}`, { timedOut: !r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT", elapsedMs: r1(r.ms), overshootMs: r1(r.ms - T), ...(r.ok ? { finishedWithin: true } : { code: r.code }) });
+      }
+    }
+    return;
+  }
+
+  // ── H6c: overhead on normal bodies, new context vs reused context ──
+  if (mode === "overhead") {
+    const N = Number(arg("n") ?? 15);
+    const bodies: Record<string, string> = { real_40k: vecs.p25_real_40k!(), real_200k_para: vecs.p25_real_200k_para!(), small_2k: vecs.p25_real_40k!().slice(0, 2000) };
+    const T = Number(arg("Tg") ?? 5000);
+    const stat = (xs: number[]) => {
+      const s = xs.slice().sort((a, b) => a - b);
+      return { min: r1(s[0]!), median: r1(s[Math.floor(s.length / 2)]!), p90: r1(s[Math.floor(s.length * 0.9)]!), max: r1(s[s.length - 1]!) };
+    };
+    for (const [bn, body] of Object.entries(bodies)) {
+      const t: Record<string, number[]> = { unguarded: [], guardNew: [], guardReuse: [] };
+      for (let i = 0; i < N; i++) {
+        // rotate the order so no variant always runs first / last
+        const order = ["unguarded", "guardNew", "guardReuse"];
+        for (let k = 0; k < i % 3; k++) order.push(order.shift()!);
+        for (const m of order) {
+          const t0 = performance.now();
+          if (m === "unguarded") work(body);
+          else guard(m === "guardNew" ? "new" : "reuse")(work, body, T);
+          t[m]!.push(performance.now() - t0);
+        }
+      }
+      const base = stat(t.unguarded!);
+      obs(`P-25 H6c overhead body=${bn} (${body.length} chars) n=${N}`, {
+        unguarded: base,
+        guardNew: { ...stat(t.guardNew!), deltaMedianMs: r1(stat(t.guardNew!).median - base.median), pct: r1(((stat(t.guardNew!).median - base.median) / base.median) * 100) },
+        guardReuse: { ...stat(t.guardReuse!), deltaMedianMs: r1(stat(t.guardReuse!).median - base.median), pct: r1(((stat(t.guardReuse!).median - base.median) / base.median) * 100) },
+      });
+    }
+    // cost of the context itself (trivial script)
+    const mk: number[] = [];
+    const mkR: number[] = [];
+    for (let i = 0; i < 300; i++) {
+      let t0 = performance.now();
+      vm.runInNewContext("1+1", {}, { timeout: 1000 });
+      mk.push(performance.now() - t0);
+      t0 = performance.now();
+      guardReuse(() => 1, 1, 1000);
+      mkR.push(performance.now() - t0);
+    }
+    obs("P-25 H6c context cost, trivial fn: runInNewContext vs reused context (ms)", { newContext: stat(mk), reusedContext: stat(mkR) });
+    // memory: 300 fresh contexts, then gc
+    v8.setFlagsFromString("--expose_gc");
+    const gc = vm.runInNewContext("gc") as () => void;
+    gc();
+    const h0 = process.memoryUsage().heapUsed;
+    for (let i = 0; i < 300; i++) vm.runInNewContext("fn(a)", { fn: (x: number) => x, a: i }, { timeout: 1000 });
+    gc();
+    obs("P-25 H6c heap after 300 fresh contexts + gc (KB delta)", { deltaKB: Math.round((process.memoryUsage().heapUsed - h0) / 1024) });
+    return;
+  }
+
+  // ── H6b: 50 alternating cycles (catastrophic vector terminated, then normal bodies) in ONE process ──
+  if (mode === "cycle") {
+    const T = Ts[0]!;
+    const kind = arg("ctx") ?? "new";
+    const cycles = Number(arg("cycles") ?? 50);
+    v8.setFlagsFromString("--expose_gc");
+    const gc = vm.runInNewContext("gc") as () => void;
+    const bads = ["p25_star_link_200", "p25_star_a_1000", "p25_backtick_200k", "p25_tilde_33333", "p25_fence_5000"];
+    const normals: Record<string, string> = { real_40k: vecs.p25_real_40k!(), real_200k_para: vecs.p25_real_200k_para!() };
+    const sampleBodies = Object.entries(P1_SAMPLES6);
+    /** signature of the editor config's markdown transformers (type, format, regexes, handlers by source text) */
+    const trSig = () => {
+      const tr = ((c.editorConfig as { features?: { markdownTransformers?: unknown[] } } | undefined)?.features?.markdownTransformers ?? []) as Record<string, unknown>[];
+      const rx = (x: unknown) => (x instanceof RegExp ? x.source + "/" + x.flags : x === undefined ? "" : typeof x === "object" ? JSON.stringify(Object.keys(x as object)) : String(x));
+      const fn = (x: unknown) => (typeof x === "function" ? sha(Function.prototype.toString.call(x)) : "");
+      return sha(JSON.stringify(tr.map((t) => [t.type, t.format, t.tag, t.trigger, rx(t.regExp), rx(t.regExpStart), rx(t.regExpEnd), rx(t.importRegExp), fn(t.replace), fn(t.export), fn(t.importer)])));
+    };
+    const battery = () => sha(sampleBodies.map(([n, m]) => `${n}:${canon(JSON.stringify(md2lex(m)))}:${lex2md(md2lex(m))}`).join("|"));
+    // baseline (no guard, before any termination)
+    const base: Record<string, { jsonSha: string; md1Sha: string; ms: number }> = {};
+    for (const [n, body] of Object.entries(normals)) {
+      work(body); // extra warm run
+      const t0 = performance.now();
+      const o = work(body);
+      base[n] = { jsonSha: sha(canon(o.json)), md1Sha: sha(o.md1), ms: performance.now() - t0 };
+    }
+    const baseBattery = battery();
+    const baseTr = trSig();
+    gc();
+    const heap0 = process.memoryUsage().heapUsed;
+    obs("P-25 H6b baseline (unguarded, before any termination)", { base: Object.fromEntries(Object.entries(base).map(([k, x]) => [k, { ...x, ms: r1(x.ms) }])), batterySha: baseBattery, transformersSig: baseTr, transformerCount: ((c.editorConfig as { features?: { markdownTransformers?: unknown[] } } | undefined)?.features?.markdownTransformers ?? []).length, heapKB: Math.round(heap0 / 1024) });
+    let terminated = 0, notTerminated = 0, mismatches = 0, batteryMismatches = 0, transformerMismatches = 0;
+    const slow: Record<string, number[]> = { real_40k: [], real_200k_para: [] };
+    const killMs: number[] = [];
+    const heapTrace: number[] = [];
+    for (let i = 0; i < cycles; i++) {
+      const bad = bads[i % bads.length]!;
+      const r = run<string, ReturnType<typeof work>>(kind, work, vecs[bad]!(), T);
+      if (!r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") {
+        terminated++;
+        killMs.push(r.ms);
+      } else {
+        notTerminated++;
+        obs(`P-25 H6b cycle ${i} bad=${bad} NOT terminated`, { ok: r.ok, elapsedMs: r1(r.ms), ...(r.ok ? { nodes: r.r.nodes } : { code: r.code, name: r.name }) });
+      }
+      for (const [n, body] of Object.entries(normals)) {
+        const t0 = performance.now();
+        const g = run<string, ReturnType<typeof work>>(kind, work, body, 20000);
+        const dt = performance.now() - t0;
+        slow[n]!.push(dt);
+        if (!g.ok || sha(canon(g.r.json)) !== base[n]!.jsonSha || sha(g.r.md1) !== base[n]!.md1Sha) {
+          mismatches++;
+          obs(`P-25 H6b cycle ${i} normal=${n} MISMATCH`, { ok: g.ok, ...(g.ok ? { jsonSha: sha(canon(g.r.json)), md1Sha: sha(g.r.md1) } : { code: g.code, name: g.name }) });
+        }
+      }
+      if (i % 5 === 4) {
+        const b = battery();
+        if (b !== baseBattery) {
+          batteryMismatches++;
+          obs(`P-25 H6b cycle ${i} P-1 sample battery MISMATCH`, { sha: b });
+        }
+        if (trSig() !== baseTr) {
+          transformerMismatches++;
+          obs(`P-25 H6b cycle ${i} editor-config transformers CHANGED`, {});
+        }
+      }
+      if (i % 10 === 9 || i === cycles - 1) {
+        gc();
+        heapTrace.push(Math.round(process.memoryUsage().heapUsed / 1024));
+      }
+    }
+    const med = (xs: number[]) => r1(xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)]!);
+    const sortedKill = killMs.slice().sort((a, b) => a - b);
+    obs(`P-25 H6b summary T=${T} ctx=${kind} cycles=${cycles}`, {
+      terminated, notTerminated, normalMismatches: mismatches, batteryMismatches, transformerMismatches,
+      killElapsedMs: { min: r1(sortedKill[0] ?? 0), median: med(killMs), max: r1(sortedKill[sortedKill.length - 1] ?? 0) },
+      normalMs: Object.fromEntries(Object.entries(slow).map(([k, xs]) => [k, { baselineMs: r1(base[k]!.ms), firstHalfMedian: med(xs.slice(0, Math.floor(xs.length / 2))), secondHalfMedian: med(xs.slice(Math.floor(xs.length / 2))), max: r1(Math.max(...xs)) }])),
+      heapKB_afterGc_every10Cycles: heapTrace, heapBaselineKB: Math.round(heap0 / 1024),
+    });
+    return;
+  }
+
+  // ── H6a (default): one vector × several T, each in the same process ──
+  const label = c.vecOnly;
+  if (!label || !vecs[label]) {
+    obs("P-25 needs --vec <label>; labels", Object.keys(vecs));
+    return;
+  }
+  const kind = arg("ctx") ?? "new";
+  const body = vecs[label]!();
+  const t0s = performance.now();
+  const pre = pre6(body);
+  const scanMs = ms(t0s);
+  const memBase = process.resourceUsage().maxRSS;
+  for (const T of Ts) {
+    const r = run<string, ReturnType<typeof work>>(kind, work, body, T);
+    const mu = process.memoryUsage();
+    obs(`P-25 ${label} T=${T} ctx=${kind}`, {
+      mem: { heapUsedMB: Math.round(mu.heapUsed / 1048576), rssMB: Math.round(mu.rss / 1048576), maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024), maxRssGrowthMB: Math.round((process.resourceUsage().maxRSS - memBase) / 1024) },
+      len: body.length, lines: pre.lines, starUnd: pre.starUnd, links: pre.links, scanMs,
+      timedOut: !r.ok && r.code === "ERR_SCRIPT_EXECUTION_TIMEOUT",
+      elapsedMs: r1(r.ms), overshootMs: r1(r.ms - T),
+      ...(r.ok ? { finished: true, nodes: r.r.nodes, jsonLen: r.r.json.length, stable: r.r.md1 === r.r.md2 } : { code: r.code, name: r.name, msg: r.msg }),
+    });
+  }
+  // after the (last) termination the same process must still convert a normal body correctly
+  const sane = run<string, ReturnType<typeof work>>(kind, work, vecs.p25_real_40k!(), 20000);
+  obs(`P-25 ${label} post-termination sanity (real_40k, same process)`, sane.ok ? { ok: true, ms: r1(sane.ms), nodes: sane.r.nodes, stable: sane.r.md1 === sane.r.md2 } : { ok: false, code: sane.code });
+}
+
+async function body6(c: Body6Ctx): Promise<void> {
+  const { md2lex, lex2md, obs, ms } = c;
+  const want = (p: string) => !c.only || c.only.includes(p);
+  // warm-up: exclude one-off module / editor initialisation from the measurements
+  const w0 = performance.now();
+  lex2md(md2lex("Khởi động **đậm** *nghiêng* [liên kết](/x)\n\n- a\n- b"));
+  obs("warmup (one-off init, excluded from vectors)", { ms: ms(w0) });
+  if (c.only?.includes("P-25") || c.only?.includes("P-26")) {
+    await p25p26(c, body6Vectors(parseLim6()));
+    return;
+  }
+
+  const rt = (md0: string) => {
+    const lex1 = md2lex(md0);
+    const md1 = lex2md(lex1);
+    const lex2 = md2lex(md1);
+    const md2 = lex2md(lex2);
+    return { lex1, md1, lex2, md2 };
+  };
+
+  // ── P-20: where the root cause of the triple-star round trip lives ──────
+  if (want("P-20")) {
+    const forms: Record<string, string> = {
+      triple: "***x***",
+      bold_ital: "**_x_**",
+      ital_bold: "*__x__*",
+      ital_bold_mid: "Câu có *__x__* giữa câu.",
+      triple_then_word: "***x*** y",
+      triple_in_word: "a***x***b",
+      strike_bold_ital: "~~**_x_**~~",
+      mark_triple: "==***x***==",
+      triple_in_link: "[***x***](/a)",
+      triple_in_list: "- ***x***",
+      triple_in_quote: "> ***x***",
+      triple_in_heading: "## ***x***",
+      triple_two_words: "***hai từ***",
+      triple_vi: "***Đà Nẵng***",
+      under_triple: "___x___",
+      bold_ital_under: "__*x*__",
+      ital_under_bold: "_**x**_",
+      bold_open_ital: "**a *b* c**",
+      ital_open_bold: "*a **b** c*",
+      ital_open_bold_end: "*a **b***",
+      bold_open_ital_end: "**a *b***",
+      plain_stars: "a * b * c",
+      escaped: "\\*x\\*",
+      underscore_word: "snake_case_word",
+    };
+    for (const [name, md0] of Object.entries(forms)) {
+      const r = rt(md0);
+      const t1 = formatSeq6(r.lex1);
+      const t2 = formatSeq6(r.lex2);
+      obs(`P-20 ${name}`, {
+        md0,
+        lex1: flat6((r.lex1 as { root: unknown }).root),
+        md1: r.md1,
+        md2: r.md2,
+        stable: r.md2 === r.md1,
+        F_blocks: r.md2 !== r.md1,
+        lex2: flat6((r.lex2 as { root: unknown }).root),
+        formatSeqSame: t1 === t2,
+      });
+    }
+    // fuzz: short strings over an inline-marker alphabet — instability and silent drift
+    const toks = ["*", "**", "_", "__", "~~", "`", "[", "](/a)", "a", "b", " ", "\n", "x y", " *", "* ", "==", "***", "_ ", " _", "\\*"];
+    const rnd = seeded6(20260930);
+    let n = 0, unstable = 0, stableDrift = 0, unstable3 = 0;
+    const ex: string[] = [];
+    const exDrift: string[] = [];
+    const driftDetail: Record<string, string>[] = [];
+    for (let i = 0; i < 4000; i++) {
+      const len = 3 + Math.floor(rnd() * 8);
+      let md0 = "";
+      for (let k = 0; k < len; k++) md0 += toks[Math.floor(rnd() * toks.length)];
+      let r;
+      try {
+        r = rt(md0);
+      } catch {
+        continue;
+      }
+      n++;
+      const unst = r.md2 !== r.md1;
+      if (unst) {
+        unstable++;
+        if (ex.length < 12) ex.push(md0);
+        // does a THIRD round still change? (is the instability a diverging walk?)
+        const md3 = lex2md(md2lex(r.md2));
+        if (md3 !== r.md2) unstable3++;
+      } else if (formatSeq6(r.lex1) !== formatSeq6(r.lex2)) {
+        stableDrift++;
+        if (exDrift.length < 12) exDrift.push(md0);
+        if (driftDetail.length < 10) driftDetail.push({ md0, md1: r.md1, lex1: flat6((r.lex1 as { root: unknown }).root), lex2: flat6((r.lex2 as { root: unknown }).root) });
+      }
+    }
+    obs("P-20 fuzz (4000 random short inline strings)", { tried: n, F_blocks: unstable, F_blocks_and_third_round_still_changes: unstable3, md2EqMd1_but_formatSeq_differs: stableDrift, examplesBlocked: ex, examplesStableDrift: exDrift });
+    obs("P-20 fuzz drift detail (md2 === md1 but semantic signature of lex1 differs from lex2)", driftDetail);
+  }
+
+  // ── P-21: gate F on the 18 known-stable samples + 3 unstable ones ───────
+  if (want("P-21")) {
+    const extra: Record<string, string> = { under_italic: "_x_", under_bold: "__x__", under_italic_mid: "Chữ _nghiêng_ giữa câu.", under_bold_mid: "Chữ __đậm__ giữa câu." };
+    const unstable = ["***x***", "**_x_**", "*__x__*"];
+    const stableNames: string[] = [];
+    let blocked = 0, fOk = 0;
+    const rows: Record<string, unknown>[] = [];
+    const all: [string, string][] = [...Object.entries(P1_SAMPLES6), ...Object.entries(extra)];
+    for (const [name, md0] of all) {
+      const t0 = performance.now();
+      const r = rt(md0);
+      const t = ms(t0);
+      const ok = r.md2 === r.md1;
+      rows.push({ name, F_passes: ok, F2_passes_sem: ok && formatSeq6(r.lex1) === formatSeq6(r.lex2), ms: t });
+      if (ok) {
+        fOk++;
+        stableNames.push(name);
+      } else blocked++;
+    }
+    for (const u of unstable) {
+      const r = rt(u);
+      rows.push({ name: `UNSTABLE ${u}`, F_passes: r.md2 === r.md1 });
+    }
+    // plausible plain-text / punctuation-heavy inputs an editor might paste (looking for FALSE rejections beyond bold+italic)
+    const plain: Record<string, string> = {
+      backslash_path: "Đường dẫn C:\\Users\\a\\b và \\n literal",
+      single_backslash: "a \\ b",
+      snake_url: "Xem https://example.com/a_b_c_d?x=1_2 và file_name_final.pdf",
+      math_stars: "Phép tính 2*3*4 = 24 và 5 * 6",
+      tilde_approx: "Giá ~$5 đến ~$10, khoảng ~3 triệu",
+      hashtag: "#DuLich #HaNoi và C# với F#",
+      pipes: "a | b | c và x||y",
+      brackets: "Mảng [1, 2, 3] và (ghi chú) và [không phải link]",
+      angle: "a < b > c và <tag> & &amp; &lt;",
+      ordered_text: "Bước 1. làm A 2. làm B 3) làm C",
+      stray_bold: "Có ** lẻ loi và * lẻ loi và _ lẻ loi",
+      quote_char: 'Anh nói: "xin chào" và \'ok\' và “cong” ‘cong’',
+      percent: "Tăng 6,5% so với 2025; 100% chắc chắn!",
+      emoji_flags: "🇻🇳 Việt Nam 🇸🇬 Singapore ❤️",
+      url_plain: "Truy cập https://example.com/path?a=1&b=2#frag để biết thêm.",
+      email: "Liên hệ a_b@example.com hoặc *@example.com",
+      markdown_in_words: "snake_case và camelCase và kebab-case và 3_4_5",
+      long_vi: "Việt Nam là một quốc gia nằm ở phía Đông bán đảo Đông Dương, thuộc khu vực Đông Nam Á. ".repeat(5),
+      dash_text: "Một — hai – ba - bốn -- năm --- sáu",
+      numbered_headings: "1. Mở đầu\n\n2. Nội dung\n\n3. Kết",
+      two_paragraphs_hard: "Dòng một  \nDòng hai\n\nĐoạn hai",
+      nbsp_text: "Một\u00a0hai\u00a0ba",
+      tabs_inline: "a\tb\tc",
+      code_span: "Dùng `npm install` rồi `npm test`",
+      strike: "Giá ~~cũ~~ mới",
+      html_entity: "Tom &amp; Jerry &copy; 2026",
+      link_with_parens: "[Wiki](https://en.wikipedia.org/wiki/Foo_(bar))",
+      image_like_text: "Không phải ảnh ! [x] (y)",
+      trailing_spaces: "Dòng có đuôi   \nDòng tiếp",
+      bold_with_underscore: "**snake_case** và *snake_case*",
+    };
+    const plainRows: Record<string, unknown>[] = [];
+    for (const [name, md0] of Object.entries(plain)) {
+      const r = rt(md0);
+      plainRows.push({ name, F_passes: r.md2 === r.md1, ...(r.md2 === r.md1 ? {} : { md0, md1: r.md1.slice(0, 80), md2: r.md2.slice(0, 80) }) });
+    }
+    obs("P-21 F on plausible plain-text inputs", plainRows);
+    obs("P-21 F on P-1 samples + extras (F_passes=false means F rejects)", rows);
+    obs("P-21 summary", { samples: all.length, F_passes: fOk, F_rejects: blocked, rejected: all.filter(([, m]) => rt(m).md2 !== rt(m).md1).map(([n]) => n) });
+  }
+
+  // ── P-22 random worst-case hunt (in-process; random unit templates repeated n times, md→lex time only) ──
+  if (c.vecOnly === "hunt-lines") {
+    const kinds = ["a", "# a", "## a", "|a|b|", "|---|---|", "```", "~~~", "---", "***", "___", "- a", "* a", "+ a", "1. a", "> a", ">", "[r]: /x", "a  ", "    a", "a\\", "===", "-", "a **b**", "[a](/b)", "`a`", "", "- [ ] a", "  - b", "\t- c"];
+    const rnd = seeded6(Number(arg("seed") ?? 5));
+    const L = Number(arg("lines") ?? 1000);
+    const trials = Number(arg("trials") ?? 120);
+    const res: { kinds: string[]; roundTripMs: number; md2lexMs: number; nodes: number }[] = [];
+    for (let i = 0; i < trials; i++) {
+      const pick = Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => kinds[Math.floor(rnd() * kinds.length)]!);
+      const body = Array.from({ length: L }, () => pick[Math.floor(rnd() * pick.length)]!).join("\n");
+      const t = performance.now();
+      const lex1 = md2lex(body);
+      const a = ms(t);
+      const md1 = lex2md(lex1);
+      md2lex(md1);
+      res.push({ kinds: pick, md2lexMs: a, roundTripMs: ms(t), nodes: treeStats(lex1).nodes });
+    }
+    res.sort((a, b) => b.roundTripMs - a.roundTripMs);
+    obs(`P-23 hunt-lines lines=${L} trials=${trials} top10 by import+export+reimport ms`, res.slice(0, 10));
+    return;
+  }
+  if (c.vecOnly === "hunt" && arg("unit-json")) {
+    const unit = JSON.parse(arg("unit-json")!) as string;
+    const curve = (arg("ns") ?? "10,20,30,40,50,60").split(",").map((x) => {
+      const n = Number(x);
+      const body = (unit + " ").repeat(n).trim();
+      const pr = pre6(body);
+      const t = performance.now();
+      md2lex(body);
+      return { n, ms: ms(t), runs: pr.runs, links: pr.links, len: body.length };
+    });
+    obs(`P-22 hunt unit curve ${JSON.stringify(unit)}`, curve);
+    return;
+  }
+  if (c.vecOnly === "hunt") {
+    const toks = ["*", "**", "_", "__", "[a]", "(/b)", "](/b)", "[", "]", "a ", " ", "a", "`", "~~", "\\", "<", "*a", "a*", "_a", "a_", "[a](/b)", "](", "(", ")", "**a", "a**", "[a](/b)*", "*[a]"];
+    const rnd = seeded6(Number(arg("seed") ?? 7));
+    const n0 = Number(arg("units") ?? 40);
+    const trials = Number(arg("trials") ?? 300);
+    const res: { unit: string; ms: number; runs: number; links: number }[] = [];
+    for (let i = 0; i < trials; i++) {
+      const k = 2 + Math.floor(rnd() * 4);
+      let unit = "";
+      for (let j = 0; j < k; j++) unit += toks[Math.floor(rnd() * toks.length)];
+      const body = (unit + " ").repeat(n0).trim();
+      const pr = pre6(body);
+      const t = performance.now();
+      md2lex(body);
+      res.push({ unit, ms: ms(t), runs: pr.runs, links: pr.links });
+    }
+    res.sort((a, b) => b.ms - a.ms);
+    obs(`P-22 hunt units=${n0} trials=${trials} top15 by md→lex ms`, res.slice(0, 15));
+    const top = res.slice(0, 4);
+    for (const r of top) {
+      const curve = [n0 / 2, n0, n0 * 2].map((n) => {
+        const body = (r.unit + " ").repeat(n).trim();
+        const t = performance.now();
+        md2lex(body);
+        return { n, ms: ms(t), ...(({ runs, links }) => ({ runs, links }))(pre6(body)) };
+      });
+      obs(`P-22 hunt curve unit=${JSON.stringify(r.unit)}`, curve);
+    }
+    console.log("\n[explore6/body] done (observations only — no assertions)");
+    return;
+  }
+  // ── P-21/22/23/24: one vector per process ───────────────────────────────
+  const vecs = body6Vectors(parseLim6());
+  for (const [name, { probe, gen }] of Object.entries(vecs)) {
+    if (!want(probe)) continue;
+    if (c.vecOnly && c.vecOnly !== name) continue;
+    // without --vec, every vector of the requested group runs in this one process (cold-start effects shared)
+    const body = gen(); // vectors are already trim()-stable shapes (the hub trims before converting)
+    const t0 = performance.now();
+    const p = pre6(body);
+    const preMs = ms(t0);
+    const blocked = p.lines > LIM6.lines || p.starUnd > LIM6.starUnd || p.links > LIM6.links;
+    const rev: string[] = [];
+    if (p.lines > REV6.lines) rev.push("lines");
+    if (p.starUnd > REV6.starUnd) rev.push("starUnd");
+    if (p.runs > REV6.runs) rev.push("runs");
+    if (p.links > REV6.links) rev.push("links");
+    if (p.maxUnitRuns > REV6.unitRuns) rev.push("unitRuns");
+    if (p.maxUnitLinks > REV6.unitLinks) rev.push("unitLinks");
+    if (p.starUnd + p.backticks + p.tildes > REV6.markChars) rev.push("markChars");
+    if (p.maxIndent > REV6.indent) rev.push("indent");
+    const rec: Record<string, unknown> = { ...p, blocked_by_proposed_limits: blocked, revised_precheck_rejects: rev, scanMs: preMs };
+    let t = performance.now();
+    const lex1 = md2lex(body);
+    rec.md2lexMs = ms(t);
+    t = performance.now();
+    const st = treeStats(lex1);
+    rec.treeWalkMs = ms(t);
+    rec.nodes = st.nodes;
+    rec.maxDepth = st.maxDepth;
+    rec.maxListNest = st.maxListNest;
+    t = performance.now();
+    const json = JSON.stringify(lex1);
+    rec.jsonMs = ms(t);
+    rec.jsonLen = json.length;
+    rec.emptyForNonEmptyInput = body.trim() !== "" && st.nodes <= 1;
+    t = performance.now();
+    let md1 = "";
+    try {
+      md1 = lex2md(lex1);
+    } catch (e) {
+      rec.exportThrew = (e as Error).name;
+    }
+    rec.lex2mdMs = ms(t);
+    t = performance.now();
+    const lex2 = md2lex(md1);
+    rec.F_md2lexMs = ms(t);
+    t = performance.now();
+    const md2 = lex2md(lex2);
+    rec.F_lex2mdMs = ms(t);
+    rec.F_stable = md2 === md1;
+    rec.writePathNoF_ms = Math.round((rec.scanMs as number) + (rec.md2lexMs as number) + (rec.treeWalkMs as number) + (rec.jsonMs as number) + (rec.lex2mdMs as number));
+    rec.writePathWithF_ms = Math.round((rec.writePathNoF_ms as number) + (rec.F_md2lexMs as number) + (rec.F_lex2mdMs as number));
+    rec.treeCapHit = (rec.nodes as number) > REV6.nodes || (rec.jsonLen as number) > REV6.json;
+    rec.verdict_le1000 = (rec.writePathWithF_ms as number) <= 1000 ? "OK" : (rec.writePathWithF_ms as number) > 2000 ? "FAIL(>2000)" : "SLOW(1000-2000)";
+    obs(`${probe} ${name}`, rec);
+  }
+  console.log("\n[explore6/body] done (observations only — no assertions)");
+}
+
+/** `--lim lines,starUnd,links` — override the proposed limits used by the P-24 generators / blocked flag. */
+function parseLim6(): { lines: number; starUnd: number; links: number } {
+  const l = arg("lim");
+  if (!l) return LIM6;
+  const [a, b, d] = l.split(",").map((x) => Number(x));
+  return { lines: a ?? LIM6.lines, starUnd: b ?? LIM6.starUnd, links: d ?? LIM6.links };
+}
+
+async function explore6() {
+  assertLocalTargets();
+  if (flag("list")) {
+    const bv = body6Vectors(parseLim6());
+    for (const [name, { probe }] of Object.entries(bv)) console.log(`${probe} ${name}`);
+    for (const name of Object.keys(p25Vectors(bv))) console.log(`P-25 ${name}`);
+    process.exit(0);
+  }
+  const only = arg("only")?.split(",").map((s) => s.trim());
+  const want = (p: string) => !only || only.includes(p);
+  const vecOnly = arg("vec");
+  const in4 = arg("in4");
+  const readTok = in4 ? (JSON.parse(readFileSync(in4, "utf8")) as R_Tokens).read : undefined;
+
+  // P-20 … P-26 are pure-conversion probes: they only need the sanitized config (no DB connection, no schema push).
+  const bodyOnly = !!only && only.every((o) => BODY6_PROBES.includes(o));
+  const payload0 = bodyOnly ? null : await getPayload({ config });
+  const lexical = await import("@payloadcms/richtext-lexical");
+  const { loadHubEditorConfig, countDangerousLinkTargets } = await import("../src/lib/hub-article-markdown");
+  const { slugify } = await import("../src/lib/http");
+  const { sha256Hex } = await import("../src/lib/crypto");
+  const editorConfig = await loadHubEditorConfig(payload0 ? payload0.config : await config);
+  type Conv = (a: Record<string, unknown>) => unknown;
+  const md2lex = (markdown: string) => (lexical.convertMarkdownToLexical as unknown as Conv)({ editorConfig, markdown }) as Record<string, unknown>;
+  const lex2md = (data: unknown) => (lexical.convertLexicalToMarkdown as unknown as Conv)({ data, editorConfig }) as string;
+  const obs = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
+  const ms = (t0: number) => Math.round(performance.now() - t0);
+
+  if (bodyOnly) {
+    await body6({ md2lex, lex2md, obs, ms, only, vecOnly, editorConfig });
+    process.exit(0);
+  }
+  const payload = payload0!;
+
+  const tenants = await tenantsBySlug(payload);
+  const T = need(tenants, "dtw");
+  const pillarDoc = (
+    await payload.find({ collection: "pillars", where: { tenant: { equals: T } }, limit: 1, depth: 0, overrideAccess: true })
+  ).docs[0] as unknown as { id: number; slug: string };
+  const authorDoc = (
+    await payload.find({ collection: "authors", where: { tenant: { equals: T } }, limit: 1, depth: 0, overrideAccess: true })
+  ).docs[0] as unknown as { id: number };
+  if (!pillarDoc || !authorDoc) throw new Error("dtw needs a pillar + author — run --setup / --setup2 first");
+
+  let seq = 0;
+  const uniq = (p: string) => `e6-${p}-${Date.now().toString(36)}-${++seq}`.toLowerCase();
+  const mk = async (
+    extra: Record<string, unknown> = {},
+    opts: { draft?: boolean; context?: Record<string, unknown>; noDefaults?: boolean } = {},
+  ): Promise<Doc> => {
+    const slug = (extra.slug as string | undefined) ?? uniq("a");
+    const base = opts.noDefaults
+      ? { tenant: T, title: `E6 ${slug}`, slug }
+      : { tenant: T, title: `E6 ${slug}`, slug, pillar: pillarDoc.id, author: authorDoc.id, workflowStatus: "draft", origin: "manual" };
+    return (await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      locale: "en",
+      ...(opts.draft ? { draft: true } : {}),
+      context: { disableRevalidate: true, ...(opts.context ?? {}) },
+      data: { ...base, ...extra } as never,
+    })) as unknown as Doc;
+  };
+  const pick = (d: Doc | null) =>
+    d && { version: d.version, title: d.title, dek: d.dek ?? null, slug: d.slug, workflowStatus: d.workflowStatus, _status: d._status, sponsor: d.sponsor ?? null };
+  const both = async (id: number) => {
+    const main = (await payload.findByID({ collection: "articles", id, depth: 0, locale: "en", overrideAccess: true })) as unknown as Doc;
+    const latest = (await payload.findByID({ collection: "articles", id, depth: 0, locale: "en", overrideAccess: true, draft: true })) as unknown as Doc;
+    return { main: pick(main), latest: pick(latest) };
+  };
+  const tryW = async <R>(f: () => Promise<R>): Promise<{ ok: true; v: R } | { ok: false; name: string; msg: string }> => {
+    try {
+      return { ok: true, v: await f() };
+    } catch (e) {
+      return { ok: false, name: (e as Error)?.name ?? typeof e, msg: String((e as Error)?.message ?? e).slice(0, 160) };
+    }
+  };
+  const hubGet = async (id: number, timeoutMs = 120_000) => {
+    if (!readTok) return { skipped: "no --in4" };
+    const t0 = performance.now();
+    try {
+      const res = await fetch(`${BASE}/api/hub/articles/${id}?tenant=dtw`, {
+        headers: { Authorization: `Bearer ${readTok}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const j = (await res.json()) as { article?: { bodyState?: string; bodyMarkdown?: string } };
+      return { status: res.status, ms: ms(t0), bodyState: j.article?.bodyState, mdLen: j.article?.bodyMarkdown?.length };
+    } catch (e) {
+      return { error: (e as Error).name, ms: ms(t0) };
+    }
+  };
+
+  // ── P-4 inventory of what the editor registers ──────────────────────────
+  const allTypes = new Set<string>();
+  const addTypes = (s: TreeStats) => Object.keys(s.types).forEach((t) => allTypes.add(t));
+  if (want("P-4")) {
+    const ec = editorConfig as unknown as { resolvedFeatureMap?: Map<string, unknown>; editorConfig?: { lexical?: unknown } };
+    obs("P-4 registered features", ec.resolvedFeatureMap ? [...ec.resolvedFeatureMap.keys()] : "n/a");
+  }
+
+  // ── P-1 Markdown-only samples: md → lex → md → lex ─────────────────────
+  const ignoreKeys = new Set<string>();
+  if (want("P-1") || want("P-1b") || want("P-4")) {
+    const samples = P1_SAMPLES6;
+    for (const [name, md0] of Object.entries(samples)) {
+      const lex1 = md2lex(md0);
+      const md1 = lex2md(lex1);
+      const lex2 = md2lex(md1);
+      const md2 = lex2md(lex2);
+      const s1 = treeStats(lex1);
+      const s2 = treeStats(lex2);
+      addTypes(s1);
+      const d = new Set<string>();
+      diffKeyNames(lex1, lex2, "root", d);
+      d.forEach((k) => ignoreKeys.add(k));
+      const counts = (s: TreeStats) => ({ heading: s.types.heading ?? 0, list: s.types.list ?? 0, link: (s.types.link ?? 0) + (s.types.autolink ?? 0) });
+      if (want("P-1"))
+        obs(`P-1 ${name}`, {
+          md0EqMd1: md0 === md1,
+          fixedPoint_md2EqMd1: md2 === md1,
+          textEq: s1.text === s2.text,
+          countsEq: JSON.stringify(counts(s1)) === JSON.stringify(counts(s2)),
+          counts: counts(s1),
+          types: s1.types,
+          lexDiffKeys: [...d],
+          md1,
+        });
+    }
+    if (want("P-1")) obs("P-1 union of differing keys on Markdown-only samples (candidate IGNORE set)", [...ignoreKeys]);
+  }
+
+  // ── P-1b CMS-admin-authored Lexical (hand-built, CMS-4 FEASIBILITY builders) ─
+  if (want("P-1b") || want("P-4")) {
+    const t = lx.text;
+    const el = lx.el;
+    const li = (children: unknown[], extra: Record<string, unknown> = {}) => el("listitem", children, { value: 1, ...extra });
+    const cms: Record<string, unknown> = {
+      align_center: lx.root(el("paragraph", [t("canh giữa")], { format: "center", textFormat: 0, textStyle: "" })),
+      align_right_heading: lx.root(el("heading", [t("tiêu đề phải")], { tag: "h2", format: "right" })),
+      indent_2: lx.root(el("paragraph", [t("thụt lề")], { indent: 2, textFormat: 0, textStyle: "" })),
+      underline: lx.root(lx.p(t("gạch dưới", 8))),
+      strikethrough: lx.root(lx.p(t("gạch ngang", 4))),
+      inline_code: lx.root(lx.p(t("mã", 16))),
+      subscript: lx.root(lx.p(t("dưới", 32))),
+      superscript: lx.root(lx.p(t("trên", 64))),
+      text_style_color: lx.root(lx.p({ ...(t("màu") as object), style: "color: red" })),
+      link_newtab: lx.root(
+        lx.p(el("link", [t("tab mới")], { version: 3, id: "aa11", fields: { linkType: "custom", url: "https://example.com/x", newTab: true } })),
+      ),
+      link_internal: lx.root(
+        lx.p(el("link", [t("nội bộ")], { version: 3, id: "bb22", fields: { linkType: "internal", doc: { relationTo: "articles", value: 1 }, newTab: false } })),
+      ),
+      checklist: lx.root(el("list", [li([t("việc 1")], { checked: true }), li([t("việc 2")], { checked: false, value: 2 })], { listType: "check", start: 1, tag: "ul" })),
+      ordered_start3: lx.root(el("list", [li([t("ba")], { value: 3 })], { listType: "number", start: 3, tag: "ol" })),
+      hr: lx.root(lx.p(t("trên")), { type: "horizontalrule", version: 1 }, lx.p(t("dưới"))),
+      upload: lx.root(lx.p(t("ảnh:")), lx.upload("media", 1)),
+      relationship: lx.root(lx.p(t("quan hệ:")), lx.rel("articles", 1)),
+      plain_reference: lx.root(lx.p(t("đoạn thường "), t("đậm", 1), t(" và "), t("nghiêng", 2))),
+    };
+    const lost = new Set<string>();
+    for (const [name, lex] of Object.entries(cms)) {
+      const r = await tryW(async () => {
+        const md = lex2md(lex);
+        const back = md2lex(md);
+        const d = new Set<string>();
+        diffKeyNames(lex, back, "root", d);
+        const sIn = treeStats(lex);
+        const sBack = treeStats(back);
+        return { md, diffKeys: [...d], typesIn: sIn.types, typesBack: sBack.types, textEq: sIn.text === sBack.text };
+      });
+      if (r.ok) {
+        r.v.diffKeys.filter((k) => !ignoreKeys.has(k)).forEach((k) => lost.add(k));
+        Object.keys(r.v.typesIn).forEach((k) => allTypes.add(`(cms-admin) ${k}`));
+      }
+      if (want("P-1b")) obs(`P-1b ${name}`, r.ok ? { ...r.v, lostBeyondIgnore: r.v.diffKeys.filter((k) => !ignoreKeys.has(k)) } : r);
+    }
+    if (want("P-1b")) obs("P-1b union of keys differing on CMS-admin samples beyond the P-1 ignore set (candidate LOST set)", [...lost]);
+  }
+
+  // ── P-2 images, P-3 raw HTML + disguised links, P-4 syntax coverage ─────
+  if (want("P-2") || want("P-3") || want("P-4")) {
+    const probeMd = (label: string, md: string) => {
+      const r = (() => {
+        try {
+          const lex = md2lex(md);
+          const s = treeStats(lex);
+          addTypes(s);
+          const out = lex2md(lex);
+          return { types: s.types, links: s.links, text: s.text.slice(0, 120), mdOut: out.slice(0, 200), readRegexHits: countDangerousLinkTargets(out) };
+        } catch (e) {
+          return { threw: (e as Error).name, msg: String((e as Error).message).slice(0, 120) };
+        }
+      })();
+      obs(label, r);
+    };
+    if (want("P-2")) {
+      probeMd("P-2 inline image", "![alt chữ](https://example.com/a.png)");
+      probeMd("P-2 reference image", "![alt][ref]\n\n[ref]: https://example.com/b.png");
+      probeMd("P-2 image inside link", "[![a](https://e.com/i.png)](https://e.com)");
+    }
+    if (want("P-3")) {
+      const v: Record<string, string> = {
+        html_b: "chữ <b>đậm</b> html",
+        html_script: "trước <script>alert(1)</script> sau",
+        html_img: "<img src=x onerror=alert(1)>",
+        js: "[x](javascript:alert(1))",
+        js_upper: "[x](JaVaScRiPt:alert(1))",
+        js_tab: "[x](java\tscript:alert(1))",
+        js_newline: "[x](java\nscript:alert(1))",
+        js_nbsp: "[x](java script:alert(1))",
+        js_space_before: "[x]( javascript:alert(1))",
+        js_angle: "[x](<javascript:alert(1)>)",
+        ref_def: "[x][r]\n\n[r]: javascript:alert(1)",
+        autolink_js: "<javascript:alert(1)>",
+        entity_j: "[x](&#106;avascript:alert(1))",
+        entity_mixed: "[x](java&#115;cript&#58;alert(1))",
+        c0_lead: "[x](\u0001javascript:alert(1))",
+        proto_rel: "[x](//evil.com)",
+        backslash: "[x](\\/\\/evil.com)",
+        data_html: "[x](data:text/html,<script>alert(1)</script>)",
+        vbscript: "[x](vbscript:msgbox(1))",
+        bare_url: "xem https://example.com/z nhé",
+        autolink_https: "<https://example.com/y>",
+      };
+      for (const [k, md] of Object.entries(v)) probeMd(`P-3 ${k}`, md);
+    }
+    if (want("P-4")) {
+      probeMd(
+        "P-4 syntax coverage",
+        "# h1\n\n## h2\n\n### h3\n\n#### h4\n\n##### h5\n\n###### h6\n\n---\n\n```js\nconst a = 1;\n```\n\n`inline` ~~gạch~~ <u>u</u> <sub>s</sub> <sup>s</sup>\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- [ ] việc\n- [x] xong\n\n<https://auto.example>\n\nhttps://bare.example\n\n***\n\ndòng  \nngắt\n\n> > lồng quote",
+      );
+      obs("P-4 union of node types seen (markdown imports + (cms-admin) samples)", [...allTypes].sort());
+    }
+  }
+
+  // ── P-5 required fields on draft + lastEngine persistence ──────────────
+  if (want("P-5")) {
+    const engId = await engineIdByName(payload, R_ENGINES.read);
+    const a = await tryW(() => mk({ workflowStatus: "draft" }, { draft: true, noDefaults: true }));
+    obs("P-5 create draft:true WITHOUT pillar/author", a.ok ? { id: a.v.id, pillar: a.v.pillar ?? null, author: a.v.author ?? null, _status: a.v._status } : a);
+    const b = await tryW(() => mk({ workflowStatus: "draft" }, { noDefaults: true }));
+    obs("P-5 create (no draft flag) WITHOUT pillar/author", b.ok ? { id: b.v.id } : b);
+    if (a.ok) obs("P-5 GET hub detail of pillar-less draft", await hubGet(a.v.id as number));
+    const c = await tryW(() => mk({ lastEngine: engId }));
+    if (c.ok) {
+      const id = c.v.id as number;
+      const r0 = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      await payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: "P5 edited" } as never });
+      const r1 = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      await payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true, hubAuthor: { actor: "probe" }, engineId: engId }, data: { title: "P5 draft edit" } as never });
+      const r2 = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, draft: true })) as unknown as Doc;
+      obs("P-5 lastEngine passed in create data", { engineId: engId, afterCreate: r0.lastEngine, afterPlainUpdate: r1.lastEngine, afterDraftUpdateWithUnknownCtx: r2.lastEngine, version: [r0.version, r1.version, r2.version], _status: r0._status });
+    } else obs("P-5 lastEngine create", c);
+  }
+
+  // ── P-6a two concurrent Local-API creates with the same slug ────────────
+  if (want("P-6a")) {
+    const res: unknown[] = [];
+    for (let i = 0; i < 5; i++) {
+      const slug = uniq("race");
+      const rr = await Promise.allSettled([mk({ slug }), mk({ slug })]);
+      const n = (await payload.find({ collection: "articles", where: { and: [{ tenant: { equals: T } }, { slug: { equals: slug } }] }, depth: 0, limit: 5, overrideAccess: true, locale: "en" })).totalDocs;
+      res.push({ fulfilled: rr.filter((x) => x.status === "fulfilled").length, rowsWithSlug: n, errors: rr.filter((x) => x.status === "rejected").map((x) => String((x as PromiseRejectedResult).reason?.message ?? "").slice(0, 90)) });
+    }
+    obs("P-6a 5 trials of 2 parallel creates same slug", res);
+  }
+
+  // ── P-10 exclusive / translationAssisted with overrideAccess ───────────
+  if (want("P-10")) {
+    const r = await tryW(() => mk({ exclusive: true, translationAssisted: true }));
+    obs("P-10 create with exclusive:true translationAssisted:true (overrideAccess)", r.ok ? { exclusive: r.v.exclusive, translationAssisted: r.v.translationAssisted } : r);
+  }
+
+  // ── P-11 locale + sourceLanguage ─────────────────────────────────────────
+  if (want("P-11")) {
+    const tDoc = (await payload.findByID({ collection: "tenants", id: T, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const slug = uniq("p11");
+    const created = (await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { tenant: T, title: "P11 tiêu đề không locale", slug, pillar: pillarDoc.id, author: authorDoc.id, workflowStatus: "draft", sourceLanguage: tDoc.defaultLanguage } as never,
+    })) as unknown as Doc;
+    const en = (await payload.findByID({ collection: "articles", id: created.id as number, depth: 0, locale: "en", overrideAccess: true })) as unknown as Doc;
+    const noSrc = await mk({});
+    obs("P-11", { tenantDefaultLanguage: tDoc.defaultLanguage, titleReadEn: en.title, slugReadEn: en.slug, sourceLanguage: en.sourceLanguage, sourceLanguageWhenNotPassed: noSrc.sourceLanguage ?? null });
+  }
+
+  // ── P-12 disableRevalidate really suppresses the webhook (+ positive control) ─
+  if (want("P-12")) {
+    const http = await import("node:http");
+    let hits = 0;
+    const server = http.createServer((req, res) => {
+      if (req.method === "POST") hits++;
+      req.resume();
+      res.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as { port: number }).port;
+    const tDoc = (await payload.findByID({ collection: "tenants", id: T, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const prevUrl = tDoc.frontendUrl ?? null;
+    await payload.update({ collection: "tenants", id: T, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: `http://127.0.0.1:${port}` } as never });
+    const counts: Record<string, number> = { signingSecretSet: process.env.CENTRAL_SIGNING_SECRET ? 1 : 0 };
+    try {
+      let h0 = hits;
+      const a = await mk({}, { context: { disableRevalidate: true } });
+      counts.createWithFlag = hits - h0;
+      h0 = hits;
+      await payload.update({ collection: "articles", id: a.id as number, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { dek: "x" } as never });
+      counts.draftUpdateWithFlag = hits - h0;
+      h0 = hits;
+      const b = (await payload.create({ collection: "articles", overrideAccess: true, locale: "en", data: { tenant: T, title: "P12 control", slug: uniq("p12"), pillar: pillarDoc.id, author: authorDoc.id, workflowStatus: "draft" } as never })) as unknown as Doc;
+      counts.createNoFlag_positiveControl = hits - h0;
+      h0 = hits;
+      await payload.update({ collection: "articles", id: b.id as number, overrideAccess: true, locale: "en", draft: true, data: { dek: "y" } as never });
+      counts.draftUpdateNoFlag = hits - h0;
+    } finally {
+      await payload.update({ collection: "tenants", id: T, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: prevUrl } as never });
+      server.close();
+    }
+    obs("P-12 webhook POSTs received", counts);
+  }
+
+  // public read token for dtw (sha256 stored, raw kept in memory only)
+  const pubTok = randomBytes(24).toString("hex");
+  let pubAdded = false;
+  const ensurePub = async () => {
+    if (pubAdded) return;
+    const tDoc = (await payload.findByID({ collection: "tenants", id: T, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const prev = (tDoc.readTokens as unknown[] | undefined) ?? [];
+    await payload.update({
+      collection: "tenants",
+      id: T,
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { readTokens: [...prev, { label: "explore6", tokenHash: sha256Hex(pubTok), tokenPrefix: pubTok.slice(0, 6), status: "active" }] } as never,
+    });
+    pubAdded = true;
+  };
+  const pubGet = async (slug: string) => {
+    await ensurePub();
+    const res = await fetch(`${BASE}/api/public/articles/${encodeURIComponent(slug)}`, { headers: { Authorization: `Bearer ${pubTok}` } });
+    const j = (await res.json().catch(() => ({}))) as { title?: string; data?: { title?: string }; doc?: { title?: string } };
+    return { status: res.status, title: j.title ?? j.data?.title ?? j.doc?.title ?? null };
+  };
+
+  // ── P-14 two faces of a Payload draft; branch A (no draft flag) vs B (draft:true) ─
+  if (want("P-14")) {
+    const upd = (id: number, data: Record<string, unknown>, draft: boolean) =>
+      tryW(() => payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", ...(draft ? { draft: true } : {}), context: { disableRevalidate: true }, data: data as never }));
+    for (const scen of [
+      { name: "S1 SaveDraft{title:X}", save: { title: "X" } },
+      { name: "S2 SaveDraft{title:X,workflowStatus:published}", save: { title: "X", workflowStatus: "published" } },
+    ]) {
+      for (const branch of ["A", "B"] as const) {
+        const a = await mk({ dek: "d0" });
+        const id = a.id as number;
+        const created = await both(id);
+        const sd = await upd(id, scen.save, true);
+        const afterSave = await both(id);
+        const patch = await upd(id, { dek: `${branch}-dek`, workflowStatus: "draft", _status: "draft" }, branch === "B");
+        const afterPatch = await both(id);
+        obs(`P-14 ${scen.name} branch ${branch}`, { created, saveDraftOk: sd.ok, afterSave, patchOk: patch.ok ? true : patch, afterPatch, publicGet: await pubGet(a.slug as string) });
+      }
+    }
+    // validation behaviour per branch: sponsored without sponsor
+    for (const branch of ["A", "B"] as const) {
+      const a = await mk({});
+      const r = await upd(a.id as number, { sponsored: true, workflowStatus: "draft", _status: "draft" }, branch === "B");
+      obs(`P-14 validation sponsored-without-sponsor branch ${branch}`, r.ok ? { ok: true, stored: await both(a.id as number) } : r);
+    }
+  }
+
+  // ── P-14b the "unpublish a live article" case ───────────────────────────
+  if (want("P-14b")) {
+    const upd = (id: number, data: Record<string, unknown>, draft: boolean) =>
+      tryW(() => payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", ...(draft ? { draft: true } : {}), context: { disableRevalidate: true }, data: data as never }));
+    for (const branch of ["A", "B"] as const) {
+      const a = await mk({ dek: "d0", title: `P14b live ${branch}` });
+      const id = a.id as number;
+      const slug = a.slug as string;
+      const pub = await upd(id, { _status: "published", workflowStatus: "published" }, false);
+      const afterPublish = await both(id);
+      const pubAfterPublish = await pubGet(slug);
+      const sd = await upd(id, { title: "Y-draft", workflowStatus: "draft" }, true);
+      const afterSave = await both(id);
+      const pubAfterSave = await pubGet(slug);
+      const patch = await upd(id, { dek: `${branch}-dek`, workflowStatus: "draft", _status: "draft" }, branch === "B");
+      const afterPatch = await both(id);
+      obs(`P-14b branch ${branch}`, { publishOk: pub.ok ? true : pub, afterPublish, pubAfterPublish, saveDraftOk: sd.ok, afterSave, pubAfterSave, patchOk: patch.ok ? true : patch, afterPatch, pubAfterPatch: await pubGet(slug) });
+    }
+  }
+
+  // ── P-15 timings on adversarial / large bodies ──────────────────────────
+  if (want("P-15")) {
+    const rep = (s: string, n: number) => s.repeat(n);
+    const C = (cp: number) => String.fromCharCode(cp);
+    const vec: Record<string, () => string> = {};
+    for (const [k, c] of [["20", " "], ["a0", C(0xa0)], ["3000", C(0x3000)], ["feff", C(0xfeff)], ["2028", C(0x2028)]] as const) {
+      vec[`w${k}_190k_x`] = () => "](" + rep(c, 190000) + "x)";
+      vec[`w${k}_190k_bare`] = () => "](" + rep(c, 190000);
+    }
+    vec.walt_190k_x = () => "](" + rep(" " + C(0xa0), 95000) + "x)";
+    for (const [k, cp] of [["180e", 0x180e], ["200b", 0x200b], ["0085", 0x85], ["2060", 0x2060]] as const) vec[`nonw${k}_190k_x`] = () => "](" + rep(C(cp), 190000) + "x)";
+    const deepList = (indent: (lvl: number) => string, levels: number, target = 200000) => {
+      let s = "";
+      while (s.length < target) for (let l = 0; l < levels && s.length < target; l++) s += indent(l) + "- x](\n";
+      return s;
+    };
+    vec.deep_tab_256 = () => deepList((l) => "\t".repeat(l), 256);
+    vec.deep_tab_64 = () => deepList((l) => "\t".repeat(l), 64);
+    vec.deep_sp4_63 = () => deepList((l) => "    ".repeat(l), 63);
+    vec.deep_sp4_70 = () => deepList((l) => "    ".repeat(l), 70);
+    vec.zigzag_tab63 = () => {
+      let s = "";
+      while (s.length < 200000) s += "\t".repeat(63) + "- x\n- y\n";
+      return s.slice(0, 200000);
+    };
+    vec.lbracket_100k = () => rep("[", 100000);
+    vec.star_100k = () => rep("*", 100000);
+    vec.underscore_100k = () => rep("_", 100000);
+    vec.quote_nest_10k = () => rep(">", 10000) + " x";
+    vec.quote_nest_100k = () => rep(">", 100000) + " x";
+    vec.dash_nest_50k = () => rep("- ", 50000) + "x";
+    vec.one_line_200k = () => rep("lorem ", 33333);
+    vec.normal_200k = () => {
+      const para = "Đây là một đoạn văn **bình thường** với [liên kết](https://example.com/a) và *nghiêng*, dài vừa phải cho một bài báo. ";
+      let s = "";
+      while (s.length < 199000) s += rep(para, 4) + "\n\n";
+      return s;
+    };
+    vec.links_40k = () => rep("[a](b)", 40000);
+    vec.links_rel_28k = () => rep("[a](/b) ", 24000);
+    vec.bold_30k = () => rep("**a**", 30000);
+    vec.lines_100k = () => rep("a\n", 100000);
+    vec.dash_lines_50k = () => rep("- a\n", 50000);
+    vec.crlf_33k = () => rep("line\r\n", 33000);
+    vec.ws256_block_775 = () => rep("](" + rep(" ", 256), 775);
+    vec.ws256_x = () => "](" + rep(" ", 256) + "x)";
+    vec.ws257_x = () => "](" + rep(" ", 257) + "x)";
+    vec.nl300_end = () => "Bài.\n" + rep("\n", 300);
+    vec.nl300_mid = () => "Bài.\n" + rep("\n", 300) + "Tiếp.";
+    // scaling curves for the slow importer cases (chars = n × unit)
+    for (const n of [10000, 25000, 50000]) vec[`star_${n}`] = () => rep("*", n);
+    for (const n of [12500, 25000, 50000]) vec[`lines_${n}`] = () => rep("a\n", n);
+    for (const n of [5000, 10000, 20000]) vec[`bold_${n}`] = () => rep("**a**", n);
+    for (const n of [12500, 25000]) vec[`dash_lines_${n}`] = () => rep("- a\n", n);
+    for (const n of [10000, 20000]) vec[`para_lines_${n}`] = () => rep("Một câu văn bình thường có độ dài vừa phải.\n", n);
+
+    for (const [name, gen] of Object.entries(vec)) {
+      if (vecOnly && vecOnly !== name) continue;
+      const raw = gen();
+      const rec: Record<string, unknown> = { inputLen: raw.length };
+      // Frozen order, partially simulated (size, C0/surrogate, trim, W-run, image). The linear link scanner does not exist at base.
+      const trimmed = raw.trim();
+      const c0 = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(raw);
+      const verdict = raw.length > 200000 ? "422 too_large" : c0 ? "422 c0" : trimmed === "" ? "201 empty" : maxWsRun(trimmed) > 256 ? "422 ws_run" : trimmed.includes("![") ? "422 image" : "pass-pure(1)(2) (link scan not simulated)";
+      rec.predicted = verdict;
+      rec.maxWsRunIn = maxWsRun(trimmed);
+      let t0 = performance.now();
+      const lex = md2lex(trimmed);
+      rec.md2lexMs = ms(t0);
+      const st = treeStats(lex);
+      rec.lexJsonLen = JSON.stringify(lex).length;
+      rec.nodes = st.nodes;
+      rec.maxDepth = st.maxDepth;
+      rec.maxListNest = st.maxListNest;
+      t0 = performance.now();
+      let out = "";
+      try {
+        out = lex2md(lex);
+      } catch (e) {
+        rec.exportThrew = (e as Error).name;
+      }
+      rec.lex2mdMs = ms(t0);
+      rec.exportLen = out.length;
+      rec.maxWsRunOut = maxWsRun(out);
+      t0 = performance.now();
+      try {
+        md2lex(out);
+      } catch (e) {
+        rec.reimportThrew = (e as Error).name;
+      }
+      rec.roundTripMs = (rec.lex2mdMs as number) + ms(t0);
+      rec.E14_stop = raw.length <= 200000 && ((rec.lexJsonLen as number) > 2_000_000 || st.nodes > 50_000);
+      const store = verdict.startsWith("201") || verdict.startsWith("pass") || arg("store-all") === name;
+      if (store) {
+        t0 = performance.now();
+        const c = await tryW(() => mk({ body: lex }));
+        rec.createMs = ms(t0);
+        if (c.ok) rec.get = await hubGet(c.v.id as number);
+        else rec.createError = c;
+      }
+      obs(`P-15 ${name}`, rec);
+    }
+  }
+
+  // ── P-16 URL validation / sanitisation vs the importer ──────────────────
+  if (want("P-16")) {
+    const urls = [
+      "\u0001javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,<script>alert(1)</script>", "vbscript:x",
+      "java&#115;cript&#58;alert(1)", "&#106;avascript:alert(1)", "//evil.com", "\\/\\/evil.com", "?q=1", "tel:+84123",
+      "mailto:a@b.c", "/rel", "#h", "foo/bar", "https://ok.com/a", "http://ok.com", " javascript:x",
+    ];
+    for (const u of urls) {
+      const lex = md2lex(`[x](${u})`);
+      const st = treeStats(lex);
+      const v = (lexical as unknown as { validateUrl: (s: string) => boolean }).validateUrl(u);
+      const s = (lexical as unknown as { sanitizeUrl: (s: string) => string }).sanitizeUrl(u);
+      const nonDraft = await tryW(() => mk({ body: lex }));
+      const draft = await tryW(() => mk({ body: lex }, { draft: true }));
+      obs(`P-16 ${JSON.stringify(u)}`, { validateUrl: v, sanitizeUrl: s, importedLinks: st.links, types: st.types, createNoDraft: nonDraft.ok ? "ok" : nonDraft.msg, createDraft: draft.ok ? "ok" : draft.msg });
+    }
+  }
+
+  // ── P-18 findByID with select on `version` / `origin` ───────────────────
+  if (want("P-18")) {
+    const a = await mk({});
+    const id = a.id as number;
+    for (const sel of [{ version: true }, { origin: true }, { version: true, origin: true, lastEngine: true, workflowStatus: true }]) {
+      for (const draft of [false, true]) {
+        const r = await tryW(() => payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, ...(draft ? { draft: true } : {}), select: sel as never }));
+        obs(`P-18 select ${JSON.stringify(sel)} draft=${draft}`, r.ok ? r.v : r);
+      }
+    }
+  }
+
+  // ── P-19 (+ P-17) slug pre-check over main table vs latest draft ────────
+  if (want("P-19") || want("P-17")) {
+    const X = uniq("slugx");
+    const Y = uniq("slugy");
+    const a = await mk({ slug: X });
+    const id = a.id as number;
+    await payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { slug: Y } as never });
+    const q = async (slug: string, draft: boolean) => {
+      const r = await payload.find({ collection: "articles", ...(draft ? { draft: true } : {}), where: { and: [{ tenant: { equals: T } }, { slug: { equals: slug } }] }, limit: 2, depth: 0, locale: "en", overrideAccess: true });
+      return r.docs.map((d) => ({ id: (d as unknown as Doc).id, slug: (d as unknown as Doc).slug }));
+    };
+    const { scopedFind } = await import("../src/lib/scoped");
+    const sf = async (slug: string) =>
+      (await (scopedFind as unknown as (a: Record<string, unknown>) => Promise<{ docs: Doc[] }>)({ payload, collection: "articles", tenantId: T, where: { slug: { equals: slug } }, limit: 2, depth: 0, locale: "en" })).docs.map((d) => ({ id: d.id, slug: d.slug }));
+    if (want("P-19"))
+      obs("P-19", {
+        articleId: id,
+        both: await both(id),
+        i_findDraft_Y: await q(Y, true),
+        ii_findDraft_X: await q(X, true),
+        findMain_X: await q(X, false),
+        findMain_Y: await q(Y, false),
+        iii_scopedFind_X: await sf(X).catch((e) => String(e).slice(0, 100)),
+        iii_scopedFind_Y: await sf(Y).catch((e) => String(e).slice(0, 100)),
+      });
+    if (want("P-17")) {
+      const engTok = process.env.SEED_ENGINE_TOKEN;
+      const intake = async (slug: string) => {
+        const res = await fetch(`${BASE}/api/engine/intake`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${engTok}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ publicationId: "dtw", title: `P17 ${slug}`, pillarSlug: pillarDoc.slug, body_markdown: "Thân P17.", byline: "P17 Probe Byline", slug, engineDraftId: uniq("eng") }),
+        });
+        const j = (await res.json().catch(() => ({}))) as { status?: string; reason?: string; id?: unknown };
+        return { http: res.status, status: j.status, reason: typeof j.reason === "string" ? j.reason.slice(0, 120) : j.reason };
+      };
+      obs("P-17 intake with slug X (main table of hub draft still X)", engTok ? await intake(X) : "SEED_ENGINE_TOKEN unset");
+      obs("P-17 intake with slug Y (only on latest draft)", engTok ? await intake(Y) : "SEED_ENGINE_TOKEN unset");
+      obs("P-17 rows per slug after intake", { X: await q(X, false), Y: await q(Y, false) });
+    }
+  }
+
+  // ── slugify vector table (hub copies these into hub-composer-draft.test.ts) ─
+  if (want("slugify")) {
+    const inputs = [
+      "Hello World", "  Trim  me  ", "Spain's Best Beaches", "Rock ’n’ Roll", "O‘Brien`s ʼTest", "Málaga & Córdoba",
+      "Đà Nẵng đẹp", "ĐỒNG ĐỀU", "Việt Nam 2026: Tăng trưởng 6,5%", "a--b__c", "---", "!!!", "", "Ñandú über straße",
+      "x".repeat(100), `${"word ".repeat(30)}end`, "C++ / C# — guide", "émoji 😀 test", "UPPER lower 123",
+    ];
+    obs("slugify vectors", inputs.map((i) => [i, slugify(i)]));
+  }
+
+  if (pubAdded) {
+    const tDoc = (await payload.findByID({ collection: "tenants", id: T, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const kept = ((tDoc.readTokens as Doc[] | undefined) ?? []).filter((r) => r.label !== "explore6");
+    await payload.update({ collection: "tenants", id: T, overrideAccess: true, context: { disableRevalidate: true }, data: { readTokens: kept } as never });
+  }
+  console.log("\n[explore6] done (observations only — no assertions)");
+  process.exit(0);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -2012,10 +3902,12 @@ const run = flag("setup")
                     ? check4
                     : flag("check5")
                       ? check5
-                      : null;
+                      : flag("explore6")
+                        ? explore6
+                        : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only]",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links]",
   );
   process.exit(2);
 }
