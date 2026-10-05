@@ -2197,7 +2197,7 @@ function spAt6(s: string, i: number, end: number): boolean {
  *  (v)   `1)`, `[ ]`, table rows, HTML, fences are NOT fences (merge = stricter).
  *  (vi)  mark runs (maximal runs of ONE of `*` `_` `` ` `` `~`) and `](` add up over every line of a unit; any other
  *        character (CR, NBSP, LF included) cuts a run.
- *  indent = leading W characters of each LF line; markChars = `*`+`_` + backticks + tildes.
+ *  indent = leading W characters of each LF line that has a non-W character (whitespace-only lines are NOT counted, D23); markChars = `*`+`_` + backticks + tildes.
  */
 function pre6(s: string): Pre6 {
   const n = s.length;
@@ -2223,7 +2223,7 @@ function pre6(s: string): Pre6 {
     while (p < end && (s.charCodeAt(p) === 32 || s.charCodeAt(p) === 9)) p++;
     let w = start;
     while (w < end && isW6(s.charCodeAt(w))) w++;
-    if (w - start > maxIndent) maxIndent = w - start;
+    if (w < end && w - start > maxIndent) maxIndent = w - start;
     if (p === end) {
       flush(); // blank line ends the unit
     } else {
@@ -3999,6 +3999,10 @@ function d2Vectors(): D2Vec[] {
     { name: "c_unitLinks_21", md: () => unitsJoin("[a](/b)", 21, 1), v: "block", http: "too_large" },
     { name: "c_indent_16", md: () => "- a\n" + rep("\t", 16) + "- x", v: "pass", http: 201 },
     { name: "c_indent_17", md: () => "- a\n" + rep("\t", 17) + "- x", v: "block", http: "too_large" },
+    // D23: indent counts only on lines with a non-W character (a whitespace-only line is not counted)
+    { name: "c_wsline_20", md: () => "a\n\n" + rep(" \t", 10) + "\n\nb", v: "pass", http: 201 },
+    { name: "c_indent_sp16", md: () => "a\n" + rep(" ", 16) + "x", v: "pass" },
+    { name: "c_indent_sp17", md: () => "a\n" + rep(" ", 17) + "x", v: "block", http: "too_large" },
     // (d) real-looking bodies vs the synthetic dense body
     { name: "d_real_40k", md: () => realBody6(40000, { line: 150, bold: 300, link: 1000, ital: 600, seed: 40 }), v: "pass", http: 201 },
     { name: "d_real_200k_para", md: () => realBody6(200000, { line: 600, bold: 300, link: 1000, ital: 600, seed: 203 }), v: "pass", http: 201 },
@@ -4918,6 +4922,13 @@ async function setup6() {
   process.exit(0);
 }
 
+/** Deep copy with object keys sorted (jsonb columns do not keep insertion order). */
+function sortKeys6(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortKeys6);
+  if (v && typeof v === "object") return Object.fromEntries(Object.keys(v as Doc).sort().map((k) => [k, sortKeys6((v as Doc)[k])]));
+  return v;
+}
+
 function sha256Hex6(s: string): string {
   return createHash("sha256").update(s).digest("hex");
 }
@@ -5051,7 +5062,8 @@ async function check6() {
     ], [String(s6.tenants.dtw!.id), "manual", "draft", "draft", true, 1, "article", true, s6.engines.author.id, vn.id, "Ý một\nÝ hai"]);
     expect("H POST ⇒ exactly ONE ActivityLog row (article_created, detail via hub + actor + action create)", (await logCount()) - logBefore, 1);
     const row = (await payload.find({ collection: "activityLog", where: { and: [{ targetId: { equals: String(createdId) } }, { eventType: { equals: "article_created" } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined;
-    expect("H article_created row: actorType engine, detail {via, actor, action}", [row?.actorType, row?.detail], ["engine", { via: "hub", actor, action: "create" }]);
+    // jsonb does not keep key order: compare with keys sorted on both sides (same values, same keys)
+    expect("H article_created row: actorType engine, detail {via, actor, action}", [row?.actorType, sortKeys6(row?.detail)], ["engine", sortKeys6({ via: "hub", actor, action: "create" })]);
     const g = await getA(createdId);
     expect("C GET detail round trip: 200, draft, bodyState ok", [g.status, (g.body.article as Doc | undefined)?.workflowStatus, (g.body.article as Doc | undefined)?.bodyState], [200, "draft", "ok"]);
     const list = await call("GET", "/api/hub/articles?tenants=dtw&status=draft&limit=200", undefined, T.author);
@@ -5083,11 +5095,12 @@ async function check6() {
     const pr = await call("POST", "/api/hub/articles", undefined, T.author, `{"tenant":"dtw","__proto__":{"x":1}}`);
     const tn = await post({ ...draft(), tenant: 5 });
     const ty = await post({ ...draft(), flags: { breaking: "false" } });
-    let nest: unknown = "x";
-    for (let i = 0; i < 100000; i++) nest = [nest];
-    const deep = await post({ ...draft(), takeaways: [nest] });
-    const deepFlag = await post({ ...draft(), flags: { breaking: nest } });
-    const deepUnknown = await post({ ...draft(), deep: nest });
+    // 100,000-level nesting is sent as RAW JSON text: JSON.stringify of such a value overflows the probe's own stack.
+    const nest = "[".repeat(100000) + '"x"' + "]".repeat(100000);
+    const withRaw = (extra: string) => JSON.stringify(draft()).slice(0, -1) + "," + extra + "}";
+    const deep = await call("POST", "/api/hub/articles", undefined, T.author, withRaw(`"takeaways":[${nest}]`));
+    const deepFlag = await call("POST", "/api/hub/articles", undefined, T.author, withRaw(`"flags":{"breaking":${nest}}`));
+    const deepUnknown = await call("POST", "/api/hub/articles", undefined, T.author, withRaw(`"deep":${nest}`));
     const many: Doc = draft();
     for (let i = 0; i < 1000; i++) many[`k${i}_${rep("z", 70)}`] = 1;
     const kk = await post(many);
@@ -5269,6 +5282,67 @@ async function check6() {
   }
   obs6("D2 timings", timings);
 
+  // ══ D — adversarial bodies over HTTP, time budget (§9.2 D; each case ≤ 2,000 ms, 2xx / 4xx, never 5xx) ══
+  {
+    const dt: Doc[] = [];
+    const e0 = await errCount();
+    const one = async (name: string, md: string) => {
+      let r: Reply;
+      try {
+        r = await call("POST", "/api/hub/articles", draft({ bodyMarkdown: md }), T.author, undefined, AbortSignal.timeout(8_000));
+      } catch (e) {
+        r = { status: 0, text: String((e as Error).name), body: {}, ms: 8000 };
+      }
+      const got = r.status === 201 ? 201 : (r.body.fields as Doc | undefined)?.bodyMarkdown ?? `${r.status}`;
+      const t: Doc = { name, got, ms: r.ms, status: r.status };
+      if (r.status === 201) {
+        const g = await getA(r.body.id as number);
+        const e = await getA(r.body.id as number, "&view=edit");
+        t.getMs = g.ms;
+        t.editMs = e.ms;
+        t.getStatus = [g.status, e.status];
+      }
+      dt.push(t);
+      return t;
+    };
+    const fine = (t: Doc) => (t.status as number) >= 200 && (t.status as number) < 500 && (t.ms as number) <= 2000 &&
+      (t.status !== 201 || (JSON.stringify(t.getStatus) === "[200,200]" && (t.getMs as number) <= 2000 && (t.editMs as number) <= 2000));
+    // adversarial list: any 2xx / 4xx within budget (201 ⇒ GET + view=edit 200 within budget)
+    const adv = [
+      await one("190k_spaces_x", "](" + rep(" ", 190000) + "x)"), await one("brackets_100k", rep("[", 100000)), await one("stars_100k", rep("*", 100000)),
+      await one("underscores_100k", rep("_", 100000)), await one("quote_nest_5000", rep("> ", 5000) + "x"), await one("dash_nest_5000", rep("- ", 5000) + "x"),
+      await one("one_line_200k", rep("ab", 100000)),
+    ];
+    expect("D adversarial bodies: 2xx / 4xx (never 5xx) ≤ 2,000 ms; any 201 ⇒ GET + view=edit 200 ≤ 2,000 ms", adv.filter((t) => !fine(t)).map((t) => t.name), []);
+    // (a) W class: 257×c+x ⇒ ws_run; 190,000×c+x ⇒ ws_run; bare 190,000×c ⇒ 201 (trimmed) + fast reads; bare 257×c ⇒ 201
+    const Wc = [0xa0, 0x3000, 0xfeff, 0x2028, 0x2029, 0x1680, 0x2000, 0x200a, 0x202f, 0x205f].map((c) => [c.toString(16), (n: number) => rep(String.fromCharCode(c), n)] as const);
+    const alt = (n: number) => { let x = ""; for (let i = 0; i < n; i++) x += i % 2 ? "\u00a0" : " "; return x; };
+    const wa: unknown[] = [];
+    const wbad: string[] = [];
+    for (const [k, g] of [...Wc, ["alt", alt] as const]) {
+      const r = [await one(`a_${k}_257x`, "](" + g(257) + "x)"), await one(`a_${k}_190kx`, "](" + g(190000) + "x)"), await one(`a_${k}_190k_bare`, "](" + g(190000)), await one(`a_${k}_257_bare`, "](" + g(257))];
+      wa.push(r.map((t) => t.got));
+      for (const t of r) if (!fine(t)) wbad.push(t.name as string);
+    }
+    expect("D(a) W class (10 chars + ' '/U+00A0 alternation): 257+x ⇒ ws_run; 190k+x ⇒ ws_run; bare 190k ⇒ 201; bare 257 ⇒ 201", wa, Wc.concat([["alt", alt]]).map(() => ["ws_run", "ws_run", 201, 201]));
+    expect("D(a) every W case within budget (≤ 2,000 ms; 201 ⇒ GET + view=edit 200 ≤ 2,000 ms)", wbad, []);
+    // (b) 256×c + x ⇒ 201 then fast reads
+    const wb = [];
+    for (const [k, g] of [...Wc, ["alt", alt] as const]) wb.push(await one(`b_${k}_256x`, "](" + g(256) + "x)"));
+    expect("D(b) ](+256×c+x) ⇒ 201, GET + view=edit 200 within budget", wb.map((t) => [t.got, fine(t)]), wb.map(() => [201, true]));
+    // (c) NOT W: U+180E / U+200B / U+0085 / U+2060 × 190,000 + x) ⇒ 201, fast reads
+    const wc = [];
+    for (const cp of [0x180e, 0x200b, 0x85, 0x2060]) wc.push(await one(`c_${cp.toString(16)}_190kx`, "](" + rep(String.fromCharCode(cp), 190000) + "x)"));
+    expect("D(c) non-W ×190,000 ⇒ 201, GET + view=edit 200 within budget", wc.map((t) => [t.got, fine(t)]), wc.map(() => [201, true]));
+    // (d) many lines / list lines / deep tab list / CRLF ⇒ too_large (1b)
+    let deepTab = "";
+    for (let lvl = 64; deepTab.length < 199000 && lvl <= 255; lvl++) deepTab += "](\n" + rep("\t", lvl) + "- x\n";
+    const wd = [await one("d_lines_100k", rep("a\n", 100000).slice(0, 199999)), await one("d_list_66k", rep("- a\n", 66000).slice(0, 199999)), await one("d_deep_tab", deepTab), await one("d_crlf", rep("a\r\n", 66000))];
+    expect("D(d) 100k lines / 66k `- a` / deep tab list / CRLF ⇒ 422 too_large within budget", wd.map((t) => [t.got, fine(t)]), wd.map(() => ["too_large", true]));
+    expect("D 0 integration_error rows", (await errCount()) - e0, 0);
+    obs6("D timings", dt.map((t) => ({ n: t.name, got: t.got, ms: t.ms, get: t.getMs, edit: t.editMs })));
+  }
+
   // ══ P — PATCH ════════════════════════════════════════════════════════════
   {
     const mk = async (extra: Doc = {}) => {
@@ -5286,7 +5360,7 @@ async function check6() {
     ], [200, ["title", "flags"], a.version + 1, true, true, "d0", 7, "S"]);
     expect("H PATCH with a change ⇒ ONE human_edit row with field NAMES", (await logCount()) - l0, 1);
     const he = (await payload.find({ collection: "activityLog", where: { and: [{ targetId: { equals: String(a.id) } }, { eventType: { equals: "human_edit" } }] }, sort: "-id", limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined;
-    expect("H human_edit detail {via hub, actor, action update, fields}", he?.detail, { via: "hub", actor, action: "update", fields: ["title", "flags"] });
+    expect("H human_edit detail {via hub, actor, action update, fields}", sortKeys6(he?.detail), sortKeys6({ via: "hub", actor, action: "update", fields: ["title", "flags"] }));
     const l1 = await logCount();
     const same = await patch(a.id, { tenant: "dtw", actor, expectedVersion: a.version + 1, title: "New title" });
     expect("P no change ⇒ 200 changed [], version unchanged, 0 log rows", [same.status, same.body.changed, same.body.version, (await logCount()) - l1], [200, [], a.version + 1, 0]);
@@ -5489,8 +5563,8 @@ async function check6Hooks(payload: P, expect: (label: string, actual: unknown, 
   await payload.update({ collection: "articles", id: hid, draft: true, locale: "en", overrideAccess: true, context: { disableRevalidate: true, hubAuthor: { actor, action: "update", fields: ["title"] }, engineId: engine?.id }, data: { title: `H6 ha2 ${stamp}`, workflowStatus: "draft", _status: "draft" } as never });
   const after = (await payload.count({ collection: "activityLog", where: { targetId: { equals: String(hid) } }, overrideAccess: true })).totalDocs;
   const u = await row(hid, "human_edit");
-  expect("H hubAuthor create ⇒ article_created actorType engine, detail {via hub, actor, action create}", c, { actorType: "engine", actorEngineSet: engine != null, detail: { via: "hub", actor, action: "create" } });
-  expect("H hubAuthor draft update ⇒ exactly ONE new row: human_edit with field names", [after - before, u], [1, { actorType: "engine", actorEngineSet: engine != null, detail: { via: "hub", actor, action: "update", fields: ["title"] } }]);
+  expect("H hubAuthor create ⇒ article_created actorType engine, detail {via hub, actor, action create}", sortKeys6(c), sortKeys6({ actorType: "engine", actorEngineSet: engine != null, detail: { via: "hub", actor, action: "create" } }));
+  expect("H hubAuthor draft update ⇒ exactly ONE new row: human_edit with field names", [after - before, sortKeys6(u)], [1, sortKeys6({ actorType: "engine", actorEngineSet: engine != null, detail: { via: "hub", actor, action: "update", fields: ["title"] } })]);
 }
 
 const run = flag("setup")

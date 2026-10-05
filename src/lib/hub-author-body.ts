@@ -133,10 +133,9 @@ function spaceOrTabAt(s: string, i: number, end: number): boolean {
  * break (CRLF = 2). Units split ONLY on LF; a blank line is `^[\t ]*$`; a non-blank
  * line opens a new unit only at `^>[ \t]`, `^#{1,6}[ \t]`, `^[ \t]*[-*+][ \t]`,
  * `^[ \t]*[0-9]{1,9}\.[ \t]` (`1)` is NOT a fence). Mark runs (maximal runs of ONE
- * of `*` `_` `` ` `` `~`) and `](` add up over a unit. Indent = leading W of EVERY
- * LF line — counted exactly as the frozen oracle `pre6` counts it (a line made only
- * of W counts too; stricter than "lines with a non-W character", and the oracle
- * parity check compares the numbers directly).
+ * of `*` `_` `` ` `` `~`) and `](` add up over a unit. Indent = leading W of each
+ * LF line that has at least one non-W character (D23: a whitespace-only line is NOT
+ * counted) — counted exactly as the oracle `pre6` counts it (parity compares numbers).
  */
 export function countBodyLinear(s: string): BodyLinearCounts {
   const n = s.length;
@@ -160,7 +159,7 @@ export function countBodyLinear(s: string): BodyLinearCounts {
     while (p < end && (s.charCodeAt(p) === 32 || s.charCodeAt(p) === 9)) p++;
     let w = start;
     while (w < end && isWs(s.charCodeAt(w))) w++;
-    if (w - start > maxIndent) maxIndent = w - start;
+    if (w < end && w - start > maxIndent) maxIndent = w - start;
     if (p === end) {
       flush();
     } else {
