@@ -3,6 +3,7 @@ import { tenantManagedAccess } from "@/access/collections";
 import { featureGatedAccess } from "@/access/features";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
 import { revalidateHooks } from "@/hooks/revalidate";
+import { subSectionPillarValidate } from "@/hooks/single-home-pillar";
 
 const { afterChange, afterDelete } = revalidateHooks(["subsections:all", "articles:all"]);
 
@@ -44,7 +45,11 @@ export const SubSections: CollectionConfig = {
       relationTo: "pillars",
       required: true,
       index: true,
-      admin: { description: "Parent pillar this sub-section belongs to." },
+      // Base relationship validation first, then V4: a single-home pillar
+      // (BriefAsia: Pressroom) cannot have sub-sections. SubSections has no
+      // drafts, so this runs on every write.
+      validate: subSectionPillarValidate,
+      admin: { description: "Parent pillar this sub-section belongs to. A single-home pillar (BriefAsia: Pressroom) cannot have sub-sections." },
     },
     {
       name: "order",

@@ -35,14 +35,7 @@ export function CollectionManager({
                   <span className="font-semibold">{it.title}</span>
                   {it.sub ? <span className="ml-2 text-muted">{it.sub}</span> : null}
                 </span>
-                <form action={deleteItemAction}>
-                  <input type="hidden" name="tenantSlug" value={tenantSlug} />
-                  <input type="hidden" name="collection" value={def.slug} />
-                  <input type="hidden" name="id" value={String(it.id)} />
-                  <button type="submit" className="text-xs font-semibold text-bad hover:underline">
-                    Delete
-                  </button>
-                </form>
+                <DeleteForm tenantSlug={tenantSlug} collection={def.slug} id={it.id} />
               </li>
             ))}
           </ul>
@@ -82,5 +75,25 @@ export function CollectionManager({
         </form>
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * Per-row delete form. Its own component so each row owns a `useActionState`
+ * (a hook inside the `items.map` callback would break the rules of hooks) and
+ * can show a refused delete, e.g. a single-home pillar still in use.
+ */
+function DeleteForm({ tenantSlug, collection, id }: { tenantSlug: string; collection: string; id: number | string }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(deleteItemAction, { ok: false });
+  return (
+    <form action={action} className="flex shrink-0 flex-col items-end gap-1">
+      <input type="hidden" name="tenantSlug" value={tenantSlug} />
+      <input type="hidden" name="collection" value={collection} />
+      <input type="hidden" name="id" value={String(id)} />
+      <button type="submit" disabled={pending} className="text-xs font-semibold text-bad hover:underline">
+        {pending ? "Deleting…" : "Delete"}
+      </button>
+      {state.error ? <span className="max-w-xs text-right text-xs text-bad">{state.error}</span> : null}
+    </form>
   );
 }

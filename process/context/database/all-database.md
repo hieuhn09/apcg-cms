@@ -3,14 +3,14 @@ name: context:all-database
 description: "Payload collections, Postgres schema/migrations, the tenant/engine data model, and the two data-access lanes (Payload Local API vs Console's read-only Drizzle) — database context group entrypoint"
 keywords: database, schema, migration, migrations, postgres, drizzle, payload, collection, collections, tenant, tenants, multi-tenant, articles, workflow status, content type, console, dashboard, drizzle-kit
 related: [context:all-integrations]
-date: 24-09-26
+date: 05-10-26
 metadata:
   read_when: "schema/collection changes, migrations, tenant data model, or the console's Drizzle read layer"
 ---
 
 # Database Context
 
-Last updated: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
+Last updated: 2026-10-05 (taxonomy hook + FK facts section for the single-home pillar rule). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
 
 This is the canonical database context entrypoint for **apcg-cms** (Central CMS).
 
@@ -334,6 +334,27 @@ Postgres instance in deployed environments.
    **out of** `src/migrations/` entirely, don't just unregister it in `index.ts`. Also:
    `payload migrate:down` rolls back an entire **batch** at once — running it on a DB where every
    migration applied in one shot will roll back everything, not just the most recent file.
+
+---
+
+## Taxonomy hooks and foreign-key facts (single-home pillar rule, 05-10-26)
+
+- **Hooks on the taxonomy collections** (rule detail: `process/context/integrations/all-integrations.md`
+  §Single-home pillar rule): `Articles.hooks.beforeChange: [singleHomePillar, articleBookkeeping]`
+  (`src/collections/Articles.ts:123`); `Pillars.hooks.beforeChange/beforeDelete` row guards
+  (`src/collections/Pillars.ts:28-29`); `SubSections.pillar` field `validate` (`SubSections.ts:51`).
+  No schema field and no migration: the rule key is the code constant `SINGLE_HOME_PILLARS`
+  (`src/lib/constants.ts:43`).
+- **Every pillar reference is `ON DELETE set null`** (`src/migrations/20260702_231336_initial_schema.ts`):
+  `articles.pillar_id` (`:867`), `articles_secondary_sections.pillar_id` (`:858`),
+  `_articles_v.version_pillar_id` (`:889`) and `_articles_v_version_secondary_sections.pillar_id` (`:879`)
+  — the version tables hold draft-only references too — and `newsletters.vertical_id` (`:902`). The DB
+  therefore will NOT stop a pillar delete; the `beforeDelete` guard (articles incl. secondary rows,
+  sub-sections, newsletters, latest draft versions) is the only protection, and raw SQL / tenant delete
+  bypass it.
+- **Pre-existing bug (not caused by this work):** `translation_jobs.article_id` is NOT NULL but its FK is
+  `ON DELETE set null` (`:928`), so deleting a published article that has a translation job fails at the
+  DB. Test fixtures delete `translation_jobs` first. Backlog.
 
 ---
 

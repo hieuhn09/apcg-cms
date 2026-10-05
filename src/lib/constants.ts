@@ -30,7 +30,39 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // NOTE: GCV's `exclusive` here is a PILLAR slug (the hand-curated Exclusive
 // pillar) — it is NOT and must never be confused with BriefAsia's unrelated
 // `Articles.exclusive` disclosure boolean.
-export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = { gcv: ["exclusive"] };
+//
+// BriefAsia `pressroom` (owner decision 05-10-26): the content engine may not
+// create or refresh Pressroom articles; they come only from editors (admin /
+// Console) and the owner's scripts. WAD's own `pressroom` pillar is a different
+// tenant and stays engine-writable.
+export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = { gcv: ["exclusive"], "brief-asia": ["pressroom"] };
+
+/** Normalised slug used by the engine-blocked gate (trim + lower-case). */
+export function normalizeEngineBlockedSlug(slug: string): string {
+  return slug.trim().toLowerCase();
+}
+
+/**
+ * True when the engine may not write into `pillarSlug` for `tenantSlug`.
+ * Case/whitespace-insensitive on both sides (a safe superset: ` PRESSROOM `
+ * is blocked too, so a case-variant primary cannot slip past on refresh).
+ */
+export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pillarSlug: string): boolean {
+  if (!tenantSlug) return false;
+  const want = normalizeEngineBlockedSlug(pillarSlug);
+  if (!want) return false;
+  return (ENGINE_BLOCKED_PILLARS[tenantSlug] ?? []).some((s) => normalizeEngineBlockedSlug(s) === want);
+}
+
+// ── Single-home pillars ─────────────────────────────────────────────────────
+// A single-home pillar's articles belong to nothing else: no secondary
+// sections, no sub-section, never added as another article's secondary section,
+// no sub-sections of its own, and (BriefAsia) never flagged `exclusive`.
+// Tenant-slug-keyed like ENGINE_BLOCKED_PILLARS (WAD also has a `pressroom`
+// pillar and is NOT affected). Code constant on purpose: no schema field, no
+// migration. Enforced by src/lib/single-home-pillars.ts + its hooks; the slug is
+// protected from rename / tenant move / in-use delete by the Pillars guards.
+export const SINGLE_HOME_PILLARS: Record<string, string[]> = { "brief-asia": ["pressroom"] };
 
 // ── Top-level user role (global identity) ───────────────────────────────────
 // Tenant-scoped roles live on TenantMemberships, not here.

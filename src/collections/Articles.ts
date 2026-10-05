@@ -14,6 +14,11 @@ import {
 } from "@/hooks/article-workflow";
 import { enqueueTranslations } from "@/hooks/translation";
 import {
+  secondaryPillarFilterOptions,
+  secondaryRowPillarValidate,
+  singleHomePillar,
+} from "@/hooks/single-home-pillar";
+import {
   ARTICLE_STATUSES,
   CONTENT_ORIGINS,
   CONTENT_TYPES,
@@ -113,7 +118,9 @@ export const Articles: CollectionConfig = {
     // disjoint — `_status` published vs draft); enforceStatusAuthority must
     // then judge the resulting value.
     beforeValidate: [syncNativePublish, syncNativeUnpublish, enforceStatusAuthority],
-    beforeChange: [articleBookkeeping],
+    // singleHomePillar first: it may reject the write, and it must judge the
+    // client data before bookkeeping mutates it (src/hooks/single-home-pillar.ts).
+    beforeChange: [singleHomePillar, articleBookkeeping],
     afterChange: [revalidate, articleActivity, enqueueTranslations],
     afterDelete: [afterDelete],
   },
@@ -230,7 +237,13 @@ export const Articles: CollectionConfig = {
         {
           label: "Taxonomy",
           fields: [
-            { name: "pillar", type: "relationship", relationTo: "pillars", required: true },
+            {
+              name: "pillar",
+              type: "relationship",
+              relationTo: "pillars",
+              required: true,
+              admin: { description: "Primary pillar. A single-home pillar (BriefAsia: Pressroom) allows no sub-section, no secondary sections and no Exclusive flag." },
+            },
             {
               name: "subSection",
               type: "relationship",
@@ -273,7 +286,7 @@ export const Articles: CollectionConfig = {
               admin: {
                 initCollapsed: true,
                 description:
-                  "Cross-posts. Each row = one EXTRA pillar this story also appears on, optionally filed under one of that pillar's sub-sections. Do NOT re-add the primary Pillar here.",
+                  "Cross-posts. Each row = one EXTRA pillar this story also appears on, optionally filed under one of that pillar's sub-sections. Do NOT re-add the primary Pillar here. A single-home pillar (BriefAsia: Pressroom) can never be added here, and a story filed under one has no secondary sections.",
               },
               fields: [
                 {
@@ -284,6 +297,10 @@ export const Articles: CollectionConfig = {
                       type: "relationship",
                       relationTo: "pillars",
                       required: true,
+                      // UX only: hides single-home pillars from the picker; never throws.
+                      filterOptions: secondaryPillarFilterOptions,
+                      // Hard rule (V3) on non-draft saves; the beforeChange hook covers drafts.
+                      validate: secondaryRowPillarValidate,
                       admin: { width: "50%", description: "Extra pillar (hub) this story appears on." },
                     },
                     {

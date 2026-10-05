@@ -1,16 +1,16 @@
 ---
 name: context:all-integrations
 description: "API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint"
-keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub
+keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub, pillar, single-home, pressroom, 422
 related: [context:all-database]
-date: 25-09-26
+date: 05-10-26
 metadata:
   read_when: "API contract questions, auth/authorization design, engine intake, cross-tenant read design, or anything bridging into this CMS from outside"
 ---
 
 # Integrations Context
 
-Last updated: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+Last updated: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
 hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
 Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
 new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
@@ -455,6 +455,89 @@ closes when the owner opens a few real articles through the hub's article view).
 **FIXED 2026-09-28 (CMS-4b, shared with CMS-3):** an id past `int4` used to return HTTP 500 + one
 `integration_error` log row here too; it now returns the same byte-identical 404 body as a missing
 or wrong-tenant article, no log row. See the WRITE section above for the helper and probe.
+
+---
+
+## Single-home pillar rule (BriefAsia Pressroom, 2026-10-05)
+
+A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:43`, `{ "brief-asia": ["pressroom"] }`,
+keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:38`) owns its articles
+exclusively: a code constant, **no schema field, no migration**. WAD also has a `pressroom` pillar and
+is deliberately NOT affected. The rule (`src/lib/single-home-pillars.ts:7-15`): V1 primary = P means no
+secondary rows (a persisted duplicate of the primary counts), V2 no sub-section, V3 a secondary row = P
+is refused whatever the primary is, V4 P cannot have sub-sections, V5 P's `(tenant, slug)` cannot be
+renamed, moved to another tenant, or deleted in use, V6 primary = P cannot be `exclusive`. Keying is by
+the **referenced pillar doc's own tenant + slug**, never client-supplied `data.tenant` (drafts skip the
+required check; the multi-tenant default comes from a cookie). Messages are a frozen contract
+(`ruleMessage`/`MSG`, `single-home-pillars.ts:44-54`), all starting `pillar rule:`.
+
+**Where it is enforced** (every write path: admin incl. Save Draft, REST, GraphQL, Local API, Console,
+intake, scripts):
+
+- **Articles `beforeChange` hook `singleHomePillar`** (`src/hooks/single-home-pillar.ts:60`, registered
+  first at `src/collections/Articles.ts:123`) is the real boundary — field `validate` is skipped on drafts.
+  It judges the **RESULTING state** with the effective-value rule (`:65`: on `update` an absent key is
+  the stored `originalDoc` value, keyed on `operation`, never `originalDoc` presence). It must NOT rely on
+  Payload's backfill of absent keys, which is disabled under `req.context.isRestoringVersion` (a GraphQL
+  request shares that context across `restoreVersionX` + `updateX` in one request — probed). Unchanged
+  taxonomy and no `exclusive` flip to true returns with no lookups (`:85`), so status-only writers (hub,
+  cron, translation write-backs) are untouched. Lookups fail closed (D-B); only the admin `filterOptions`
+  fails open.
+- **Fail-closed normaliser** `normalizeTaxonomy` (`single-home-pillars.ts:143`) throws on any malformed
+  shape, notably `secondarySections: { $push: ... }` which Payload 3.85.1 forwards to the DB untouched.
+- **Field validators** (non-draft only): `secondarySections[].pillar` (`Articles.ts:303`, hook file `:114`;
+  an unchanged row id-matched to `previousValue` passes so legacy rows don't block status-only writers) and
+  `SubSections.pillar` (`SubSections.ts:51`, hook file `:130`). `filterOptions` (`Articles.ts:301`, hook
+  file `:148`) is UX only.
+- **Pillars row guards** (`src/hooks/single-home-pillar-row-guard.ts:35,66`, wired `Pillars.ts:28-29`):
+  `beforeChange` no-op unless `operation === 'update'`; blocks slug rename (ValidationError, path `slug`)
+  and tenant move (APIError 400), `beforeDelete` refuses while articles (primary or secondary), sub-sections,
+  newsletter `vertical` or latest draft version reference the pillar. Creating the row stays allowed.
+- **Intake** (`src/app/api/engine/intake/route.ts`): two pure gates run **before** the idempotency lookup
+  (so they cover create AND refresh and avoid orphan tag/author/hero writes), in this order: **3b
+  engine-blocked pillar** (`isEngineBlockedPillar`, see below) then **3c single-home pre-check**
+  (`checkIntakeSingleHome`). Both are logged as `integration_error`; the catch maps ONLY `pillar rule:`
+  errors (`isSingleHomeRuleError`, `single-home-pillars.ts:288`) to 422, everything else keeps its 500.
+- **Console** unwraps ValidationError field messages via `humanErrorMessage` (`single-home-pillars.ts:298`;
+  `articles/actions.ts:84,129`, `manage/collection-actions.ts:52,69`); the Pillars delete button now shows
+  a refused delete.
+
+**Engine is blocked from Pressroom (Amendment 1, 2026-10-05; owner instruction: Pressroom takes no
+content-engine articles).** `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive"], "brief-asia": ["pressroom"] }`
+(`src/lib/constants.ts:38`); `normalizeEngineBlockedSlug` (trim + lower-case) and `isEngineBlockedPillar`
+make the match case/whitespace-insensitive. Gate 3b in `intake/route.ts:156` runs after auth + tenant/pillar
+resolution and BEFORE 3c and the idempotency lookup, so engine create AND refresh get 422
+`pillar not writable by engine: pressroom` plus an `integration_error` row. WAD's own `pressroom` and other
+tenants are unaffected. Pressroom articles are created by editors only, so "teach the engine Pressroom" and the
+`autoPublishEngineDrafts`-for-Pressroom concern are moot. Rollback: remove the `brief-asia` entry (engine
+writes re-enabled; the single-home rule still applies). Only `engine/intake` takes a pillar from an engine actor.
+
+**OPEN (owner decision pending): `POST /api/engine/translation` is NOT gated.** It takes no pillar, so it can
+still write translated text onto an EXISTING brief-asia Pressroom article. Decide whether to block it.
+
+**Engine-contract 422 reasons** (mirrored in `docs/08-content-engine-integration.md`):
+`pillar not writable by engine: <slug>` (above; terminal) and
+`pillar rule: "<slug>" is a single-home pillar: ...` (Pressroom may carry no other `sections[]` entry, no
+`subSectionSlug`/`subSectionSlugs[]`/`secondarySubSections`; no article may list `pressroom` in
+`sections[]`, so the pre-check still refuses cross-posts; `secondaryPillarSlugs` is never checked). Both are
+terminal: fix the payload, do not retry. Engine 4xx-terminal behaviour is UNVERIFIED (client code lives in
+the content-engine repo).
+
+The `pressroom` Pillars row is still created by the owner (`npm run audit:add-pressroom`, LAST in the
+rollout; runbook in `docs/11-operations.md`) so editors can use it.
+
+**Accepted residuals** (all outside the application trust boundary or by design): raw SQL / psql /
+Supabase-Neon consoles bypass every hook; deleting a Tenant (systemAdmin) sets `pillars.tenant_id` NULL
+before plugin cleanup, orphaning pillars so V5 never fires; FK `ON DELETE SET NULL` fires on any of
+these; an authenticated hostile engine can flood 422s (`rateLimitPerMin` unenforced); hook-less windows
+(the unchanged-skip persists any violation created while the hook was absent — run the read-only audit of
+articles + versions referencing Pressroom before re-enabling after a rollback); a tunnelled prod DB on
+`localhost` defeats any hostname guard (`scripts/lib/local-db-guard.ts:18`); a brief-asia article can point
+its primary pillar at WAD's `pressroom` (keyed by the referenced doc's `(wad, pressroom)`, so not
+single-home) — needs membership in BOTH tenants; cross-tenant pillar create ignores the access Where, so
+an editor can create a `pressroom` pillar in another tenant early. Known gaps: /admin Save Draft shows only
+Payload's generic "field is invalid: secondarySections" toast (rule text is in the response/field
+description; Console shows it fully).
 
 ---
 

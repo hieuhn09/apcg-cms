@@ -55,6 +55,21 @@ and status.
 - **Engine tried to overwrite human content:** expected and safe — the write is
   refused (409) and logged in Engine Conflict Log + Activity Log. No data lost.
 
+- **Enabling BriefAsia Pressroom (single-home pillar):** the rule ships in code
+  (`SINGLE_HOME_PILLARS`); the pillar row is created by the owner, LAST, after the CMS and
+  BriefAsia web deploys are Ready. Run `npm run audit:add-pressroom` (dry run, review),
+  then `npm run audit:add-pressroom -- --apply --confirm-host=<prod DB host>` from an
+  interactive terminal (the script refuses non-local DBs without both, never overwrites
+  an existing row, and must not be run with a tunnelled prod DB open). Pressroom is
+  editor-only: the content engine is blocked from it (422 `pillar not writable by
+  engine: pressroom`, create and refresh). Rollback note: removing the `brief-asia`
+  entry from `ENGINE_BLOCKED_PILLARS` re-enables engine writes. Never rename or delete the `pressroom` pillar slug once articles exist
+  (the Pillars guards refuse it). Rollback per step: revert the PR(s); delete the row
+  only while zero Pressroom articles/sub-sections exist; to remove content, stop the
+  engine and archive the articles first. Before re-enabling after any rollback, audit
+  articles and versions that reference the Pressroom pillar (the hook cannot see
+  violations created while it was absent).
+
 ## Token rotation
 
 `tsx scripts/mint-token.ts read --tenant <slug>` / `engine --engine "<name>"`.
