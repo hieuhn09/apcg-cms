@@ -64,9 +64,10 @@ export const pillarRowGuardBeforeChange: CollectionBeforeChangeHook = async ({ d
 };
 
 export const pillarRowGuardBeforeDelete: CollectionBeforeDeleteHook = async ({ id, req }) => {
-  const stored = (await req.payload.findByID({ collection: "pillars", id, depth: 0, overrideAccess: true, req } as never)) as
-    | Record<string, unknown>
-    | null;
+  const stored = (await req.payload.findByID({ collection: "pillars", id, depth: 0, overrideAccess: true, req } as never)) as unknown as Record<
+    string,
+    unknown
+  > | null;
   if (!stored) return;
   const slug = stored.slug;
   const tenantKey = idKey(stored.tenant);
