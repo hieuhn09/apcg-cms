@@ -40,11 +40,12 @@ import { getPayload } from "payload";
 import config from "@payload-config";
 import { authenticateEngine } from "@/lib/engine-auth";
 import { scopedCreate, scopedUpdate, scopedFind } from "@/lib/scoped";
-import { toContentTypeValue, ENGINE_BLOCKED_PILLARS } from "@/lib/constants";
+import { toContentTypeValue, isEngineBlockedPillar, normalizeEngineBlockedSlug } from "@/lib/constants";
 import { featureEnabled } from "@/lib/tenant";
 import { markdownToLexical } from "@/lib/markdown";
 import { logActivity } from "@/lib/activity";
 import { json, slugify, isNonEmptyString } from "@/lib/http";
+import { checkIntakeSingleHome, isSingleHomeRuleError, humanErrorMessage } from "@/lib/single-home-pillars";
 
 const WORDS_PER_MINUTE = 220;
 const DEFAULT_READ_MIN = 5;
@@ -159,9 +160,23 @@ export async function POST(request: Request): Promise<Response> {
   //
   // NOTE: `exclusive` here is GCV's hand-curated PILLAR slug, unrelated to
   // BriefAsia's `Articles.exclusive` disclosure boolean.
-  if (ENGINE_BLOCKED_PILLARS[tenant.slug as string]?.includes(pillarSlugStr)) {
-    await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { reason: `pillar not writable by engine: ${pillarSlugStr}` } });
-    return json({ ok: false, status: "unprocessable", reason: `pillar not writable by engine: ${pillarSlugStr}` }, 422);
+  // The compare is case/whitespace-insensitive (` PRESSROOM ` is blocked too);
+  // the reason prints the normalised slug.
+  if (isEngineBlockedPillar(tenant.slug as string | undefined, pillarSlugStr)) {
+    const blockedReason = `pillar not writable by engine: ${normalizeEngineBlockedSlug(pillarSlugStr)}`;
+    await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { reason: blockedReason } });
+    return json({ ok: false, status: "unprocessable", reason: blockedReason }, 422);
+  }
+
+  // 3c. Single-home pillar pre-check (SINGLE_HOME_PILLARS). Pure on the request
+  // slugs, BEFORE the idempotency lookup (so refreshes are covered too) and
+  // before any tag/author/hero work (a hook-only rejection would land after
+  // those writes and leave orphans). No-op for tenants without single-home
+  // pillars. The Articles beforeChange hook remains the real boundary.
+  const singleHomeReason = checkIntakeSingleHome(tenant.slug as string | undefined, body);
+  if (singleHomeReason) {
+    await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { reason: singleHomeReason } });
+    return json({ ok: false, status: "unprocessable", reason: singleHomeReason }, 422);
   }
 
   try {
@@ -256,6 +271,13 @@ export async function POST(request: Request): Promise<Response> {
     // break the engine's article↔CMS link on cutover.
     return json({ ok: true, id, articleId: id, status: landedStatus, engineDraftId }, 201);
   } catch (err) {
+    // A single-home rule rejection from the hook (defence in depth) is a
+    // terminal 422, not a retryable 500. Every other error keeps its behaviour.
+    if (isSingleHomeRuleError(err)) {
+      const reason = humanErrorMessage(err);
+      await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { reason } });
+      return json({ ok: false, status: "unprocessable", reason }, 422);
+    }
     await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { error: (err as Error).message } });
     // Internal/DB error — transient; engine may retry.
     return json({ ok: false, status: "error", reason: (err as Error).message }, 500);

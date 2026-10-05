@@ -12,6 +12,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test:media-redirect": "tsx --test src/lib/media-redirect.test.ts",
+    "test:single-home": "tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts scripts/lib/local-db-guard.test.ts",
     "payload": "payload",
     "payload:generate-types": "payload generate:types",
     "payload:generate-importmap": "payload generate:importmap",
@@ -31,7 +32,9 @@
     "migrate:fix-body-uploads": "tsx scripts/migrate/fix-body-upload-refs.ts",
     "audit:gcv-export": "tsx scripts/audit/gcv-audit-export.ts",
     "audit:apply-luxury": "tsx scripts/audit/apply-luxury-decisions.ts",
-    "audit:migrate-lifestyle": "tsx scripts/audit/migrate-lifestyle-subsections.ts"
+    "audit:migrate-lifestyle": "tsx scripts/audit/migrate-lifestyle-subsections.ts",
+    "audit:add-pressroom": "tsx scripts/audit/add-pressroom-pillar.ts",
+    "probe:single-home": "tsx scripts/single-home-probe.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.700.0",

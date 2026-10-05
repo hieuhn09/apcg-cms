@@ -64,6 +64,8 @@ Content-Type: application/json
 | 401 | `{ ok:false, status:"unauthorized" }` | bad/suspended token |
 | 403 | `{ ok:false, status:"forbidden", reason }` | tenant/action not allowed |
 | 422 | `{ ok:false, status:"unprocessable", reason }` | feature disabled / unknown pillar |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom` — Pressroom articles come only from editors; WAD's own `pressroom` is not blocked); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom` and GCV `pressroom`; WAD's `pressroom` is not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
 | 5xx | `{ ok:false, status:"error" }` | transient — safe to retry |
 
 ### `contentType` — what the document is

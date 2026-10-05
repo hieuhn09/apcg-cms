@@ -1,6 +1,12 @@
 # apcg-cms — All Context
 
-Last updated: 2026-09-29 (R2_PUBLIC_BASE_URL redirect shim + one R2 switch `resolveR2PublicBase`; `npm run test:media-redirect`, the one scoped `node:test` script; see **Environment and Configuration** → Media straight from R2)
+Last updated: 2026-10-05 (GCV Pressroom parity: `gcv` joins `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` (`gcv: ["exclusive","pressroom"]`); GCV row already exists in prod, no `audit:add-pressroom`; the `docs/11-operations.md` violator SQL is optional/moot because GCV has no Pressroom articles; PRs apcg-cms#29 + gcv-web#10 MERGED; WAD stays the negative control; test:single-home 181, probe 66/66, 76/76 `--http`)
+
+Previously: 2026-10-05 (Pressroom rollout MERGED, PRs #26 and #27; production `pressroom` row created by hand in /admin; Pressroom optional author: `Articles.author` `required: false` + `articleAuthorValidate`, required except for single-home pillars; see `integrations/all-integrations.md` §Single-home pillar rule)
+
+Previously: 2026-10-05 (Amendment 1: content engine blocked from brief-asia `pressroom` via `ENGINE_BLOCKED_PILLARS`; earlier: BriefAsia Pressroom single-home pillar rule — `SINGLE_HOME_PILLARS` in `src/lib/constants.ts`, enforced by Articles/Pillars/SubSections hooks + an intake 422 pre-check; owner-run `npm run audit:add-pressroom`; shared `scripts/lib/local-db-guard.ts`; scoped tests `test:single-home` + `probe:single-home`; see **Key Patterns** and `integrations/all-integrations.md` §Single-home pillar rule)
+
+Previously: 2026-09-29 (R2_PUBLIC_BASE_URL redirect shim + one R2 switch `resolveR2PublicBase`; `npm run test:media-redirect`, the one scoped `node:test` script; see **Environment and Configuration** → Media straight from R2)
 
 Previously: 2026-09-28 (APCGHub P4 / CMS-4b — both hub article routes now bound the id to Postgres `int4` through one shared pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`): an out-of-range id gets the ordinary 404 `not_found` body instead of HTTP 500 + an `integration_error` row (gap `hub-id-over-int4-returns-500` fixed); new probe `scripts/hub-probe.ts --check5`; see `integrations/all-integrations.md` §Cross-tenant reads → WRITE)
 
@@ -118,7 +124,7 @@ can jump straight to source.
 | `database/` | `process/context/database/all-database.md` | Payload collections, Postgres schema/migrations, the tenant/engine data model, and the two data-access lanes (Payload Local API vs Console's read-only Drizzle) — database context group entrypoint |
 | `integrations/` | `process/context/integrations/all-integrations.md` | API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint |
 | `planning/` | `process/context/planning/all-planning.md` | Plan-shape calibration for apcg-cms — SIMPLE vs COMPLEX, where plans actually live (no process/features folder here), and this repo's own recent plans as real-world shape examples |
-| `tests/` | `process/context/tests/all-tests.md` | Verification quick-start for apcg-cms — there is no general test framework and no CI here (one scoped `node:test` script, `npm run test:media-redirect`, covers `src/lib/media-redirect.ts` only); the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified. |
+| `tests/` | `process/context/tests/all-tests.md` | Verification quick-start for apcg-cms — there is no general test framework and no CI here (two scoped node:test scripts, test:media-redirect and test:single-home, plus the local-only probe:single-home DB probe); the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified. |
 <!-- /GENERATED:routing -->
 
 ## Task Routing Table
@@ -291,6 +297,19 @@ found-and-fixed production leak — see `process/general-plans/active/cms-cost-r
 Any new relationship to a secret-bearing collection needs the same treatment; nothing enforces it
 automatically. Full detail: `process/context/integrations/all-integrations.md` §Security patterns.
 
+**Single-home pillar rule (2026-10-05).** `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, tenant slug
+-> pillar slugs; today `brief-asia` -> `pressroom` and `gcv` -> `pressroom`; WAD's `pressroom` is the negative control) makes a pillar's articles belong to nothing else: no
+secondary sections, no sub-section, never another article's secondary section, no sub-sections of its
+own, not `exclusive`, and its slug/tenant can't be renamed/moved/deleted in use. Code constant only (no
+migration); enforced in the Articles `beforeChange` hook on the *resulting* state (never trusting
+Payload's backfill), SubSections/secondary-row validators, Pillars row guards, an intake 422 pre-check,
+and Console error unwrapping. The `pressroom` Pillars row is created LAST by the owner
+(`npm run audit:add-pressroom`, dry-run first, `--apply --confirm-host=<prod DB host>` from a TTY) via the
+shared local-DB guard `scripts/lib/local-db-guard.ts`. The content engine is BLOCKED from Pressroom
+(`ENGINE_BLOCKED_PILLARS["brief-asia"] = ["pressroom"]`, `gcv` = `["exclusive", "pressroom"]`, intake gate 3b, 422 `pillar not writable by engine`,
+create AND refresh; editors create Pressroom articles). Full detail, residuals and the engine 422 reasons:
+`process/context/integrations/all-integrations.md` §Single-home pillar rule.
+
 **Content-engine intake is a cross-repo wire contract, not a Payload-native feature.** The JSON
 shape at `POST /api/engine/intake` mirrors what the separate `content-engine` repo's clients
 already send (named in the route's own docstring). Same for `/api/public/*` toward the five
@@ -362,7 +381,7 @@ independent verification, not from guessing.
   route fails closed with 503, never silently opens)
 - **Misc:** `PORT` (dev server port, `3508` in `.env.example`)
 
-**npm scripts (real, from `package.json` — no `npm test`; the one test script is `test:media-redirect`):**
+**npm scripts (real, from `package.json` — no `npm test`; the scoped test scripts are `test:media-redirect` and `test:single-home`):**
 
 | Script | What it does |
 |---|---|
@@ -376,7 +395,10 @@ independent verification, not from guessing.
 | `npm run payload` | Payload CLI passthrough |
 | `npm run payload:generate-types` / `payload:generate-importmap` | Payload codegen |
 | `npm run payload:migrate` / `payload:migrate:create` | apply / scaffold a migration |
-| `npm run db:seed` | `tsx scripts/seed.ts` — system admin + sample tenants + taxonomy + sample engine |
+| `npm run db:seed` | `tsx scripts/seed.ts` — system admin + sample tenants + taxonomy + sample engine. `SEED_INCLUDE_PRESSROOM=true` (default OFF) adds a brief-asia `pressroom` pillar fixture and hard-refuses any non-local `DATABASE_URL` (seed re-upserts fixtures and has run against prod; the prod row is created by `audit:add-pressroom`, never by a re-seed) |
+| `npm run audit:add-pressroom` | `tsx scripts/audit/add-pressroom-pillar.ts` — OWNER-RUN; NOT used for production (the row was created by hand in /admin), kept for fresh environments; dry run by default, `--apply` creates the brief-asia `pressroom` pillar; non-local DB needs `--confirm-host=<exact host>` AND a TTY (`scripts/lib/local-db-guard.ts`); idempotent, never overwrites |
+| `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table), 181 tests; no DB, no network |
+| `npm run probe:single-home` | `tsx scripts/single-home-probe.ts` (`-- --http` adds REST/GraphQL checks) — LOCAL DISPOSABLE Postgres only, creates and deletes rows; see `tests/all-tests.md` |
 | `npm run db:status` | `tsx scripts/db-status.ts` |
 | `npm run r2:cors` | `tsx scripts/set-r2-cors.ts` — required once for R2 client-side uploads to work |
 | `npm run migrate:export` / `migrate:import` / `migrate:gcv-legacy` / `migrate:users` / `migrate:media` / `migrate:reader-backfill` / `migrate:author-slugs` / `migrate:sync-views` / `migrate:fix-body-uploads` | one-off cross-repo cutover/import scripts (`scripts/migrate/*.ts`) — see `docs/12-migration.md` |
@@ -390,9 +412,10 @@ independent verification, not from guessing.
   general automated quality commands in this repo.
 - **There is still no general test framework** — no `npm test`, and no
   vitest/jest/playwright/mocha dependency anywhere in `package.json`. Do not assume one exists or
-  invent a `npm test` command. The one exception is a single `node:test` script,
-  `npm run test:media-redirect` (`tsx --test`, no new dependency), covering
-  `src/lib/media-redirect.ts` only.
+  invent a `npm test` command. The only exceptions are two scoped `node:test` scripts
+  (`tsx --test`, no new dependency): `npm run test:media-redirect` (`src/lib/media-redirect.ts` only) and
+  `npm run test:single-home` (the single-home pillar rule, its hooks and the local-DB guard); plus the
+  local-only `npm run probe:single-home` DB probe (see `tests/all-tests.md`).
 - **There is no CI configuration** — `.github/` does not exist in this repo at all (confirmed
   directly, not just an empty `workflows/`). Nothing runs lint/typecheck automatically on push or PR
   today.
@@ -451,6 +474,32 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
 
 ## Open Questions / Outstanding Work
 
+- **Pressroom rollout is DONE (2026-10-05): CMS PRs hieuhn09/apcg-cms#26 (single-home rule + engine block)
+  and #27 (optional author) are MERGED; FE PRs hieuhn09/brief-asia-web#32-#35 are the companion work
+  (Pressroom shows "Distributed by BriefAsia" instead of an author).** The production `pressroom` Pillars row
+  was created by hand in /admin by the owner (not via `audit:add-pressroom`). The engine is blocked from
+  Pressroom (Amendment 1), so nothing is taught to it. Open items: `POST /api/engine/translation` is not
+  gated and can still write translated text onto an existing Pressroom article (owner decision: KEEP as is);
+  engine 4xx-terminal handling of the 422 reasons is unverified (client is in content-engine); /admin Save
+  Draft shows only a generic "field is invalid" toast for a rule violation (Console shows the full text);
+  pre-existing `translation_jobs.article_id` is NOT NULL with `ON DELETE SET NULL`, so deleting a published
+  article fails (see `database/all-database.md`); `login.json` is tracked in this repo with a
+  credential-shaped `token` (expired per `exp`) — owner should `git rm` it and consider rotating the
+  credential (do not open or quote the file); the admin required asterisk on the Author field is lost for
+  ALL articles since #27 (field description says "Required, except for Pressroom articles."); Console
+  author UI and `scripts/hub-probe.ts` were not run for #27 (static null-safety check only). Residuals:
+  `integrations/all-integrations.md` §Single-home pillar rule. Plan archive:
+  `process/general-plans/completed/pressroom-optional-author_05-10-26/`.
+- **GCV Pressroom parity is SHIPPED (2026-10-05): apcg-cms#29 (constants `gcv` in `SINGLE_HOME_PILLARS` and
+  `ENGINE_BLOCKED_PILLARS`, no migration) and hieuhn09/gcv-web#10 (display) are MERGED.** The GCV `pressroom`
+  row already existed in production; GCV has no Pressroom articles yet, so the rule applies cleanly from the
+  first one and the `docs/11-operations.md` violator SQL is optional. Open items (backlog
+  `process/general-plans/backlog/gcv-pressroom-followups_NOTE_05-10-26.md`): `POST /api/engine/translation`
+  still ungated (owner decision: keep); engine 4xx handling of the new gcv 422 unverified; /admin Save Draft
+  shows a generic toast; gcv-web has only a scoped `test:single-home`; the press media-enquiries contact was
+  removed with the static `/press` page; gcv-web footer link 404s until the pillar row is visible; owner
+  action: `git rm` the tracked `login.json` (credential-shaped token; never open it). Plan archive:
+  `process/general-plans/completed/gcv-pressroom_05-10-26/`.
 - **This repo's own `CLAUDE.md` Bootstrap Guard is factually wrong about the size of the gap it
   describes.** It says a missing `process/context/all-context.md` means "the context router,
   protocol docs, and the validator suite are absent." At the start of this pass, only the context
@@ -482,7 +531,7 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
   `planning/` groups (both populated with real, verified content, not stubs); the only remaining
   failure after that is the pre-existing `.agents/skills` symlink issue above.
 - **No general test framework and no CI** — see **Linting, Type-checking, and Testing** above
-  (the only automated tests: `npm run test:media-redirect`, `src/lib/media-redirect.ts` only).
+  (the only automated tests: `npm run test:media-redirect` and `npm run test:single-home`, both scoped, plus the local-DB `probe:single-home`).
   Any plan/validate-contract for this repo needs to design test gates around typecheck+lint+manual/
   live verification, not a `test` command that does not exist.
 - **`R2_PUBLIC_BASE_URL` documentation gap — RESOLVED 29-09-26:** now in `.env.example` and in

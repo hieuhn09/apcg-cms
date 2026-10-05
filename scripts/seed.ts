@@ -25,6 +25,16 @@ import { getPayload } from "payload";
 import config from "../payload.config";
 import { hashToken } from "../src/lib/crypto";
 import { LOCALE_CODES, type LocaleCode } from "../src/lib/locales";
+import { assertLocalDb, LocalDbGuardError } from "./lib/local-db-guard";
+
+/**
+ * Opt-in BriefAsia `pressroom` (single-home) pillar fixture for local/probe
+ * parity. OFF by default: this seed re-upserts fixtures on every run and has
+ * been run against production (docs/12-migration.md), where the pressroom row
+ * must be created LAST by the owner (`npm run audit:add-pressroom`), never by a
+ * re-seed. When ON, main() refuses any non-local DATABASE_URL before any write.
+ */
+const SEED_INCLUDE_PRESSROOM = process.env.SEED_INCLUDE_PRESSROOM === "true";
 
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL || "admin@example.com";
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD || "change-me-now";
@@ -133,6 +143,9 @@ const TENANTS: TenantFixture[] = [
       { slug: "lifestyle", title: "Lifestyle", titleVi: "Phong cách sống", titleId: "Gaya Hidup", heading: "Lifestyle", color: "var(--lifestyle)", icon: "star", order: 6, description: "Luxury, fashion, consumer, culture, health, wellness, and Asia's changing consumer class." },
       { slug: "sustainability", title: "Sustainability", titleVi: "Bền vững", titleId: "Keberlanjutan", heading: "Sustainability", color: "var(--sustainability)", icon: "trend-up", order: 7, description: "Green finance, energy transition, climate policy, mobility, nature, and circular economy." },
       { slug: "perspectives", title: "Perspectives", titleVi: "Góc nhìn", titleId: "Perspektif", heading: "Perspectives", color: "var(--perspectives)", icon: "feather", order: 8, description: "Opinion, founder stories, analysis, interviews, and essays explaining the forces shaping Asia." },
+      ...(SEED_INCLUDE_PRESSROOM
+        ? [{ slug: "pressroom", title: "Pressroom", heading: "Pressroom", color: "var(--accent)", icon: "newspaper", order: 9, description: "Press releases and official announcements." }]
+        : []),
     ],
     sectors: [
       { slug: "markets", title: "Markets", titleVi: "Thị trường", order: 1 },
@@ -374,6 +387,17 @@ async function localeUpdate(payload: P, collection: Coll, id: number | string, l
 }
 
 async function main() {
+  // FIRST statement, before getPayload: the config is imported statically above,
+  // so this is the earliest point a refusal can stop every fixture write.
+  if (SEED_INCLUDE_PRESSROOM) {
+    try {
+      console.log(`[seed] SEED_INCLUDE_PRESSROOM=true — local database ${assertLocalDb(process.env.DATABASE_URL).banner}`);
+    } catch (err) {
+      console.error(err instanceof LocalDbGuardError ? err.message : "local-db guard: refusing.");
+      console.error("[seed] SEED_INCLUDE_PRESSROOM=true is for a LOCAL database only; nothing was written.");
+      process.exit(1);
+    }
+  }
   const payload = await getPayload({ config });
 
   // ── System admin ──

@@ -5,6 +5,7 @@ import { getSiteConfig, type SiteConfig } from "@/console/data/tenants";
 import { createDoc, deleteDoc } from "@/console/data/payload";
 import { getCollectionDef } from "@/console/data/collection-config";
 import { slugify } from "@/lib/http";
+import { humanErrorMessage } from "@/lib/single-home-pillars";
 import type { CollectionSlug } from "payload";
 
 export interface FormState {
@@ -47,19 +48,26 @@ export async function createItemAction(_prev: FormState, formData: FormData): Pr
     }
     await createDoc(collection as CollectionSlug, data, user, { locale: def.localized ? site.defaultLanguage : undefined });
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    // Unwrap ValidationError field messages (e.g. the single-home pillar rule).
+    return { ok: false, error: humanErrorMessage(err) };
   }
   revalidatePath(`/console/sites/${tenantSlug}`, "layout");
   return { ok: true };
 }
 
-export async function deleteItemAction(formData: FormData): Promise<void> {
+export async function deleteItemAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const tenantSlug = s(formData, "tenantSlug");
   const collection = s(formData, "collection");
   const id = s(formData, "id");
   const def = getCollectionDef(collection);
-  if (!def) return;
-  const { user } = await ctx(tenantSlug);
-  await deleteDoc(collection as CollectionSlug, id, user);
+  if (!def) return { ok: false, error: "Unknown collection." };
+  try {
+    const { user } = await ctx(tenantSlug);
+    await deleteDoc(collection as CollectionSlug, id, user);
+  } catch (err) {
+    // e.g. the Pillars guard refusing to delete a single-home pillar in use.
+    return { ok: false, error: humanErrorMessage(err) };
+  }
   revalidatePath(`/console/sites/${tenantSlug}`, "layout");
+  return { ok: true };
 }

@@ -2,6 +2,7 @@ import type { CollectionConfig } from "payload";
 import { tenantManagedAccess } from "@/access/collections";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
 import { revalidateHooks } from "@/hooks/revalidate";
+import { pillarRowGuardBeforeChange, pillarRowGuardBeforeDelete } from "@/hooks/single-home-pillar-row-guard";
 
 const { afterChange, afterDelete } = revalidateHooks(["pillars:all", "articles:all"]);
 
@@ -21,7 +22,14 @@ export const Pillars: CollectionConfig = {
     group: "Editorial",
   },
   access: tenantManagedAccess,
-  hooks: { afterChange: [afterChange], afterDelete: [afterDelete] },
+  // Row guards protect the single-home rule key (SINGLE_HOME_PILLARS): no slug
+  // rename, tenant move or in-use delete of a single-home pillar.
+  hooks: {
+    beforeChange: [pillarRowGuardBeforeChange],
+    beforeDelete: [pillarRowGuardBeforeDelete],
+    afterChange: [afterChange],
+    afterDelete: [afterDelete],
+  },
   fields: [
     {
       name: "slug",
