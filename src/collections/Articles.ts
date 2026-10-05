@@ -14,6 +14,7 @@ import {
 } from "@/hooks/article-workflow";
 import { enqueueTranslations } from "@/hooks/translation";
 import {
+  articleAuthorValidate,
   secondaryPillarFilterOptions,
   secondaryRowPillarValidate,
   singleHomePillar,
@@ -343,7 +344,14 @@ export const Articles: CollectionConfig = {
             { name: "countries", type: "relationship", relationTo: "countries", hasMany: true },
             { name: "tags", type: "relationship", relationTo: "tags", hasMany: true },
             { name: "sectors", type: "relationship", relationTo: "sectors", hasMany: true },
-            { name: "author", type: "relationship", relationTo: "authors", required: true },
+            {
+              name: "author",
+              type: "relationship",
+              relationTo: "authors",
+              required: false,
+              validate: articleAuthorValidate,
+              admin: { description: "Required, except for Pressroom articles." },
+            },
             { name: "coAuthors", type: "relationship", relationTo: "authors", hasMany: true },
             {
               name: "cities",

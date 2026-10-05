@@ -14,6 +14,7 @@ import {
   singleHomePillar,
   makeSecondaryRowPillarValidate,
   makeSubSectionPillarValidate,
+  makeArticleAuthorValidate,
   secondaryPillarFilterOptions,
 } from "./single-home-pillar";
 import { pillarRowGuardBeforeChange, pillarRowGuardBeforeDelete } from "./single-home-pillar-row-guard";
@@ -312,6 +313,40 @@ describe("SubSections pillar validate (V4)", () => {
   });
   it("lookup errors propagate (fail closed)", async () => {
     await assert.rejects(validate(10, { req: makeReq({ failFind: true }) }), /db down/);
+  });
+});
+
+describe("Articles author validate (optional only for single-home)", () => {
+  type V = (value: unknown, options: Record<string, unknown>) => Promise<string | true>;
+  const REQ = "This field is required.";
+  const base = async (v: unknown, o: { required?: boolean }) => (o.required && (v === null || v === undefined) ? REQ : true);
+  const validate = makeArticleAuthorValidate(base as never) as unknown as V;
+  const opts = (pillar: unknown, req = makeReq(), where: "sibling" | "data" | "original" = "sibling") => ({
+    req,
+    siblingData: where === "sibling" ? { pillar } : {},
+    data: where === "data" ? { pillar } : {},
+    originalDoc: where === "original" ? { pillar } : undefined,
+  });
+
+  it("a Pressroom article may have no author", async () => {
+    assert.equal(await validate(null, opts(10)), true);
+    assert.equal(await validate(undefined, opts(10, makeReq(), "original")), true);
+  });
+  it("an ordinary article without an author fails with the stock message", async () => {
+    assert.equal(await validate(null, opts(11)), REQ);
+    assert.equal(await validate(5, opts(11)), true);
+  });
+  it("moving a Pressroom article to an ordinary pillar requires an author", async () => {
+    assert.equal(await validate(null, { req: makeReq(), siblingData: { pillar: 11 }, data: { pillar: 11 }, originalDoc: { pillar: 10 } }), REQ);
+  });
+  it("fails closed: no pillar, unknown pillar, or lookup error requires an author", async () => {
+    assert.equal(await validate(null, opts(null)), REQ);
+    assert.equal(await validate(null, opts(999)), REQ);
+    assert.equal(await validate(null, opts(10, makeReq({ failFind: true }))), REQ);
+  });
+  it("a wad/gcv pillar named pressroom still requires an author (tenant-scoped)", async () => {
+    assert.equal(await validate(null, opts(12)), REQ);
+    assert.equal(await validate(null, opts(13, makeReq(), "data")), REQ);
   });
 });
 

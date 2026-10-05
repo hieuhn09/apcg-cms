@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-10-05 (Amendment 1: content engine blocked from brief-asia `pressroom` via `ENGINE_BLOCKED_PILLARS`; earlier: BriefAsia Pressroom single-home pillar rule — `SINGLE_HOME_PILLARS` in `src/lib/constants.ts`, enforced by Articles/Pillars/SubSections hooks + an intake 422 pre-check; owner-run `npm run audit:add-pressroom`; shared `scripts/lib/local-db-guard.ts`; scoped tests `test:single-home` + `probe:single-home`; see **Key Patterns** and `integrations/all-integrations.md` §Single-home pillar rule)
+Last updated: 2026-10-05 (Pressroom optional author: `Articles.author` `required: false` + `articleAuthorValidate`, required except for single-home pillars; see `integrations/all-integrations.md` §Single-home pillar rule)
+
+Previously: 2026-10-05 (Amendment 1: content engine blocked from brief-asia `pressroom` via `ENGINE_BLOCKED_PILLARS`; earlier: BriefAsia Pressroom single-home pillar rule — `SINGLE_HOME_PILLARS` in `src/lib/constants.ts`, enforced by Articles/Pillars/SubSections hooks + an intake 422 pre-check; owner-run `npm run audit:add-pressroom`; shared `scripts/lib/local-db-guard.ts`; scoped tests `test:single-home` + `probe:single-home`; see **Key Patterns** and `integrations/all-integrations.md` §Single-home pillar rule)
 
 Previously: 2026-09-29 (R2_PUBLIC_BASE_URL redirect shim + one R2 switch `resolveR2PublicBase`; `npm run test:media-redirect`, the one scoped `node:test` script; see **Environment and Configuration** → Media straight from R2)
 
@@ -393,7 +395,7 @@ independent verification, not from guessing.
 | `npm run payload:migrate` / `payload:migrate:create` | apply / scaffold a migration |
 | `npm run db:seed` | `tsx scripts/seed.ts` — system admin + sample tenants + taxonomy + sample engine. `SEED_INCLUDE_PRESSROOM=true` (default OFF) adds a brief-asia `pressroom` pillar fixture and hard-refuses any non-local `DATABASE_URL` (seed re-upserts fixtures and has run against prod; the prod row is created by `audit:add-pressroom`, never by a re-seed) |
 | `npm run audit:add-pressroom` | `tsx scripts/audit/add-pressroom-pillar.ts` — OWNER-RUN, LAST in the Pressroom rollout; dry run by default, `--apply` creates the brief-asia `pressroom` pillar; non-local DB needs `--confirm-host=<exact host>` AND a TTY (`scripts/lib/local-db-guard.ts`); idempotent, never overwrites |
-| `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table), 166 tests; no DB, no network |
+| `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table), 171 tests; no DB, no network |
 | `npm run probe:single-home` | `tsx scripts/single-home-probe.ts` (`-- --http` adds REST/GraphQL checks) — LOCAL DISPOSABLE Postgres only, creates and deletes rows; see `tests/all-tests.md` |
 | `npm run db:status` | `tsx scripts/db-status.ts` |
 | `npm run r2:cors` | `tsx scripts/set-r2-cors.ts` — required once for R2 client-side uploads to work |
