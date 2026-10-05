@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-10-05 (Pressroom rollout MERGED, PRs #26 and #27; production `pressroom` row created by hand in /admin; Pressroom optional author: `Articles.author` `required: false` + `articleAuthorValidate`, required except for single-home pillars; see `integrations/all-integrations.md` §Single-home pillar rule)
+Last updated: 2026-10-05 (GCV Pressroom parity: `gcv` joins `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` (`gcv: ["exclusive","pressroom"]`); GCV row already exists in prod, no `audit:add-pressroom`; owner runs the read-only violator SQL in `docs/11-operations.md` before deploy; WAD stays the negative control; test:single-home 181, probe 66/66, 76/76 `--http`)
+
+Previously: 2026-10-05 (Pressroom rollout MERGED, PRs #26 and #27; production `pressroom` row created by hand in /admin; Pressroom optional author: `Articles.author` `required: false` + `articleAuthorValidate`, required except for single-home pillars; see `integrations/all-integrations.md` §Single-home pillar rule)
 
 Previously: 2026-10-05 (Amendment 1: content engine blocked from brief-asia `pressroom` via `ENGINE_BLOCKED_PILLARS`; earlier: BriefAsia Pressroom single-home pillar rule — `SINGLE_HOME_PILLARS` in `src/lib/constants.ts`, enforced by Articles/Pillars/SubSections hooks + an intake 422 pre-check; owner-run `npm run audit:add-pressroom`; shared `scripts/lib/local-db-guard.ts`; scoped tests `test:single-home` + `probe:single-home`; see **Key Patterns** and `integrations/all-integrations.md` §Single-home pillar rule)
 
@@ -295,8 +297,8 @@ found-and-fixed production leak — see `process/general-plans/active/cms-cost-r
 Any new relationship to a secret-bearing collection needs the same treatment; nothing enforces it
 automatically. Full detail: `process/context/integrations/all-integrations.md` §Security patterns.
 
-**Single-home pillar rule (2026-10-05).** `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:43`, tenant slug
--> pillar slugs; today `brief-asia` -> `pressroom`) makes a pillar's articles belong to nothing else: no
+**Single-home pillar rule (2026-10-05).** `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, tenant slug
+-> pillar slugs; today `brief-asia` -> `pressroom` and `gcv` -> `pressroom`; WAD's `pressroom` is the negative control) makes a pillar's articles belong to nothing else: no
 secondary sections, no sub-section, never another article's secondary section, no sub-sections of its
 own, not `exclusive`, and its slug/tenant can't be renamed/moved/deleted in use. Code constant only (no
 migration); enforced in the Articles `beforeChange` hook on the *resulting* state (never trusting
@@ -304,7 +306,7 @@ Payload's backfill), SubSections/secondary-row validators, Pillars row guards, a
 and Console error unwrapping. The `pressroom` Pillars row is created LAST by the owner
 (`npm run audit:add-pressroom`, dry-run first, `--apply --confirm-host=<prod DB host>` from a TTY) via the
 shared local-DB guard `scripts/lib/local-db-guard.ts`. The content engine is BLOCKED from Pressroom
-(`ENGINE_BLOCKED_PILLARS["brief-asia"] = ["pressroom"]`, intake gate 3b, 422 `pillar not writable by engine`,
+(`ENGINE_BLOCKED_PILLARS["brief-asia"] = ["pressroom"]`, `gcv` = `["exclusive", "pressroom"]`, intake gate 3b, 422 `pillar not writable by engine`,
 create AND refresh; editors create Pressroom articles). Full detail, residuals and the engine 422 reasons:
 `process/context/integrations/all-integrations.md` §Single-home pillar rule.
 
@@ -395,7 +397,7 @@ independent verification, not from guessing.
 | `npm run payload:migrate` / `payload:migrate:create` | apply / scaffold a migration |
 | `npm run db:seed` | `tsx scripts/seed.ts` — system admin + sample tenants + taxonomy + sample engine. `SEED_INCLUDE_PRESSROOM=true` (default OFF) adds a brief-asia `pressroom` pillar fixture and hard-refuses any non-local `DATABASE_URL` (seed re-upserts fixtures and has run against prod; the prod row is created by `audit:add-pressroom`, never by a re-seed) |
 | `npm run audit:add-pressroom` | `tsx scripts/audit/add-pressroom-pillar.ts` — OWNER-RUN; NOT used for production (the row was created by hand in /admin), kept for fresh environments; dry run by default, `--apply` creates the brief-asia `pressroom` pillar; non-local DB needs `--confirm-host=<exact host>` AND a TTY (`scripts/lib/local-db-guard.ts`); idempotent, never overwrites |
-| `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table), 171 tests; no DB, no network |
+| `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table), 181 tests; no DB, no network |
 | `npm run probe:single-home` | `tsx scripts/single-home-probe.ts` (`-- --http` adds REST/GraphQL checks) — LOCAL DISPOSABLE Postgres only, creates and deletes rows; see `tests/all-tests.md` |
 | `npm run db:status` | `tsx scripts/db-status.ts` |
 | `npm run r2:cors` | `tsx scripts/set-r2-cors.ts` — required once for R2 client-side uploads to work |

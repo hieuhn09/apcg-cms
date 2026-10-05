@@ -70,6 +70,35 @@ and status.
   articles and versions that reference the Pressroom pillar (the hook cannot see
   violations created while it was absent).
 
+- **Enabling GCV Pressroom (single-home pillar, GCV Pressroom parity):** the GCV
+  `pressroom` pillar row already exists in production, so there is NO
+  `audit:add-pressroom` step. The rule ships in code (`gcv` entries in
+  `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS`): GCV Pressroom articles may carry
+  no secondary sections, no sub-section, no `exclusive` flag; no article may add GCV
+  Pressroom as a secondary section; the pillar can have no sub-sections; author is
+  optional; the content engine gets 422 `pillar not writable by engine: pressroom` on
+  create and refresh. WAD's `pressroom` is unaffected. Steps: (1) BEFORE deploying the
+  CMS, the owner runs the READ-ONLY violator query below (never by agents against prod)
+  and fixes or accepts the hits — existing violators are grandfathered until their
+  taxonomy is next saved, when the hook rejects the save; version-table (`v_*`) hits are
+  history only; (2) deploy the CMS and gcv-web (any order). Rollback: remove the two
+  `gcv` `pressroom` entries from the constants and redeploy (re-run the query before
+  re-enabling).
+
+  ```sql
+  WITH t AS (SELECT id FROM tenants WHERE slug='gcv'),
+  p AS (SELECT id FROM pillars WHERE slug='pressroom' AND tenant_id=(SELECT id FROM t))
+  SELECT 'secondary_on_pressroom_article' k, count(*) FROM articles_secondary_sections s JOIN articles a ON a.id=s._parent_id WHERE a.pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'subsection_on_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND sub_section_id IS NOT NULL
+  UNION ALL SELECT 'exclusive_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND exclusive
+  UNION ALL SELECT 'pressroom_as_secondary_elsewhere (V3)', count(*) FROM articles_secondary_sections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'subsections_under_pressroom', count(*) FROM subsections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_secondary_on_pressroom', count(*) FROM _articles_v_version_secondary_sections s JOIN _articles_v v ON v.id=s._parent_id WHERE v.version_pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_pressroom_as_secondary', count(*) FROM _articles_v_version_secondary_sections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_subsection', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_sub_section_id IS NOT NULL
+  UNION ALL SELECT 'v_exclusive', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_exclusive;
+  ```
+
 ## Token rotation
 
 `tsx scripts/mint-token.ts read --tenant <slug>` / `engine --engine "<name>"`.

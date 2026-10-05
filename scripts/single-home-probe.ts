@@ -1,6 +1,6 @@
 /**
  * single-home-probe.ts — empirical probe for the single-home pillar rule
- * (BriefAsia Pressroom). LOCAL DATABASE ONLY: hard-refuses any non-local
+ * (BriefAsia + GCV Pressroom). LOCAL DATABASE ONLY: hard-refuses any non-local
  * DATABASE_URL via scripts/lib/local-db-guard.ts (no override). It creates AND
  * deletes rows.
  *
@@ -13,8 +13,9 @@
  * Every fixture carries a run tag and is deleted in `finally`. The brief-asia
  * `pressroom` row is reused when it already exists (and then never deleted);
  * otherwise the probe creates it, runs the 0-reference delete check on it last,
- * and leaves none behind. Also creates and deletes `(wad, pressroom)` and
- * `(gcv, pressroom)` rows (+ wad/gcv articles) for the negative controls.
+ * and leaves none behind. Also creates and deletes `(wad, pressroom)` (the
+ * negative control, not single-home) and `(gcv, pressroom)` (single-home since
+ * GCV Pressroom parity) rows, plus wad/gcv articles.
  *
  * Exit code 0 = every check passed.
  */
@@ -247,14 +248,30 @@ async function main() {
     await expectReject("sub-section under the brief-asia pressroom pillar", () => create("subsections", { tenant: ba.id, pillar: pressroom!.id, slug: `${TAG}-press-sub`, title: "x" }), V4);
     await expectOk("sub-section under WAD's pressroom pillar (control)", () => create("subsections", { tenant: wad.id, pillar: wadPress.id, slug: `${TAG}-wad-sub`, title: "x" }));
 
-    console.log("\n[controls] wad / gcv pressroom are not single-home");
+    console.log("\n[controls] wad pressroom is not single-home");
     await expectOk("wad article primary=wad pressroom with a secondary row + exclusive", () =>
       create("articles", art(wad.id, wadAuthor.id, { pillar: wadPress.id, secondarySections: [{ pillar: wadPress.id }], exclusive: true })),
     );
+
+    console.log("\n[GCV] gcv pressroom is single-home");
     const gcvOther = await find("pillars", { and: [{ tenant: { equals: gcv.id } }, { slug: { not_equals: "pressroom" } }] });
-    await expectOk("gcv article with a secondary gcv pressroom row", () =>
-      create("articles", art(gcv.id, gcvAuthor.id, { pillar: gcvOther?.id ?? gcvPress.id, secondarySections: [{ pillar: gcvPress.id }] })),
+    if (!gcvOther) throw new Error("gcv has no non-pressroom pillar — run `npm run db:seed` first");
+    await expectReject("gcv article with a secondary gcv pressroom row (V3)", () =>
+      create("articles", art(gcv.id, gcvAuthor.id, { pillar: gcvOther.id, secondarySections: [{ pillar: gcvPress.id }] })),
+      V3,
     );
+    await expectReject("gcv pressroom article with a secondary row (V1)", () =>
+      create("articles", art(gcv.id, gcvAuthor.id, { pillar: gcvPress.id, secondarySections: [{ pillar: gcvOther.id }] })),
+      V1,
+    );
+    await expectReject("gcv pressroom article marked exclusive (V6)", () => create("articles", art(gcv.id, gcvAuthor.id, { pillar: gcvPress.id, exclusive: true })), V6);
+    await expectReject("sub-section under the gcv pressroom pillar (V4)", () => create("subsections", { tenant: gcv.id, pillar: gcvPress.id, slug: `${TAG}-gcv-sub`, title: "x" }), V4);
+    const gcvArt = await expectOk("gcv pressroom article with NO author publishes", () =>
+      create("articles", art(gcv.id, null as unknown as Id, { pillar: gcvPress.id, workflowStatus: "published", _status: "published" })),
+    );
+    await expectReject("rename gcv pressroom slug", () => update("pillars", gcvPress.id, { slug: "press" }), RENAME);
+    await expectReject("move gcv pressroom to another tenant (dtw)", () => update("pillars", gcvPress.id, { tenant: dtw.id }), MOVE);
+    if (gcvArt) await expectReject("delete in-use gcv pressroom", () => remove("pillars", gcvPress.id), DELETE);
 
     console.log("\n[E-pillar] Pillars row guards");
     await expectReject("rename brief-asia pressroom slug", () => update("pillars", pressroom!.id, { slug: "press" }), RENAME);
