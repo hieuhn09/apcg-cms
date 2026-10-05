@@ -1,23 +1,25 @@
 ---
 name: context:all-tests
-description: "Verification quick-start for apcg-cms — there is no general test framework and no CI here (one scoped node:test script, npm run test:media-redirect, covers src/lib/media-redirect.ts only); the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified."
+description: "Verification quick-start for apcg-cms — there is no general test framework and no CI here (two scoped node:test scripts, test:media-redirect and test:single-home, plus the local-only probe:single-home DB probe); the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified."
 keywords: test, tests, testing, verify, verification, typecheck, lint, gate, validate-contract, evl, pvl, ci
 related: [context:all-database, context:all-integrations]
-date: 29-09-26
+date: 05-10-26
 metadata:
   read_when: "running verification after implementation, deciding what a validate-contract's test gates should be, or debugging a failing typecheck/lint"
 ---
 
 # apcg-cms — All Tests
 
-Last updated: 2026-09-29 (R2_PUBLIC_BASE_URL redirect; `npm run test:media-redirect`, the one scoped `node:test` script). Previously: 2026-09-24 (APCGHub P4 / CMS-2 — `scripts/hub-probe.ts` gained `--setup2`/`--nullorder`/`--check2`; disposable one-shot local Postgres 16 pattern (not the Docker stack) used for CMS-2's `/api/hub/tenants`+`/api/hub/taxonomy` data-shape checks; corrected the CMS-1-era note claiming local seed tenant slugs don't match production — they do, the earlier note had the production slugs wrong, see Known Gaps). Previously: APCGHub P4 / CMS-1 — `npm run build` promoted to mandatory gate; loose-vs-strict Payload types trap + cheap `tsc` gate without `payload-types.ts`; `PAYLOAD_DB_PUSH=true` migration-hiding trap; Docker/seed/port pitfalls; unfiltered-grep lesson
+Last updated: 2026-10-05 (single-home pillar rule: `npm run test:single-home`, `npm run probe:single-home`, disposable-PG recipe notes). Previously: 2026-09-29 (R2_PUBLIC_BASE_URL redirect; `npm run test:media-redirect`, the one scoped `node:test` script). Previously: 2026-09-24 (APCGHub P4 / CMS-2 — `scripts/hub-probe.ts` gained `--setup2`/`--nullorder`/`--check2`; disposable one-shot local Postgres 16 pattern (not the Docker stack) used for CMS-2's `/api/hub/tenants`+`/api/hub/taxonomy` data-shape checks; corrected the CMS-1-era note claiming local seed tenant slugs don't match production — they do, the earlier note had the production slugs wrong, see Known Gaps). Previously: APCGHub P4 / CMS-1 — `npm run build` promoted to mandatory gate; loose-vs-strict Payload types trap + cheap `tsc` gate without `payload-types.ts`; `PAYLOAD_DB_PUSH=true` migration-hiding trap; Docker/seed/port pitfalls; unfiltered-grep lesson
 
 Attach this file first when the task involves testing, verification, or gate design.
 
 **The single most important fact in this file: apcg-cms has no general test framework and no
 CI.** Do not assume `npm test` exists, do not invent a test command, and do not design a
-validate-contract around a test runner this repo does not have. The one exception is a single
-`node:test` script, `npm run test:media-redirect`, covering `src/lib/media-redirect.ts` only.
+validate-contract around a test runner this repo does not have. The exceptions are two scoped
+`node:test` scripts — `npm run test:media-redirect` (`src/lib/media-redirect.ts` only) and
+`npm run test:single-home` (single-home pillar rule) — and one local-only DB probe,
+`npm run probe:single-home`.
 
 ---
 
@@ -71,7 +73,9 @@ behavior — design test gates around the tiers that actually exist here (typech
 fully-automated tier; manual/live verification as the remaining tier), per the tier model in
 `.claude/skills/vc-test-coverage-plan/SKILL.md`. The single exception is
 `npm run test:media-redirect` (Node's built-in `node:test` via `tsx`, no new dependency): unit
-tests for `src/lib/media-redirect.ts` only — cite it only for changes to that file.
+tests for `src/lib/media-redirect.ts` only — cite it only for changes to that file. Likewise
+`npm run test:single-home` for changes to the single-home pillar rule (`src/lib/single-home-pillars.ts`,
+`src/hooks/single-home-pillar*.ts`, `scripts/lib/local-db-guard.ts`).
 
 ### Use manual/live verification for
 
@@ -128,10 +132,12 @@ iteration reports (`cms-cost-remediation-pvl-iteration-*.md`, `results.tsv`).
 | `npm run test:media-redirect` | `tsx --test src/lib/media-redirect.test.ts` (Node's built-in `node:test`) | unit tests for `src/lib/media-redirect.ts` only (R2 public URL formula, the shared R2 switch, the 302 redirect for old `/api/media/file` links); no DB, no network; not a general test runner |
 | `npx tsx scripts/hub-probe.ts --setup / --check / --paging` | one-shot data-layer probe for the `/api/hub/*` route family (added APCGHub P4 / CMS-1, kept in `scripts/` for reuse by future CMS-N hub routes) | requires the Docker Postgres local stack running (see §Debugging Quick Reference); `--setup` seeds two `ContentEngines` fixture rows + articles and prints a fresh test token (never hardcode a token in code/plan/report); `--check` runs the read/leak/filter assertions; `--paging` runs mutation-based red/green checks on `scopedFindMultiTenant`'s pagination invariants. Not a general test runner — scoped to this one route family. |
 | `npx tsx scripts/hub-probe.ts --setup2 / --nullorder / --check2` | CMS-2 (24-09-26) extensions to the same probe, for `/api/hub/tenants`+`/api/hub/taxonomy`+the extended `/api/hub/articles` (`q`/`pillar`/`sort=views`) | **run order matters and is NOT interchangeable with the CMS-1 trio**: `--setup`/`--check`/`--paging` must run BEFORE `--setup2` (which adds 201 pillars to `wad`, 12+ authors to `dtw`, and writes values into `dtw`'s previously-empty withheld fields — `contact`/`themeTokens`/`dashboards`/`socials`/`additionalDomains` — specifically so the `/tenants` leak-check test has something to leak if the allowlist regresses); `--paging`'s "at most 10 articles" assumption goes red for the wrong reason if run AFTER `--setup2`. `--nullorder` isolates the D14 null-ordering fix (see `process/context/integrations/all-integrations.md` §Cross-tenant reads EXTENDED) — run it on the unfixed helper first to confirm a genuine red (wrong article ids, not a crash), then again after the fix for green. `--check2` is the umbrella: 125 assertions across search-escaping, pillar filtering, tenant/taxonomy allowlists (recursive key-set diff + raw-body string grep for `readTokens`/`tokenHash`/`contact`/etc.), and auth (401/403) on all three routes. |
+| `npm run test:single-home` | `tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts scripts/lib/local-db-guard.test.ts` (3 files, 164 tests / 26 suites at 05-10-26) | pure `node:test`, no DB, no network, no Payload instance (the rule module imports no value from `payload`; lookups take an injected `find`). Includes the local-DB guard's 27-URL accept/refuse table. Scoped to the single-home pillar rule, not a general runner. |
+| `npm run probe:single-home` (`-- --http` adds live REST + GraphQL) | `tsx scripts/single-home-probe.ts` — Local API checks: draft saves, `{$push}`, rename / tenant-move / delete guards (incl. draft-only version and newsletter references), wad/gcv negative controls, the scripts path; `--http` also runs the GraphQL `restoreVersion` + `update` in ONE request probe (sub-section and `exclusive` variants — the case where Payload skips its backfill) | requires a DISPOSABLE LOCAL Postgres: it hard-refuses any non-local `DATABASE_URL` (`scripts/lib/local-db-guard.ts`, no override), creates AND deletes rows (run-tagged, cleaned in `finally`), needs `npm run db:seed` first (`--http` needs a running CMS at `SINGLE_HOME_PROBE_BASE`, default `http://127.0.0.1:3511`, and logs in with `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD`). 57/57 fresh, 61/61 with `--http` at EVL. Seed with `SEED_INCLUDE_PRESSROOM=true` for parity or let the probe create/remove the row itself. |
 
 There is no `npm test`. Do not add one to a plan's test-gate list without first adding an actual
 test framework as its own, explicitly-scoped piece of work — that is a real, separate project, not
-a one-line addition. (`npm run test:media-redirect` is one scoped `node:test` script, not a
+a one-line addition. (`test:media-redirect` and `test:single-home` are scoped `node:test` scripts, not a
 framework.)
 
 ## Debugging Quick Reference
@@ -208,6 +214,16 @@ framework.)
   is reusable for any future CMS-N work that needs a schema state the shared Docker volume doesn't
   have (e.g. testing a fresh migration against an empty DB, or testing `PAYLOAD_DB_PUSH=false` +
   real migrations rather than push-sync — see the `PAYLOAD_DB_PUSH=true` gap above).
+- **Single-home probe recipe notes (05-10-26).** Reuse the disposable-PG pattern above, plus: PG16
+  binaries are not on PATH in this sandbox, so run them as the `postgres` user
+  (`runuser -u postgres -- <pg16 bin dir>/initdb ...` / `pg_ctl ...`; `initdb`/`pg_ctl` refuse root).
+  **Preview and Production share ONE database**, so any Vercel Preview/Production environment is
+  read-only for verification ("Env-P is read-only"): never run the probe or any write script against a
+  deployed environment — the local-DB guard refuses it anyway. A GraphQL `restoreVersionX` + `updateX`
+  in one request is a distinct code path from two requests (Payload shares `req.context` and skips the
+  absent-key backfill under `isRestoringVersion`); test it explicitly for any hook that reads
+  `originalDoc`/`data`. The probe deletes `translation_jobs` rows first because of the pre-existing
+  FK issue noted in `database/all-database.md`.
 - **Clean-clone build gate is now a standing pre-push check, not a one-off.** CMS-1 discovered the
   Vercel loose-Payload-types build gap (see §Default Verification Order #3); CMS-2 reused the exact
   same gate (`git clone` to a scratch dir with no `src/payload-types.ts`, `npm ci`,
@@ -227,7 +243,7 @@ framework.)
 ## Known Gaps
 
 - No general test framework (unit / integration / e2e) — the single largest testing gap in this
-  repo; the only automated tests are `npm run test:media-redirect` (`src/lib/media-redirect.ts`).
+  repo; the only automated tests are the scoped `npm run test:media-redirect` (`src/lib/media-redirect.ts`) and `npm run test:single-home` (single-home pillar rule), plus the local-only `probe:single-home`.
 - No CI.
 - No automated regression check for the public API's response *shape* (the cross-repo wire
   contracts in `process/context/integrations/all-integrations.md`) — a field accidentally dropped or
