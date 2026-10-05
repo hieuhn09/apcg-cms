@@ -403,15 +403,16 @@ async function httpChecks(ctx: {
     }
     const query = `mutation { r: restoreVersionArticle(id: ${v}) { id } u: updateArticle(id: ${x.id}, data: { title: "${TAG} gql hijack", tenant: ${baId}, pillar: ${pressroomId} }) { id } }`;
     const res = await fetch(`${base}/api/graphql`, { method: "POST", headers: auth, body: JSON.stringify({ query }) });
-    const body = (await res.json()) as { data?: { u?: unknown }; errors?: { message?: string; path?: string[]; extensions?: unknown }[] };
+    const body = (await res.json()) as { data?: { r?: unknown; u?: unknown }; errors?: { message?: string; path?: string[]; extensions?: unknown }[] };
     const uErr = (body.errors ?? []).find((e) => (e.path ?? []).includes("u"));
     const row = (
       await db.execute(sql`SELECT pillar_id, sub_section_id, exclusive FROM articles WHERE id = ${x.id}`)
     ).rows?.[0] as { pillar_id: number; sub_section_id: number | null; exclusive: boolean } | undefined;
     const unchanged = row !== undefined && row.pillar_id === asiaId && (exclusive ? row.exclusive === true : row.sub_section_id === asiaSubId);
     const name = `GraphQL restoreVersion+update rejected, X unchanged${exclusive ? " (exclusive:true variant)" : " (sub-section variant)"}`;
-    if (uErr && !body.data?.u && unchanged) pass(name, `${uErr.message ?? ""} ${JSON.stringify(uErr.extensions ?? {}).slice(0, 160)}`);
-    else fail(name, `errors=${JSON.stringify(body.errors ?? []).slice(0, 300)} data.u=${JSON.stringify(body.data?.u)} row=${JSON.stringify(row)}`);
+    // `r` must have SUCCEEDED: only then is req.context.isRestoringVersion set for `u` (G85).
+    if (body.data?.r && uErr && !body.data?.u && unchanged) pass(name, `${uErr.message ?? ""} ${JSON.stringify(uErr.extensions ?? {}).slice(0, 160)}`);
+    else fail(name, `errors=${JSON.stringify(body.errors ?? []).slice(0, 300)} data.r=${JSON.stringify(body.data?.r)} data.u=${JSON.stringify(body.data?.u)} row=${JSON.stringify(row)}`);
   }
 
   if (ownRow) {
