@@ -7,6 +7,7 @@ import { createDoc, updateDoc, deleteDoc } from "@/console/data/payload";
 import { markdownToLexical } from "@/lib/markdown";
 import { slugify } from "@/lib/http";
 import { CONTRIBUTOR_ALLOWED_STATUSES, type ArticleStatus } from "@/lib/constants";
+import { humanErrorMessage } from "@/lib/single-home-pillars";
 
 export interface FormState {
   ok: boolean;
@@ -79,7 +80,8 @@ export async function createArticleAction(_prev: FormState, formData: FormData):
     );
     newId = created.id;
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    // Unwrap ValidationError field messages (e.g. the single-home pillar rule).
+    return { ok: false, error: humanErrorMessage(err) };
   }
   revalidatePath(`/console/sites/${slug}/articles`);
   redirect(`/console/sites/${slug}/articles/${newId}`);
@@ -123,7 +125,8 @@ export async function updateArticleAction(_prev: FormState, formData: FormData):
       user,
     );
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    // Unwrap ValidationError field messages (e.g. the single-home pillar rule).
+    return { ok: false, error: humanErrorMessage(err) };
   }
   revalidatePath(`/console/sites/${slug}/articles/${id}`);
   revalidatePath(`/console/sites/${slug}/articles`);

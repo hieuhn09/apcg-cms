@@ -32,6 +32,16 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // `Articles.exclusive` disclosure boolean.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = { gcv: ["exclusive"] };
 
+// ── Single-home pillars ─────────────────────────────────────────────────────
+// A single-home pillar's articles belong to nothing else: no secondary
+// sections, no sub-section, never added as another article's secondary section,
+// no sub-sections of its own, and (BriefAsia) never flagged `exclusive`.
+// Tenant-slug-keyed like ENGINE_BLOCKED_PILLARS (WAD also has a `pressroom`
+// pillar and is NOT affected). Code constant on purpose: no schema field, no
+// migration. Enforced by src/lib/single-home-pillars.ts + its hooks; the slug is
+// protected from rename / tenant move / in-use delete by the Pillars guards.
+export const SINGLE_HOME_PILLARS: Record<string, string[]> = { "brief-asia": ["pressroom"] };
+
 // ── Top-level user role (global identity) ───────────────────────────────────
 // Tenant-scoped roles live on TenantMemberships, not here.
 export const USER_ROLES = ["systemAdmin", "standard"] as const;
