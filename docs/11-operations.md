@@ -77,8 +77,9 @@ and status.
   no secondary sections, no sub-section, no `exclusive` flag; no article may add GCV
   Pressroom as a secondary section; the pillar can have no sub-sections; author is
   optional; the content engine gets 422 `pillar not writable by engine: pressroom` on
-  create and refresh. WAD's `pressroom` is unaffected. Steps: (1) BEFORE deploying the
-  CMS, the owner runs the READ-ONLY violator query below (never by agents against prod)
+  create and refresh. WAD's `pressroom` is unaffected. Steps: (1) the violator query below
+  is OPTIONAL when the tenant has no Pressroom articles (true for GCV at merge); otherwise,
+  BEFORE deploying the CMS, the owner runs it READ-ONLY (never by agents against prod)
   and fixes or accepts the hits — existing violators are grandfathered until their
   taxonomy is next saved, when the hook rejects the save; version-table (`v_*`) hits are
   history only; (2) deploy the CMS and gcv-web (any order). Rollback: remove the two

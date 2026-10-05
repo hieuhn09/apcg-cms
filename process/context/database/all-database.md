@@ -346,8 +346,8 @@ Postgres instance in deployed environments.
   (`src/collections/Articles.ts:123`); `Pillars.hooks.beforeChange/beforeDelete` row guards
   (`src/collections/Pillars.ts:28-29`); `SubSections.pillar` field `validate` (`SubSections.ts:51`).
   No schema field and no migration: the rule key is the code constant `SINGLE_HOME_PILLARS`
-  (`src/lib/constants.ts:68`; brief-asia and gcv `pressroom`, 05-10-26). The GCV Pressroom pre-deploy
-  read-only violator query lives in `docs/11-operations.md`.
+  (`src/lib/constants.ts:68`; brief-asia and gcv `pressroom`, 05-10-26). The GCV Pressroom read-only
+  violator query lives in `docs/11-operations.md` (optional: GCV had no Pressroom articles at merge).
 - **Every pillar reference is `ON DELETE set null`** (`src/migrations/20260702_231336_initial_schema.ts`):
   `articles.pillar_id` (`:867`), `articles_secondary_sections.pillar_id` (`:858`),
   `_articles_v.version_pillar_id` (`:889`) and `_articles_v_version_secondary_sections.pillar_id` (`:879`)
