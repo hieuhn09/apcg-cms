@@ -33,6 +33,7 @@
     "audit:gcv-export": "tsx scripts/audit/gcv-audit-export.ts",
     "audit:apply-luxury": "tsx scripts/audit/apply-luxury-decisions.ts",
     "audit:migrate-lifestyle": "tsx scripts/audit/migrate-lifestyle-subsections.ts",
+    "audit:add-pressroom": "tsx scripts/audit/add-pressroom-pillar.ts",
     "probe:single-home": "tsx scripts/single-home-probe.ts"
   },
   "dependencies": {
