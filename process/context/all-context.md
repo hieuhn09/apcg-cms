@@ -1,6 +1,6 @@
 # apcg-cms — All Context
 
-Last updated: 2026-10-05 (Pressroom optional author: `Articles.author` `required: false` + `articleAuthorValidate`, required except for single-home pillars; see `integrations/all-integrations.md` §Single-home pillar rule)
+Last updated: 2026-10-05 (Pressroom rollout MERGED, PRs #26 and #27; production `pressroom` row created by hand in /admin; Pressroom optional author: `Articles.author` `required: false` + `articleAuthorValidate`, required except for single-home pillars; see `integrations/all-integrations.md` §Single-home pillar rule)
 
 Previously: 2026-10-05 (Amendment 1: content engine blocked from brief-asia `pressroom` via `ENGINE_BLOCKED_PILLARS`; earlier: BriefAsia Pressroom single-home pillar rule — `SINGLE_HOME_PILLARS` in `src/lib/constants.ts`, enforced by Articles/Pillars/SubSections hooks + an intake 422 pre-check; owner-run `npm run audit:add-pressroom`; shared `scripts/lib/local-db-guard.ts`; scoped tests `test:single-home` + `probe:single-home`; see **Key Patterns** and `integrations/all-integrations.md` §Single-home pillar rule)
 
@@ -394,7 +394,7 @@ independent verification, not from guessing.
 | `npm run payload:generate-types` / `payload:generate-importmap` | Payload codegen |
 | `npm run payload:migrate` / `payload:migrate:create` | apply / scaffold a migration |
 | `npm run db:seed` | `tsx scripts/seed.ts` — system admin + sample tenants + taxonomy + sample engine. `SEED_INCLUDE_PRESSROOM=true` (default OFF) adds a brief-asia `pressroom` pillar fixture and hard-refuses any non-local `DATABASE_URL` (seed re-upserts fixtures and has run against prod; the prod row is created by `audit:add-pressroom`, never by a re-seed) |
-| `npm run audit:add-pressroom` | `tsx scripts/audit/add-pressroom-pillar.ts` — OWNER-RUN, LAST in the Pressroom rollout; dry run by default, `--apply` creates the brief-asia `pressroom` pillar; non-local DB needs `--confirm-host=<exact host>` AND a TTY (`scripts/lib/local-db-guard.ts`); idempotent, never overwrites |
+| `npm run audit:add-pressroom` | `tsx scripts/audit/add-pressroom-pillar.ts` — OWNER-RUN; NOT used for production (the row was created by hand in /admin), kept for fresh environments; dry run by default, `--apply` creates the brief-asia `pressroom` pillar; non-local DB needs `--confirm-host=<exact host>` AND a TTY (`scripts/lib/local-db-guard.ts`); idempotent, never overwrites |
 | `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table), 171 tests; no DB, no network |
 | `npm run probe:single-home` | `tsx scripts/single-home-probe.ts` (`-- --http` adds REST/GraphQL checks) — LOCAL DISPOSABLE Postgres only, creates and deletes rows; see `tests/all-tests.md` |
 | `npm run db:status` | `tsx scripts/db-status.ts` |
@@ -472,16 +472,22 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
 
 ## Open Questions / Outstanding Work
 
-- **Pressroom rollout is owner-gated (2026-10-05, CMS PR hieuhn09/apcg-cms#26 + FE PR hieuhn09/brief-asia-web#32).**
-  Code merges in any order; the `pressroom` Pillars row is created LAST (`npm run audit:add-pressroom`).
-  The engine is blocked from Pressroom (Amendment 1), so nothing is taught to it. Open items: OWNER DECISION
-  pending on `POST /api/engine/translation`, which is not gated and can still write translated text onto an
-  existing Pressroom article; engine 4xx-terminal handling of the 422 reasons is
-  unverified (client is in content-engine); /admin Save Draft shows only a generic "field is invalid" toast
-  for a rule violation (Console shows the full text); pre-existing `translation_jobs.article_id` is NOT NULL
-  with `ON DELETE SET NULL`, so deleting a published article fails (see `database/all-database.md`);
-  `login.json` is tracked in this repo with a credential-shaped `token` (expired per `exp`) — owner should
-  remove it from git. Residuals: `integrations/all-integrations.md` §Single-home pillar rule.
+- **Pressroom rollout is DONE (2026-10-05): CMS PRs hieuhn09/apcg-cms#26 (single-home rule + engine block)
+  and #27 (optional author) are MERGED; FE PRs hieuhn09/brief-asia-web#32-#35 are the companion work
+  (Pressroom shows "Distributed by BriefAsia" instead of an author).** The production `pressroom` Pillars row
+  was created by hand in /admin by the owner (not via `audit:add-pressroom`). The engine is blocked from
+  Pressroom (Amendment 1), so nothing is taught to it. Open items: `POST /api/engine/translation` is not
+  gated and can still write translated text onto an existing Pressroom article (owner decision: KEEP as is);
+  engine 4xx-terminal handling of the 422 reasons is unverified (client is in content-engine); /admin Save
+  Draft shows only a generic "field is invalid" toast for a rule violation (Console shows the full text);
+  pre-existing `translation_jobs.article_id` is NOT NULL with `ON DELETE SET NULL`, so deleting a published
+  article fails (see `database/all-database.md`); `login.json` is tracked in this repo with a
+  credential-shaped `token` (expired per `exp`) — owner should `git rm` it and consider rotating the
+  credential (do not open or quote the file); the admin required asterisk on the Author field is lost for
+  ALL articles since #27 (field description says "Required, except for Pressroom articles."); Console
+  author UI and `scripts/hub-probe.ts` were not run for #27 (static null-safety check only). Residuals:
+  `integrations/all-integrations.md` §Single-home pillar rule. Plan archive:
+  `process/general-plans/completed/pressroom-optional-author_05-10-26/`.
 - **This repo's own `CLAUDE.md` Bootstrap Guard is factually wrong about the size of the gap it
   describes.** It says a missing `process/context/all-context.md` means "the context router,
   protocol docs, and the validator suite are absent." At the start of this pass, only the context
