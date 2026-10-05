@@ -26,6 +26,13 @@
  * (read failure, or a body withheld as bodyState "error" — detail carries the
  * article id, tenant, a kind and an error NAME; never body text or a token).
  * Internal route: no CORS. No rate limit (`cms1-hub-route-has-no-rate-limit`).
+ *
+ * APCGHub P5.1 additions (the default response above is unchanged byte for byte):
+ *   - `?view=edit` (any other value is ignored): adds an `edit` block beside
+ *     `article` (src/lib/hub-article-edit-select.ts). The main read also selects
+ *     `origin`; only when the main row is a manual draft is the LATEST draft read,
+ *     and only then do `article.*` and `bodyMarkdown` come from that latest read.
+ *   - `PATCH` — update one hub-authored draft (src/lib/hub-author-handlers.ts).
  */
 
 import { getPayload } from "payload";
@@ -42,6 +49,13 @@ import { json } from "@/lib/http";
 import { isHubArticleId } from "@/lib/hub-article-id";
 import { logActivity } from "@/lib/activity";
 import { toId } from "@/access/helpers";
+import { HUB_ARTICLE_EDIT_MAIN_SELECT, loadHubArticleEdit, type HubArticleEdit } from "@/lib/hub-article-edit-select";
+import { handleHubDraftUpdate } from "@/lib/hub-author-handlers";
+
+/** Two conversions at most per PATCH (stored body round trip + new body), each ≤ T. */
+export const maxDuration = 30;
+
+export const PATCH = (request: Request, ctx: { params: Promise<{ id: string }> }) => handleHubDraftUpdate(request, ctx);
 
 const SCOPE = "hub/articles/detail";
 
@@ -85,6 +99,8 @@ export async function GET(
     );
   }
 
+  const wantEdit = new URL(request.url).searchParams.get("view") === "edit";
+
   // 4. Ids are int4 serials: a malformed or out-of-range id cannot exist, and
   //    gets the same 404 without reaching Postgres (src/lib/hub-article-id.ts).
   if (!isHubArticleId(id)) return notFound();
@@ -98,7 +114,7 @@ export async function GET(
       depth: HUB_ARTICLE_DETAIL_DEPTH,
       locale: "en",
       overrideAccess: true,
-      select: HUB_ARTICLE_DETAIL_SELECT,
+      select: wantEdit ? HUB_ARTICLE_EDIT_MAIN_SELECT : HUB_ARTICLE_DETAIL_SELECT,
       disableErrors: true,
     })) as unknown as Record<string, unknown> | null;
   } catch (err) {
@@ -113,6 +129,26 @@ export async function GET(
     return json({ ok: false, status: "internal_error" }, 500);
   }
   if (!doc || String(toId(doc.tenant)) !== String(tenant.id)) return notFound();
+
+  // 5b. `view=edit` only: the editable gate; when editable, every field comes from the latest draft.
+  let edit: HubArticleEdit | null = null;
+  if (wantEdit) {
+    try {
+      const r = await loadHubArticleEdit({ payload, mainDoc: doc, tenantId: tenant.id });
+      edit = r.edit;
+      if (r.latest) doc = r.latest;
+    } catch (err) {
+      payload.logger.error(`[${SCOPE}] edit read failed: ${(err as Error).name}`);
+      await logActivity({
+        payload,
+        eventType: "integration_error",
+        actorType: "engine",
+        actorEngineId: auth.engine.id,
+        detail: { scope: SCOPE, articleId: id, tenant: tenant.slug, name: (err as Error).name },
+      });
+      return json({ ok: false, status: "internal_error" }, 500);
+    }
+  }
 
   // 6. Body → Markdown. Never throws; a body problem never fails the request.
   const body = await hubArticleBodyToMarkdown(doc.body, {
@@ -133,7 +169,9 @@ export async function GET(
 
   // 7. Fresh object, allowlisted fields only.
   return json(
-    { ok: true, article: sanitizeHubArticleDetail(doc, tenant.slug, { bodyMarkdown: body.bodyMarkdown, bodyState: body.bodyState }) },
+    edit
+      ? { ok: true, article: sanitizeHubArticleDetail(doc, tenant.slug, { bodyMarkdown: body.bodyMarkdown, bodyState: body.bodyState }), edit }
+      : { ok: true, article: sanitizeHubArticleDetail(doc, tenant.slug, { bodyMarkdown: body.bodyMarkdown, bodyState: body.bodyState }) },
     200,
   );
 }

@@ -58,6 +58,18 @@ import { parseHubQ, parseHubSort, parsePillarSlugs } from "@/lib/hub-query";
 import { json } from "@/lib/http";
 import { logActivity } from "@/lib/activity";
 import { ARTICLE_STATUSES } from "@/lib/constants";
+import { handleHubDraftCreate } from "@/lib/hub-author-handlers";
+
+/**
+ * POST /api/hub/articles — create ONE draft article from the hub composer
+ * (APCGHub P5.1). Separate credential: a ContentEngines doc with hubRead AND
+ * hubAuthor (src/lib/hub-author-auth.ts). Contract, check order and every error
+ * body: src/lib/hub-author-handlers.ts. The GET handler below is unchanged.
+ * Node runtime only (the body conversion runs under a `node:vm` time guard).
+ */
+export const maxDuration = 30;
+
+export const POST = (request: Request) => handleHubDraftCreate(request);
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;

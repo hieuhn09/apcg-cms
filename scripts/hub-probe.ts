@@ -35,6 +35,10 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { sql } from "@payloadcms/db-postgres";
 import { isValidTransition } from "../src/lib/hub-transition";
 import { ARTICLE_STATUSES, type ArticleStatus } from "../src/lib/constants";
+// P5.1 (--setup6 / --check6 / --guard-child).
+import { spawnSync } from "node:child_process";
+import { createHook } from "node:async_hooks";
+import { createHash } from "node:crypto";
 
 const HUB_ENGINE_NAME = "apcghub-read";
 const BASE = process.env.HUB_PROBE_BASE ?? "http://localhost:3000";
@@ -3939,6 +3943,1556 @@ async function explore6() {
   process.exit(0);
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P5.1 / Stage 2 (CMS-B1) — `--setup6` / `--check6` / `--guard-child`
+// (APCGHub P5.1, hub draft authoring: POST /api/hub/articles, PATCH
+// /api/hub/articles/{id}, GET …?view=edit, taxonomy composer kinds).
+//
+//   npx tsx scripts/hub-probe.ts --setup6 --out <file>         # fixtures + one token FILE per engine (0o600)
+//   npx tsx scripts/hub-probe.ts --check6 --in <file>          # every group (dev server on HUB_PROBE_BASE)
+//   npx tsx scripts/hub-probe.ts --check6 --unit-only          # group U only: no DB, no dev server
+//   npx tsx scripts/hub-probe.ts --check6 --hooks-only         # group H Local-API hook OBS only (DB, no server)
+//
+// LOCAL DATABASE ONLY: `--setup6` / `--check6` (except `--unit-only`) refuse to run
+// unless DATABASE_URL and HUB_PROBE_BASE both point at localhost / 127.0.0.1 / ::1.
+// Error bodies are compared VERBATIM (`status` + `reason` + extras, deep equality).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The §9.2 D2 vector table (frozen; counts after `trim`, same formulas as the 0.5b oracle table). */
+const D2_F13 = "[a](/b)[a][a](/b)*\\**a";
+const D2_QUOTE_U = "\\**a <u>*[a](/b) ***`a ***";
+const D2_URLS = [
+  "[t](ssh://x)",
+  "[t](about:blank)",
+  "[t](C:\\x\\y)",
+  "[t](chrome://settings)",
+  "[t](blob:https://x/u)",
+  "[t](ws://x)",
+  "[t](intent://x#Intent;end)",
+  "[t](whatsapp://send)",
+];
+type D2Expect = "pass" | "block" | "obs";
+interface D2Vec {
+  name: string;
+  md: () => string;
+  /** 1b verdict. */
+  v: D2Expect;
+  /** Expected HTTP outcome in group D2: 201, or a 422 code. */
+  http?: 201 | "too_large" | "too_slow" | "url" | "unstable";
+}
+function d2Vectors(): D2Vec[] {
+  const b3 = rep("*[a](/b) ", 15);
+  const v: D2Vec[] = [
+    // (c) the seven thresholds, below / at and just above
+    { name: "c_lines_1000", md: () => "a" + rep("\na", 999), v: "pass", http: 201 },
+    { name: "c_lines_1001", md: () => "a" + rep("\na", 1000), v: "block", http: "too_large" },
+    { name: "c_mark_5000", md: () => rep("*", 5000), v: "pass" },
+    { name: "c_mark_5001", md: () => rep("*", 5001), v: "block", http: "too_large" },
+    { name: "c_runs_2500", md: () => unitsJoin("*a", 30, 83) + "\n\n" + unitsJoin("*a", 10, 1), v: "pass", http: 201 },
+    { name: "c_runs_2501", md: () => unitsJoin("*a", 30, 83) + "\n\n" + unitsJoin("*a", 11, 1), v: "block", http: "too_large" },
+    { name: "c_links_500", md: () => unitsJoin(D2_F13, 10, 25), v: "pass", http: 201 },
+    { name: "c_links_501", md: () => unitsJoin(D2_F13, 10, 25) + "\n\n[a](/b)", v: "block", http: "too_large" },
+    { name: "c_unitRuns_30", md: () => unitsJoin("*a", 30, 1), v: "pass", http: 201 },
+    { name: "c_unitRuns_31", md: () => unitsJoin("*a", 31, 1), v: "block", http: "too_large" },
+    { name: "c_unitLinks_20", md: () => unitsJoin("[a](/b)", 20, 1), v: "pass", http: 201 },
+    { name: "c_unitLinks_21", md: () => unitsJoin("[a](/b)", 21, 1), v: "block", http: "too_large" },
+    { name: "c_indent_16", md: () => "- a\n" + rep("\t", 16) + "- x", v: "pass", http: 201 },
+    { name: "c_indent_17", md: () => "- a\n" + rep("\t", 17) + "- x", v: "block", http: "too_large" },
+    // (d) real-looking bodies vs the synthetic dense body
+    { name: "d_real_40k", md: () => realBody6(40000, { line: 150, bold: 300, link: 1000, ital: 600, seed: 40 }), v: "pass", http: 201 },
+    { name: "d_real_200k_para", md: () => realBody6(200000, { line: 600, bold: 300, link: 1000, ital: 600, seed: 203 }), v: "pass", http: 201 },
+    { name: "d_normal_200k", md: normal200k, v: "block", http: "too_large" },
+    // (b) blocked fast by 1b
+    { name: "b_star_a_3000", md: () => rep("*a ", 3000), v: "block", http: "too_large" },
+    { name: "b_starlink_200", md: () => rep("*[a](/b) ", 200), v: "block", http: "too_large" },
+    { name: "b_bt_200k", md: () => rep("`", 200000), v: "block", http: "too_large" },
+    { name: "b_tilde_33333", md: () => rep("~~a~~ ", 33333), v: "block", http: "too_large" },
+    { name: "b_fence_5000", md: () => rep("```\n", 5000), v: "block", http: "too_large" },
+    { name: "b_table_5000", md: () => rep("|a|b|\n", 5000), v: "block", http: "too_large" },
+    { name: "b_star_100k", md: () => rep("*", 100000), v: "block", http: "too_large" },
+    { name: "b_bold_30k", md: () => rep("**a**", 30000), v: "block", http: "too_large" },
+    { name: "b_lines_100k", md: () => rep("a\n", 100000), v: "block", http: "too_large" },
+    { name: "b_zig63", md: () => zig(63, 1e9), v: "block", http: "too_large" },
+    // W-run family (§9.2 D(b))
+    { name: "ws_450x253_nn", md: () => rep("](" + rep(" ", 253) + "\n\n", 450), v: "pass", http: 201 },
+    { name: "ws_775x253_nn", md: () => rep("](" + rep(" ", 253) + "\n\n", 775), v: "block", http: "too_large" },
+    // (g) the two worst KNOWN bodies that pass 1b, and the upper edge
+    { name: "g_zigzag15_units", md: () => zig(16, 920) + "\n\n" + unitsJoin(D2_F13, 10, 25), v: "pass", http: 201 },
+    { name: "g_zigzag15_f13b", md: () => zig(16, 920) + "\n\n" + unitsJoin("[a](/b)*\\**", 15, 25), v: "pass", http: 201 },
+    { name: "g_zigzag15_f13b_x16", md: () => zig(16, 920) + "\n\n" + unitsJoin("[a](/b)*\\**", 16, 25), v: "block", http: "too_large" },
+    { name: "g_table_f13", md: () => rep("|a|b|\n", 900) + "\n" + unitsJoin(D2_F13, 10, 25), v: "pass", http: 201 },
+    // (h) B-3 family and CRLF line counting
+    { name: "h1_1paren", md: () => Array.from({ length: 14 }, () => "1) " + b3).join("\n"), v: "block", http: "too_large" },
+    { name: "h2_nbsp", md: () => Array.from({ length: 14 }, () => b3).join("\n\u00a0\n"), v: "block", http: "too_large" },
+    { name: "h3_crcr", md: () => Array.from({ length: 14 }, () => b3).join("\r\r"), v: "block", http: "too_large" },
+    { name: "h4_crlfcrlf", md: () => Array.from({ length: 14 }, () => b3).join("\r\n\r\n"), v: "block", http: "too_large" },
+    { name: "h_crlf_500", md: () => rep("a\r\n", 500), v: "pass", http: 201 },
+    { name: "h_crlf_501", md: () => rep("a\r\n", 501), v: "block", http: "too_large" },
+    // (i) / (j) guard-fire vectors (pass 1b; the vm guard is the defence)
+    { name: "i_quote_x80", md: () => "> " + Array(80).fill(D2_QUOTE_U).join("\n> "), v: "pass", http: "too_slow" },
+    { name: "i_quote_x70(obs)", md: () => "> " + Array(70).fill(D2_QUOTE_U).join("\n> "), v: "pass" },
+    { name: "i_quote_x60(obs)", md: () => "> " + Array(60).fill(D2_QUOTE_U).join("\n> "), v: "pass" },
+    { name: "j_table_x30", md: () => "a\n" + rep("| ", 30) + "x", v: "pass", http: "too_slow" },
+  ];
+  // (k) eight exotic-scheme URLs (E31)
+  D2_URLS.forEach((u, i) => v.push({ name: `k_url${i}`, md: () => u, v: "pass", http: "url" }));
+  return v;
+}
+
+/** One OBS JSON line per call; never a token, never body text beyond a short label. */
+const obs6 = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)] ?? 0;
+}
+
+/** Every file under `dir` (recursive), repo-relative POSIX paths. */
+function walkFiles(dir: string): string[] {
+  const out: string[] = [];
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop()!;
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = `${d}/${e.name}`;
+      if (e.isDirectory()) stack.push(p);
+      else out.push(p);
+    }
+  }
+  return out.sort();
+}
+
+/** A fake Payload for the handler / lookup unit checks (no DB). Records every call. */
+function fakePayload6(o: {
+  tenant?: Doc;
+  articles?: Record<string, { latest: Doc; main: Doc }>;
+  engines?: Record<string, Doc>;
+  finds?: (args: Doc) => Doc[];
+}) {
+  const calls: { op: string; args: Doc }[] = [];
+  const logs: string[] = [];
+  const tenant = o.tenant ?? { id: 1, slug: "dtw", status: "active", defaultLanguage: "en", features: { articles: true } };
+  const fake = {
+    calls,
+    logs,
+    config: {},
+    logger: { info: (m: string) => logs.push(m), warn: (m: string) => logs.push(m), error: (m: string) => logs.push(m) },
+    async findByID(args: Doc) {
+      calls.push({ op: "findByID", args });
+      if (args.collection === "tenants") return tenant;
+      if (args.collection === "content-engines") return o.engines?.[String(args.id)] ?? null;
+      if (args.collection === "articles") {
+        const a = o.articles?.[String(args.id)];
+        if (!a) return null;
+        return args.draft ? a.latest : a.main;
+      }
+      return null;
+    },
+    async find(args: Doc) {
+      calls.push({ op: "find", args });
+      const docs = o.finds ? o.finds(args) : [];
+      return { docs, totalDocs: docs.length };
+    },
+    async create(args: Doc) {
+      calls.push({ op: "create", args });
+      return { id: 999, version: 1, slug: (args.data as Doc | undefined)?.slug };
+    },
+    async update(args: Doc) {
+      calls.push({ op: "update", args });
+      return { id: args.id, version: 2 };
+    },
+    async count() {
+      return { totalDocs: 0 };
+    },
+  };
+  return fake;
+}
+
+async function check6Unit(expect: (label: string, actual: unknown, wanted: unknown) => void): Promise<void> {
+  const limits = await import("../src/lib/hub-author-limits");
+  const core = await import("../src/lib/hub-author-convert-core");
+  const body = await import("../src/lib/hub-author-body");
+  const input = await import("../src/lib/hub-author-input");
+  const refs = await import("../src/lib/hub-author-refs");
+  const authM = await import("../src/lib/hub-author-auth");
+  const handlers = await import("../src/lib/hub-author-handlers");
+  const query = await import("../src/lib/hub-query");
+  const blocks = await import("../src/lib/hub-taxonomy-blocks");
+  const editSel = await import("../src/lib/hub-article-edit-select");
+  const { isHubArticleId, PG_INT4_MAX } = await import("../src/lib/hub-article-id");
+  const { countDangerousLinkTargets, loadHubEditorConfig } = await import("../src/lib/hub-article-markdown");
+  const editorConfig = (await loadHubEditorConfig(await config)) as never;
+  const realConv = core.lexicalConverters(editorConfig);
+
+  // ── (x) resolveConvertTimeoutMs — 13 inputs (E29 / OQ45) ──
+  const toTable: [string | undefined, number][] = [
+    [undefined, 1500], ["", 1500], ["1e3", 1500], ["0x10", 1500], [" 5 ", 1500], ["-1", 1500], ["NaN", 1500],
+    ["Infinity", 1500], ["0", 1500], ["99999", 1500], ["1501", 1500], ["1", 1], ["1500", 1500],
+  ];
+  expect("U-x resolveConvertTimeoutMs 13-input table", toTable.map(([i]) => limits.resolveConvertTimeoutMs(i)), toTable.map(([, o]) => o));
+  {
+    const prev = process.env.HUB_BODY_CONVERT_TIMEOUT_MS;
+    process.env.HUB_BODY_CONVERT_TIMEOUT_MS = "7";
+    const seven = limits.currentConvertTimeoutMs();
+    delete process.env.HUB_BODY_CONVERT_TIMEOUT_MS;
+    const dflt = limits.currentConvertTimeoutMs();
+    if (prev !== undefined) process.env.HUB_BODY_CONVERT_TIMEOUT_MS = prev;
+    expect("U-x currentConvertTimeoutMs reads the env AT CALL TIME (7, then default 1500)", [seven, dflt], [7, 1500]);
+  }
+  expect("U closed field-code list = 23 (15 common + 8 body)", [limits.HUB_FIELD_CODES.length, limits.HUB_FIELD_CODES_COMMON.length, limits.HUB_FIELD_CODES_BODY.length, new Set(limits.HUB_FIELD_CODES).size], [23, 15, 8, 23]);
+  expect("U frozen 1b / tree / size constants", [limits.BODY_MAX_LINES, limits.BODY_MAX_MARK_CHARS, limits.BODY_MAX_MARK_RUNS, limits.BODY_MAX_LINK_OPENERS, limits.BODY_PARA_MAX_MARK_RUNS, limits.BODY_PARA_MAX_LINK_OPENERS, limits.BODY_MAX_INDENT, limits.BODY_MAX_NODES, limits.BODY_MAX_JSON_CHARS, limits.MAX_REQUEST_BYTES, limits.HUB_AUTHOR_LIMITS.body], [1000, 5000, 2500, 500, 30, 20, 16, 9000, 1200000, 1000000, 200000]);
+
+  // ── isWs parity ∀c ∈ [0, 0xFFFF] (AC7) ──
+  {
+    const bad: number[] = [];
+    let members = 0;
+    for (let c = 0; c <= 0xffff; c++) {
+      const want = /\s/.test(String.fromCharCode(c)) || c <= 0x1f;
+      if (core.isWs(c) !== want) bad.push(c);
+      if (want) members++;
+    }
+    expect("U isWs(c) === (/\\s/ || c<=0x1f) for every code unit 0..0xFFFF (52 members)", [bad.slice(0, 10), members], [[], 52]);
+    expect("U not W: U+0085, U+180E, U+200B–200D, U+2060", [0x85, 0x180e, 0x200b, 0x200c, 0x200d, 0x2060].map(core.isWs), [false, false, false, false, false, false]);
+  }
+
+  // ── hasLongWhitespaceRun: 256 ok / 257 hit, called DIRECTLY (no trim) ──
+  {
+    const cs = [0xa0, 0x3000, 0xfeff, 0x2028, 0x2029, 0x1680, 0x2000, 0x200a, 0x202f, 0x205f];
+    const res = cs.map((c) => {
+      const ch = String.fromCharCode(c);
+      return [core.hasLongWhitespaceRun("](" + rep(ch, 256) + "x)"), core.hasLongWhitespaceRun("](" + rep(ch, 257) + "x)")];
+    });
+    expect("U hasLongWhitespaceRun 256 → false / 257 → true for 10 W characters", res, cs.map(() => [false, true]));
+    const alt = (n: number) => Array.from({ length: n }, (_, i) => (i % 2 ? "\u00a0" : " ")).join("");
+    expect("U hasLongWhitespaceRun alternating ' ' + U+00A0: 256 / 257", [core.hasLongWhitespaceRun("x" + alt(256) + "x"), core.hasLongWhitespaceRun("x" + alt(257) + "x")], [false, true]);
+  }
+
+  // ── hasImageSyntax ──
+  expect("U hasImageSyntax", ["![a](b)", "![a][r]", "a ! [b]", "plain"].map(body.hasImageSyntax), [true, true, false, false]);
+
+  // ── hasDangerousLinkSyntax (+ write ⊇ read; + M14 time budget) ──
+  {
+    const hits = [
+      "[x](javascript:alert(1))", "]( javascript:x)", "]( <javascript:x>", "<javascript:alert(1)>", "[x]: javascript:alert(1)",
+      "[x](java\tscript:a)", "[x](JaVaScRiPt:a)", "[x](vbscript:a)", "[x](data:text/html,a)", "[x](\u00a0javascript :a)",
+      "[x](data:image/png;base64,AAAA)", "[x]: <vbscript:a>",
+    ];
+    const safe = ["[x](https://a.b)", "[a](/b)", "<https://a.b>", "[x]: https://a", "javascript is fun", "a: b", "[x](mailto:a@b.c)"];
+    expect("U hasDangerousLinkSyntax known hits", hits.map(core.hasDangerousLinkSyntax), hits.map(() => true));
+    expect("U hasDangerousLinkSyntax known safe strings", safe.map(core.hasDangerousLinkSyntax), safe.map(() => false));
+    // write ⊇ read: every string the read regex flags is flagged by the scanner.
+    const atoms = ["](", "<", "]", "(", " ", "\t", "\n", "\u00a0", "\u3000", "javascript", "JAVASCRIPT", "vbscript", "data", "data:image/png;base64,", ":", "x", "java", "script", "]:", "\u2028", "\ufeff"];
+    const rnd = seeded6(6);
+    let flaggedByRead = 0;
+    const missed: string[] = [];
+    for (let i = 0; i < 30000; i++) {
+      let s = "";
+      const n = 1 + Math.floor(rnd() * 8);
+      for (let k = 0; k < n; k++) s += atoms[Math.floor(rnd() * atoms.length)];
+      if (countDangerousLinkTargets(s) > 0) {
+        flaggedByRead++;
+        if (!core.hasDangerousLinkSyntax(s)) missed.push(JSON.stringify(s));
+      }
+    }
+    const fixed = ["](javascript:", "](  <  javascript  :", "](\u00a0data:text/html", "](VBSCRIPT:", "](\tjavascript\t:"];
+    for (const s of fixed) if (countDangerousLinkTargets(s) > 0 && !core.hasDangerousLinkSyntax(s)) missed.push(JSON.stringify(s));
+    obs6("U write⊇read corpus", { strings: 30000, flaggedByRead });
+    expect("U write ⊇ read: every string countDangerousLinkTargets flags is caught by hasDangerousLinkSyntax", missed.slice(0, 5), []);
+    // M14: direct call, 190,000 spaces after `](` (bypasses rule (1)) — linear, ≤ 500 ms.
+    const big = "](" + rep(" ", 190000) + "javascript:x";
+    const ms: number[] = [];
+    let hit = false;
+    for (let k = 0; k < 5; k++) {
+      const t0 = performance.now();
+      hit = core.hasDangerousLinkSyntax(big);
+      ms.push(performance.now() - t0);
+    }
+    obs6("U M14 scanner ms on ]( + 190,000 spaces (median of 5)", Math.round(median(ms) * 100) / 100);
+    expect("U M14 scanner flags ]( + 190,000 spaces + javascript: within 500 ms", [hit, median(ms) <= 500], [true, true]);
+  }
+
+  // ── checkExportedMarkdown ──
+  expect("U checkExportedMarkdown ws_run / link / ok", [
+    core.checkExportedMarkdown("](\n" + rep(" ", 1024) + "- x"),
+    core.checkExportedMarkdown("[x](javascript:alert(1))"),
+    core.checkExportedMarkdown("[x](https://a.b) ok"),
+  ], [{ ok: false, code: "ws_run" }, { ok: false, code: "link" }, { ok: true }]);
+
+  // ── checkLexicalTree (allowlist, URL allowlist, caps, iterative) ──
+  {
+    const T = (...children: unknown[]) => ({ root: { type: "root", children } });
+    const p = (...children: unknown[]) => ({ type: "paragraph", children });
+    const t = (text: string) => ({ type: "text", text, format: 0 });
+    const link = (url: string) => ({ type: "link", fields: { url, linkType: "custom", newTab: false }, children: [t("l")] });
+    const r = (x: unknown) => {
+      const c = core.checkLexicalTree(x);
+      return c.ok ? "ok" : c.code;
+    };
+    expect("U checkLexicalTree allowlisted tree → ok", r(T(p(t("a")), { type: "heading", tag: "h2", children: [t("h")] }, { type: "horizontalrule" })), "ok");
+    expect("U checkLexicalTree upload / relationship / autolink / unknown → node", [
+      r(T({ type: "upload", value: 1 })), r(T({ type: "relationship", value: 1 })), r(T(p({ type: "autolink", fields: { url: "https://a" }, children: [] }))), r(T({ type: "block" })), r({}),
+    ], ["node", "node", "node", "node", "node"]);
+    const allowed = ["https://a.b/c", "http://a", "HTTPS://A", "mailto:a@b.c", "tel:+1", "/path", "#frag", "?q=1"];
+    const refused = ["javascript:alert(1)", "java&#115;cript&#58;alert(1)", "&amp;", "//evil", "\\/\\/evil", "foo/bar", "x y", "\u0001https://a", "ftp://a", "data:text/html,a", "vbscript:a", "", " https://a", "https:x"];
+    expect("U checkLexicalTree URL allowlist: allowed", allowed.map((u) => r(T(p(link(u))))), allowed.map(() => "ok"));
+    expect("U checkLexicalTree URL allowlist: refused", refused.map((u) => r(T(p(link(u))))), refused.map(() => "url"));
+    // caps (M26)
+    const many = T(...Array.from({ length: 9001 }, () => ({ type: "linebreak" })));
+    const atCap = T(...Array.from({ length: 8999 }, () => ({ type: "linebreak" })));
+    const bigText = T(p(t(rep("a", 1200001))));
+    let deep: Doc = { type: "paragraph", children: [] };
+    const deepRoot = { root: { type: "root", children: [deep] } };
+    for (let i = 0; i < 100000; i++) {
+      const next: Doc = { type: "paragraph", children: [] };
+      (deep.children as unknown[]).push(next);
+      deep = next;
+    }
+    let deepRes: unknown;
+    try {
+      deepRes = r(deepRoot);
+    } catch (e) {
+      deepRes = `threw ${(e as Error).name}`;
+    }
+    expect("U M26 tree caps: 9,001 nodes → node, 9,000 → ok, JSON > 1,200,000 → node, 100,000-level tree → node (no RangeError)", [r(many), r(atCap), r(bigText), deepRes], ["node", "ok", "node", "node"]);
+  }
+
+  // ── comparator (M27) + isRoundTripSafeBody on samples ──
+  {
+    const md = "Read [this](https://example.com/a) and **bold** text.\n\n- one\n- two";
+    const l1 = realConv.toLexical(md);
+    const l2 = realConv.toLexical(md);
+    expect("U M27 same Markdown converted twice: raw trees differ (random link id), comparator says equal", [JSON.stringify(l1) !== JSON.stringify(l2), core.lexicalTreesEqual(l1, l2)], [true, true]);
+    const linkMd = "A [link](https://example.com/x) here.";
+    const stored = body.convertBodyGuarded(editorConfig, linkMd);
+    expect("U isRoundTripSafeBody: hub-saved body with a link → true; empty body → true", [stored.ok && body.isRoundTripSafeBody(editorConfig, stored.lexical), body.isRoundTripSafeBody(editorConfig, null)], [true, true]);
+    const relBody = { root: { type: "root", format: "", indent: 0, version: 1, children: [{ type: "paragraph", format: "", indent: 0, version: 1, children: [{ type: "text", text: "x", format: 0, version: 1 }] }, { type: "relationship", relationTo: "articles", value: 1, version: 2, format: "" }] } };
+    const newTab = { root: { type: "root", format: "", indent: 0, version: 1, children: [{ type: "paragraph", format: "", indent: 0, version: 1, children: [{ type: "link", version: 3, id: "aa11", fields: { linkType: "custom", url: "https://example.com/x", newTab: true }, format: "", indent: 0, children: [{ type: "text", text: "t", format: 0, version: 1 }] }] }] } };
+    const centered = { root: { type: "root", format: "", indent: 0, version: 1, children: [{ type: "paragraph", format: "center", indent: 0, version: 1, children: [{ type: "text", text: "c", format: 0, version: 1 }] }] } };
+    expect("U isRoundTripSafeBody: relationship node / new-tab link / centered paragraph → false", [body.isRoundTripSafeBody(editorConfig, relBody), body.isRoundTripSafeBody(editorConfig, newTab), body.isRoundTripSafeBody(editorConfig, centered)], [false, false, false]);
+  }
+
+  // ── precheckBodyLinear / validateBodyPure + pre6 ORACLE (OQ33) ──
+  {
+    const vecs = d2Vectors();
+    const mism: string[] = [];
+    const verdictBad: string[] = [];
+    for (const vec of vecs) {
+      const md = vec.md().trim();
+      const o = pre6(md);
+      const c = body.countBodyLinear(md);
+      const want = { lines: o.lines, markChars: o.markChars, runs: o.runs, links: o.links, maxUnitRuns: o.maxUnitRuns, maxUnitLinks: o.maxUnitLinks, maxIndent: o.maxIndent };
+      if (JSON.stringify(c) !== JSON.stringify(want)) mism.push(`${vec.name} cms=${JSON.stringify(c)} pre6=${JSON.stringify(want)}`);
+      const ok = body.precheckBodyLinear(md).ok;
+      if (vec.v !== "obs" && ok !== (vec.v === "pass")) verdictBad.push(`${vec.name}:${ok ? "pass" : "block"}`);
+    }
+    obs6("U oracle vectors", vecs.length);
+    expect("U oracle: countBodyLinear === pre6 on every shared D2 vector (7 counts)", mism.slice(0, 3), []);
+    expect("U 1b verdicts match the frozen table (7 below/at pass, 7 above blocked, real 40k/200k pass, f13b ×15 pass, ×16 blocked, B-3/CRLF blocked …)", verdictBad, []);
+    // breaks: LF, CR, U+2028, U+2029 each one; CRLF = 2
+    expect("U 1b line counting: a\\nb / a\\rb / a\\u2028b / a\\u2029b / a\\r\\nb", ["a\nb", "a\rb", "a\u2028b", "a\u2029b", "a\r\nb"].map((s) => body.countBodyLinear(s).lines), [2, 2, 2, 2, 3]);
+    // validateBodyPure: seven boundary pairs through the real pure pipeline
+    const edges = vecs.filter((x) => x.name.startsWith("c_"));
+    expect("U AC30 7 below/at vectors pass validateBodyPure; 7 above → too_large", edges.map((x) => { const r = body.validateBodyPure(x.md()); return r.ok ? "ok" : r.code; }), edges.map((x) => (x.v === "pass" ? "ok" : "too_large")));
+    const h = vecs.filter((x) => x.name.startsWith("h"));
+    expect("U (ix) B-3 / CRLF family through validateBodyPure", h.map((x) => { const r = body.validateBodyPure(x.md()); return r.ok ? "ok" : r.code; }), h.map((x) => (x.v === "pass" ? "ok" : "too_large")));
+    // scan time ≤ 20 ms target, FAIL > 50 ms (median of 5) at 200,000 chars
+    const real200 = realBody6(200000, { line: 600, bold: 300, link: 1000, ital: 600, seed: 203 });
+    const ms: number[] = [];
+    for (let k = 0; k < 5; k++) {
+      const t0 = performance.now();
+      body.precheckBodyLinear(real200);
+      ms.push(performance.now() - t0);
+    }
+    const hms: number[] = [];
+    for (const x of h) {
+      const s = x.md();
+      const t0 = performance.now();
+      body.validateBodyPure(s);
+      hms.push(performance.now() - t0);
+    }
+    obs6("U 1b scan ms (real 200k, median of 5; B-3 max)", { real200k: Math.round(median(ms) * 100) / 100, b3max: Math.round(Math.max(...hms) * 100) / 100 });
+    expect("U 1b scan at 200,000 chars ≤ 50 ms (target ≤ 20) and each B-3 vector ≤ 20 ms", [median(ms) <= 50, Math.max(...hms) <= 20], [true, true]);
+  }
+
+  // ── validateBodyPure order (size → C0 → surrogate → trim → empty → W run → 1b → ![ → link) ──
+  {
+    const r = (s: string) => {
+      const v = body.validateBodyPure(s);
+      return v.ok ? `ok:${v.body.length}` : v.code;
+    };
+    expect("U validateBodyPure frozen order", [
+      r(rep("a", 200001)), r("a\u0000b"), r("a\ud800b"), r(rep("\u00a0", 300)), r("](" + rep("\u00a0", 257) + "x)"), r("](" + rep("\u00a0", 257)),
+      r("](" + rep(" ", 256) + "x)"), r("Bài.\n" + rep("\n", 300)), r("Bài.\n" + rep("\n", 300) + "Tiếp."), r(rep("\u000b", 300)), r(rep("\u0001", 300)),
+      r("![a](b)"), r("[a](javascript:x)"), r(rep("a", 200000)),
+    ], [
+      "too_large", "c0", "surrogate", "ok:0", "ws_run", "ok:2",
+      "ok:260", "ok:4", "ws_run", "c0", "c0",
+      "image", "link", "ok:200000",
+    ]);
+  }
+
+  // ── convertBodyGuarded with injected converters (S4-2, M20, M24, M26, M28, E13) ──
+  {
+    const lexOf = (text: string) => ({ root: { type: "root", children: [{ type: "paragraph", children: [{ type: "text", text, format: 0 }] }] } });
+    const g = (deps: Partial<{ toLexical: (m: string) => unknown; toMarkdown: (l: unknown) => string }>, md = "x", T = 1500) => {
+      const r = body.convertBodyGuarded(editorConfig, md, T, deps as never);
+      return r.ok ? "ok" : r.reason;
+    };
+    expect("U M20 step (6): exporter → ](+LF+1,024 spaces+- x ⇒ ws_run; → [x](javascript:…) ⇒ link; → '' ⇒ node; throws ⇒ node; clean ⇒ ok", [
+      g({ toLexical: () => lexOf("x"), toMarkdown: () => "](\n" + rep(" ", 1024) + "- x" }),
+      g({ toLexical: () => lexOf("x"), toMarkdown: () => "[x](javascript:alert(1))" }),
+      g({ toLexical: () => lexOf("x"), toMarkdown: () => "" }),
+      g({ toLexical: () => lexOf("x"), toMarkdown: () => { throw new Error("boom"); } }),
+      g({ toLexical: () => lexOf("x"), toMarkdown: () => "x" }),
+    ], ["ws_run", "link", "node", "node", "ok"]);
+    expect("U E13 toLexical throws ⇒ node (not 500); err.code other than timeout ⇒ node", [
+      g({ toLexical: () => { throw new RangeError("x"); }, toMarkdown: () => "x" }),
+      g({ toLexical: () => { throw Object.assign(new Error("y"), { code: "ERR_OTHER" }); }, toMarkdown: () => "x" }),
+    ], ["node", "node"]);
+    let n = 0;
+    expect("U M24 gate F: md2 !== md1 ⇒ unstable", g({ toLexical: (m) => lexOf(m), toMarkdown: () => `m${n++}` }), "unstable");
+    const tree9001 = { root: { type: "root", children: Array.from({ length: 9001 }, () => ({ type: "linebreak" })) } };
+    expect("U M26 injected tree > 9,000 nodes ⇒ node", g({ toLexical: () => tree9001, toMarkdown: () => "x" }), "node");
+    // (vii-b) M28: lex1 ≠ lex2 but md2 === md1 ⇒ the STORED tree is lex2
+    let calls = 0;
+    const r28 = body.convertBodyGuarded(editorConfig, "x", 1500, { toLexical: () => (calls++ === 0 ? lexOf("first") : lexOf("second")), toMarkdown: () => "same" } as never);
+    expect("U M28 stored tree = lex2 (second import)", r28.ok ? (((r28.lexical as Doc).root as Doc).children as Doc[])[0]!.children : r28, [{ type: "text", text: "second", format: 0 }]);
+    const star = body.convertBodyGuarded(editorConfig, "The **Grand** is a 5* hotel with *great* views.");
+    expect("U M28 real `5*` sentence ⇒ ok and the stored lexical is round-trip safe", [star.ok, star.ok && body.isRoundTripSafeBody(editorConfig, star.lexical)], [true, true]);
+    if (star.ok) obs6("U `5*` md1 (OBS only, gap hub-p5-1-importer-misparses-lone-emphasis-markers)", star.markdownOut);
+  }
+
+  // ── (v) the vm timeout error is NOT `instanceof Error` and still maps to too_slow; (vi) round trip times out ⇒ false ──
+  {
+    let err: unknown;
+    try {
+      body.runWithHardTimeout(() => {
+        for (;;) {
+          /* spin */
+        }
+      }, null, 50);
+    } catch (e) {
+      err = e;
+    }
+    const code = (err as { code?: unknown } | undefined)?.code;
+    expect("U (v) vm timeout: err.code === ERR_SCRIPT_EXECUTION_TIMEOUT, err instanceof Error === false, isVmTimeoutError true", [code, err instanceof Error, body.isVmTimeoutError(err)], ["ERR_SCRIPT_EXECUTION_TIMEOUT", false, true]);
+    const spin = (): never => {
+      for (;;) {
+        /* spin */
+      }
+    };
+    expect("U (vi) isRoundTripSafeBody with a never-ending importer (T = 50) ⇒ false", body.isRoundTripSafeBody(editorConfig, { root: { type: "root", children: [{ type: "paragraph", children: [{ type: "text", text: "a" }] }] } }, 50, { toLexical: spin, toMarkdown: () => "a" }), false);
+  }
+
+  // ── (i) M25: the hard guard in a CHILD process (outer timeout ≥ 30 s, SIGKILL, PID orphan check) ──
+  {
+    const t0 = performance.now();
+    const child = spawnSync(process.execPath, ["--import", "tsx", "scripts/hub-probe.ts", "--guard-child"], {
+      encoding: "utf8",
+      timeout: 60_000,
+      killSignal: "SIGKILL",
+      env: process.env,
+      maxBuffer: 1 << 20,
+    });
+    const wall = Math.round(performance.now() - t0);
+    let line: Doc = {};
+    try {
+      line = JSON.parse((child.stdout ?? "").trim().split("\n").filter((l) => l.startsWith("{")).pop() ?? "{}") as Doc;
+    } catch {
+      line = {};
+    }
+    let orphan = true;
+    try {
+      if (child.pid) process.kill(child.pid, 0);
+    } catch (e) {
+      orphan = (e as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+    obs6("U (i) guard child", { status: child.status, signal: child.signal, wallMs: wall, line });
+    expect("U (i) M25 never-ending importer, T = 100 ⇒ too_slow within T + 100 ms; next call ok; child exited 0; no orphan (kill -0 ⇒ ESRCH)", [line.first, typeof line.ms === "number" && (line.ms as number) <= 200, line.second, child.status, orphan], ["too_slow", true, "ok", 0, false]);
+  }
+
+  // ── (viii) TEXT scans (OQ35 / OQ43 / OQ54 / E23 / N19) ──
+  {
+    const read = (p: string) => readFileSync(p, "utf8");
+    const routes = walkFiles("src/app/api/hub/articles").filter((p) => p.endsWith("/route.ts"));
+    const edge = routes.filter((p) => /export\s+const\s+runtime\s*=\s*['"](experimental-)?edge['"]/.test(read(p)));
+    const authorLibs = walkFiles("src/lib").filter((p) => /\/hub-author-[a-z-]+\.ts$/.test(p));
+    const edgeLibs = authorLibs.filter((p) => /export\s+const\s+runtime\s*=/.test(read(p)));
+    expect("U (viii-a) no Edge runtime in any route.ts under src/app/api/hub/articles nor in hub-author-*.ts", [routes.length >= 3, edge, edgeLibs], [true, [], []]);
+    const srcFiles = walkFiles("src").filter((p) => /\.(ts|tsx|js|mjs)$/.test(p));
+    const vmFiles = srcFiles.filter((p) => /from ['"](node:)?vm['"]|require\(['"](node:)?vm['"]\)/.test(read(p)));
+    expect("U (viii-b) exactly ONE file imports vm: src/lib/hub-author-body.ts", vmFiles, ["src/lib/hub-author-body.ts"]);
+    const coreText = read("src/lib/hub-author-convert-core.ts");
+    const forbidden = coreText.match(/\b(await|async|Promise|setTimeout|setInterval|setImmediate|nextTick|queueMicrotask)\b/g) ?? [];
+    expect("U (viii-c) core file: non-empty, exports convertCore (plain function), no async word anywhere (comments included), no vm / read-regex import", [
+      coreText.length > 1000, /export function convertCore\(/.test(coreText), /export async function convertCore/.test(coreText), forbidden,
+      /from ['"](node:)?vm['"]/.test(coreText), /countDangerousLinkTargets/.test(coreText),
+    ], [true, true, false, [], false, false]);
+    const bodyText = read("src/lib/hub-author-body.ts");
+    expect("U (viii-d) body file: script is exactly \"fn(a)\", runInNewContext(VM_SCRIPT…), no Promise.race / setTimeout (comments included), no read-path regex / body converter import", [
+      body.VM_SCRIPT, /runInNewContext\(VM_SCRIPT, \{ fn, a: arg \}, \{ timeout: timeoutMs \}\)/.test(bodyText), (bodyText.match(/Promise\.race|setTimeout/g) ?? []).length,
+      /countDangerousLinkTargets|hubArticleBodyToMarkdown/.test(bodyText),
+    ], ["fn(a)", true, 0, false]);
+    const coreUsers = srcFiles.filter((p) => /\bconvertCore\b/.test(read(p)));
+    expect("U (iv) `convertCore` appears only in the core file and hub-author-body.ts", coreUsers, ["src/lib/hub-author-body.ts", "src/lib/hub-author-convert-core.ts"]);
+    // async_hooks: running convertCore with synchronous fakes creates 0 async resources; positive control ≥ 1.
+    const lexOf = (text: string) => ({ root: { type: "root", children: [{ type: "paragraph", children: [{ type: "text", text, format: 0 }] }] } });
+    let created = 0;
+    const hook = createHook({ init: () => { created++; } });
+    hook.enable();
+    const res = core.convertCore({ md: "x", toLexical: () => lexOf("x"), toMarkdown: () => "x" });
+    const rt = core.roundTripCore({ lexical: lexOf("x"), toLexical: () => lexOf("x"), toMarkdown: () => "x" });
+    hook.disable();
+    const coreCreated = created;
+    created = 0;
+    hook.enable();
+    void Promise.resolve(1);
+    hook.disable();
+    expect("U (viii-c) async_hooks: convertCore + roundTripCore create 0 async resources (control ≥ 1); results are not thenable", [coreCreated, created >= 1, typeof (res as { then?: unknown }).then, typeof rt], [0, true, "undefined", "boolean"]);
+  }
+
+  // ── (xi) route wrappers: POST takes one parameter, PATCH two, production never passes deps ──
+  {
+    const listRoute = await import("../src/app/api/hub/articles/route");
+    const idRoute = await import("../src/app/api/hub/articles/[id]/route");
+    const srcFiles = walkFiles("src").filter((p) => /\.(ts|tsx)$/.test(p));
+    const withUsers = srcFiles.filter((p) => /handleHubDraft(Create|Update)With\(/.test(readFileSync(p, "utf8")));
+    const listText = readFileSync("src/app/api/hub/articles/route.ts", "utf8");
+    const idText = readFileSync("src/app/api/hub/articles/[id]/route.ts", "utf8");
+    expect("U (xi) POST.length === 1, PATCH.length === 2, maxDuration 30 on both, wrappers call the lib without deps", [
+      listRoute.POST.length, idRoute.PATCH.length, listRoute.maxDuration, idRoute.maxDuration,
+      /export const POST = \(request: Request\) => handleHubDraftCreate\(request\);/.test(listText),
+      /export const PATCH = \(request: Request, ctx: \{ params: Promise<\{ id: string \}> \}\) => handleHubDraftUpdate\(request, ctx\);/.test(idText),
+    ], [1, 2, 30, 30, true, true]);
+    expect("U (xi) `handleHubDraft(Create|Update)With(` only in hub-author-handlers.ts (text scan — names only, N18)", withUsers, ["src/lib/hub-author-handlers.ts"]);
+  }
+
+  // ── (xii) URL check on lex1 with the REAL converters (OQ50 / M29 / E31) ──
+  expect("U (xii) eight exotic-scheme URLs ⇒ url (not ok with https://)", D2_URLS.map((u) => { const r = body.convertBodyGuarded(editorConfig, u); return r.ok ? `ok:${r.markdownOut}` : r.reason; }), D2_URLS.map(() => "url"));
+
+  // ── gate F (D25) vectors with the real converters (fast, no HTTP) ──
+  {
+    const r = (s: string) => {
+      const x = body.convertBodyGuarded(editorConfig, s);
+      return x.ok ? "ok" : x.reason;
+    };
+    const unstable = ["***x***", "**_x_**", "*__x__*", "_**x**_", "a\\b", "C:\\Users\\a\\b", "a \\ b", "\\|", "\\<", "\\[", "\\#", "\\.", "\\$", "\\\\", "a\\"];
+    const stable = ["**đậm** *nghiêng*", "*nghiêng **đậm** nghiêng*", "**đậm *nghiêng* đậm**", "a *b **c** d* e", "\\*", "\\_", "\\~", "\\`", "5\\* hotel", "_x_", "__x__", "snake\\_case"];
+    expect("U gate F: the measured `unstable` list", unstable.map(r), unstable.map(() => "unstable"));
+    expect("U gate F: the controls pass", stable.map(r), stable.map(() => "ok"));
+  }
+
+  // ── parseCreateBody / parseUpdateBody (AC3, AC4, AC7 pure part) ──
+  {
+    const base = () => ({ tenant: "dtw", title: "Tiêu đề", pillarSlug: "p", authorId: 3, actor: { email: "a@b.co", role: "editor" } }) as Doc;
+    const pc = (o: Doc) => input.parseCreateBody(o);
+    const fields = (r: ReturnType<typeof pc>) => (r.ok ? "ok" : r.status === 422 ? (r.body.fields as Doc) : `${r.status}:${(r.body as Doc).reason}`);
+    expect("U parse 400s: not an object / array / tenant missing / tenant not a string / blank", [
+      fields(pc(null as unknown as Doc)), fields(pc([] as unknown as Doc)), fields(pc({ title: "x" })), fields(pc({ ...base(), tenant: 5 })), fields(pc({ ...base(), tenant: "  " })),
+    ], ["400:body must be a JSON object", "400:body must be a JSON object", "400:tenant is required", "400:tenant is required", "400:tenant is required"]);
+    const forbiddenKeys = ["exclusive", "translationAssisted", "workflowStatus", "_status", "origin", "publishedAt", "scheduledFor", "engineDraftId", "version", "id", "heroImage", "body", "pinnedToLatest", "pinnedUntil", "expectedVersion"];
+    expect("U parse K: every forbidden root key ⇒ 400 unknown field(s): <key>", forbiddenKeys.map((k) => fields(pc({ ...base(), [k]: true }))), forbiddenKeys.map((k) => `400:unknown field(s): ${k}`));
+    const proto = JSON.parse('{"tenant":"dtw","__proto__":{"x":1},"flags":{"__proto__":true,"exclusive":true,"pinnedToLatest":true}}') as Doc;
+    expect("U parse K: __proto__ (root + flags), flags.exclusive / pinnedToLatest ⇒ 400 with prefixes", fields(pc(proto)), "400:unknown field(s): __proto__, flags.__proto__, flags.exclusive, flags.pinnedToLatest");
+    expect("U parse K: actor / secondary unknown keys get prefixes", fields(pc({ ...base(), actor: { email: "a@b.co", role: "editor", x: 1 }, secondary: [{ pillarSlug: "q", y: 2 }] })), "400:unknown field(s): actor.x, secondary[0].y");
+    const thousand: Doc = { ...base() };
+    for (let i = 0; i < 1000; i++) thousand[`k${i}_${rep("z", 70)}`] = 1;
+    const r1000 = pc(thousand);
+    const reason1000 = r1000.ok ? "" : String(r1000.body.reason);
+    expect("U parse K: 1,000 unknown keys ⇒ ONE 400, ≤ 20 keys, each cut to 64 chars, ends ', …'", [r1000.ok ? 0 : r1000.status, reason1000.replace("unknown field(s): ", "").replace(/, …$/, "").split(", ").length, reason1000.endsWith(", …"), reason1000.split(", ")[1]!.length], [400, 20, true, 64]);
+    // 422 type / ranges
+    expect("U parse types: flags.breaking 'false' ⇒ type; authorId '12' / 1.5 / 1e21 ⇒ type; 2147483648 / -1 / 0 ⇒ out_of_range", [
+      fields(pc({ ...base(), flags: { breaking: "false" } })),
+      ...["12", 1.5, 1e21].map((x) => fields(pc({ ...base(), authorId: x }))),
+      ...[PG_INT4_MAX + 1, -1, 0].map((x) => fields(pc({ ...base(), authorId: x }))),
+      fields(pc({ ...base(), coAuthorIds: [1, "2"] })),
+    ], [{ "flags.breaking": "type" }, { authorId: "type" }, { authorId: "type" }, { authorId: "type" }, { authorId: "out_of_range" }, { authorId: "out_of_range" }, { authorId: "out_of_range" }, { coAuthorIds: "type" }]);
+    let nest: unknown = "x";
+    for (let i = 0; i < 100000; i++) nest = [nest];
+    let nestObj: unknown = 1;
+    for (let i = 0; i < 100000; i++) nestObj = { a: nestObj };
+    expect("U parse: 100,000-level nesting under takeaways / flags.breaking / secondary ⇒ 422 type at the first level (no RangeError)", [
+      fields(pc({ ...base(), takeaways: [nest] })), fields(pc({ ...base(), flags: { breaking: nestObj } })), fields(pc({ ...base(), secondary: [{ pillarSlug: nest }] })),
+    ], [{ takeaways: "type" }, { "flags.breaking": "type" }, { "secondary[0].pillarSlug": "type" }]);
+    expect("U parse: nesting under an UNKNOWN key ⇒ 400 unknown field(s)", fields(pc({ ...base(), deep: nestObj })), "400:unknown field(s): deep");
+    // limits / too_many (E1)
+    const s = (n: number) => rep("a", n);
+    expect("U parse limits: title 300 ok / 301 too_long; dek 600 / 601; sponsor 120 / 121", [
+      fields(pc({ ...base(), title: s(300) })), fields(pc({ ...base(), title: s(301) })), fields(pc({ ...base(), dek: s(600) })), fields(pc({ ...base(), dek: s(601) })),
+      fields(pc({ ...base(), sponsor: s(120) })), fields(pc({ ...base(), sponsor: s(121) })),
+    ], ["ok", { title: "too_long" }, "ok", { dek: "too_long" }, "ok", { sponsor: "too_long" }]);
+    const arr = (n: number, f: (i: number) => unknown) => Array.from({ length: n }, (_, i) => f(i));
+    expect("U E1 too_many: tagSlugs 21, coAuthorIds 11, secondary 6, countrySlugs 11, citySlugs 11, takeaways 6", [
+      fields(pc({ ...base(), tagSlugs: arr(21, (i) => `t${i}`) })), fields(pc({ ...base(), coAuthorIds: arr(11, (i) => i + 1) })),
+      fields(pc({ ...base(), secondary: arr(6, (i) => ({ pillarSlug: `s${i}` })) })), fields(pc({ ...base(), countrySlugs: arr(11, (i) => `c${i}`) })),
+      fields(pc({ ...base(), citySlugs: arr(11, (i) => `y${i}`) })), fields(pc({ ...base(), takeaways: arr(6, (i) => `k${i}`) })),
+    ], [{ tagSlugs: "too_many" }, { coAuthorIds: "too_many" }, { secondary: "too_many" }, { countrySlugs: "too_many" }, { citySlugs: "too_many" }, { takeaways: "too_many" }]);
+    const dedup = pc({ ...base(), tagSlugs: ["a", "b", "a"], coAuthorIds: [5, 5, 6], countrySlugs: arr(25, () => "vn") });
+    expect("U parse: arrays de-duplicated silently, order kept", dedup.ok ? [dedup.value.tagSlugs, dedup.value.coAuthorIds, dedup.value.countrySlugs] : dedup, [["a", "b"], [5, 6], ["vn"]]);
+    // characters
+    expect("U parse chars: NUL in title / dek / takeaways / body / sponsor / slug / actor.email ⇒ c0; bidi in title / dek / sponsor ⇒ bidi; lone surrogate ⇒ surrogate; takeaways newline ⇒ newline", [
+      fields(pc({ ...base(), title: "a\u0000" })), fields(pc({ ...base(), dek: "a\u0001" })), fields(pc({ ...base(), takeaways: ["a\u0002"] })), fields(pc({ ...base(), bodyMarkdown: "a\u0000" })),
+      fields(pc({ ...base(), sponsor: "a\u001f" })), fields(pc({ ...base(), slug: "a\u0000" })), fields(pc({ ...base(), actor: { email: "a\u0000@b.co", role: "editor" } })),
+      fields(pc({ ...base(), title: "a\u202e" })), fields(pc({ ...base(), dek: "a\u2066" })), fields(pc({ ...base(), sponsor: "a\u202a" })),
+      fields(pc({ ...base(), title: "a\ud800" })), fields(pc({ ...base(), bodyMarkdown: "a\udc00" })), fields(pc({ ...base(), takeaways: ["a\nb"] })),
+    ], [
+      { title: "c0" }, { dek: "c0" }, { takeaways: "c0" }, { bodyMarkdown: "c0" }, { sponsor: "c0" }, { slug: "c0" }, { "actor.email": "c0" },
+      { title: "bidi" }, { dek: "bidi" }, { sponsor: "bidi" }, { title: "surrogate" }, { bodyMarkdown: "surrogate" }, { takeaways: "newline" },
+    ]);
+    // slug
+    const derived = pc({ ...base(), title: "Đà Nẵng đẹp" });
+    expect("U parse slug: derived from title when absent (slugify; Đ dropped); title of only 'Đ' ⇒ slug required; '' ⇒ required; bad shape ⇒ format; 97 ⇒ too_long", [
+      derived.ok ? derived.value.slug : derived, fields(pc({ ...base(), title: "Đ" })), fields(pc({ ...base(), slug: "" })), fields(pc({ ...base(), slug: "A b" })), fields(pc({ ...base(), slug: rep("a", 97) })),
+    ], ["a-nang-ep", { slug: "required" }, { slug: "required" }, { slug: "format" }, { slug: "too_long" }]);
+    // readMin, required, actor, sponsor, secondary
+    expect("U parse readMin: 0 / 121 ⇒ out_of_range, '5' ⇒ type, 1 / 120 ok", [fields(pc({ ...base(), readMin: 0 })), fields(pc({ ...base(), readMin: 121 })), fields(pc({ ...base(), readMin: "5" })), fields(pc({ ...base(), readMin: 1 })), fields(pc({ ...base(), readMin: 120 }))], [{ readMin: "out_of_range" }, { readMin: "out_of_range" }, { readMin: "type" }, "ok", "ok"]);
+    expect("U parse required (create): title, pillarSlug, authorId, actor", fields(pc({ tenant: "dtw" })), { title: "required", pillarSlug: "required", authorId: "required", actor: "required" });
+    expect("U parse actor: email 255 ⇒ too_long, 'ab' ⇒ format, 'a@@b.c' ⇒ format, role 'viewer' ⇒ format, id 65 ⇒ too_long, actor 'x' ⇒ type", [
+      fields(pc({ ...base(), actor: { email: rep("a", 250) + "@b.co", role: "editor" } })), fields(pc({ ...base(), actor: { email: "ab", role: "editor" } })),
+      fields(pc({ ...base(), actor: { email: "a@@b.c", role: "editor" } })), fields(pc({ ...base(), actor: { email: "a@b.co", role: "viewer" } })),
+      fields(pc({ ...base(), actor: { email: "a@b.co", role: "editor", id: rep("i", 65) } })), fields(pc({ ...base(), actor: "x" })),
+    ], [{ "actor.email": "too_long" }, { "actor.email": "format" }, { "actor.email": "format" }, { "actor.role": "format" }, { "actor.id": "too_long" }, { actor: "type" }]);
+    expect("U parse sponsor required when flags.sponsored (create); secondary duplicate / contains the primary pillar", [
+      fields(pc({ ...base(), flags: { sponsored: true } })), fields(pc({ ...base(), flags: { sponsored: true }, sponsor: "Acme" })),
+      fields(pc({ ...base(), secondary: [{ pillarSlug: "q" }, { pillarSlug: "q" }] })), fields(pc({ ...base(), secondary: [{ pillarSlug: "p" }] })),
+    ], [{ sponsor: "required" }, "ok", { secondary: "duplicate" }, { secondary: "duplicate" }]);
+    expect("U parse: several fields of one tier in ONE 422 (N7)", fields(pc({ ...base(), title: s(301), bodyMarkdown: "![a](b)", pillarSlug: "zzz-unknown" })), { title: "too_long", bodyMarkdown: "image" });
+    const full = pc({ ...base(), bodyMarkdown: "  x  ", takeaways: [" a ", ""], flags: { breaking: true }, dek: "  ", subSectionSlug: null });
+    expect("U parse value: body W-trimmed, takeaways trimmed + empties dropped, blank dek ⇒ null, present keys in order", full.ok ? [full.value.bodyMarkdown, full.value.takeaways, full.value.dek, full.value.present] : full, ["x", ["a"], null, ["title", "pillarSlug", "authorId", "bodyMarkdown", "takeaways", "flags", "dek", "subSectionSlug"]]);
+    const pu = (o: Doc) => input.parseUpdateBody(o);
+    expect("U parseUpdateBody: expectedVersion required / type / out_of_range; tenant + actor only is valid", [
+      fields(pu({ tenant: "dtw", actor: { email: "a@b.co", role: "admin" } })), fields(pu({ tenant: "dtw", actor: { email: "a@b.co", role: "admin" }, expectedVersion: "1" })),
+      fields(pu({ tenant: "dtw", actor: { email: "a@b.co", role: "admin" }, expectedVersion: 0 })), fields(pu({ tenant: "dtw", actor: { email: "a@b.co", role: "admin" }, expectedVersion: 3 })),
+    ], [{ expectedVersion: "required" }, { expectedVersion: "type" }, { expectedVersion: "out_of_range" }, "ok"]);
+    expect("U parseUpdateBody: null clears dek / sponsor / subSectionSlug; null title ⇒ type", [
+      (() => { const r = pu({ tenant: "dtw", actor: { email: "a@b.co", role: "admin" }, expectedVersion: 1, dek: null, sponsor: null, subSectionSlug: null }); return r.ok ? [r.value.dek, r.value.sponsor, r.value.subSectionSlug] : r; })(),
+      fields(pu({ tenant: "dtw", actor: { email: "a@b.co", role: "admin" }, expectedVersion: 1, title: null })),
+    ], [[null, null, null], { title: "type" }]);
+    expect("U parse: unknownFieldsReason cut format", input.unknownFieldsReason(["a", "b"]), "unknown field(s): a, b");
+  }
+
+  // ── mapWriteError (M16) ──
+  expect("U M16 mapWriteError: ValidationError ⇒ 422 invalid (paths, never the message); class 22 ⇒ 422; class 23 / slug hook ⇒ 409; other ⇒ 500", [
+    handlers.mapWriteError({ name: "ValidationError", message: "secret text", data: { errors: [{ path: "pillar", message: "x" }, { path: "secondarySections.0.pillar", message: "y" }] } }),
+    handlers.mapWriteError({ name: "DatabaseError", code: "22P02" }),
+    handlers.mapWriteError({ name: "Error", cause: { code: "23505" } }),
+    handlers.mapWriteError(new Error('slug "x" already exists for this tenant. Choose a unique slug.')),
+    handlers.mapWriteError(new TypeError("boom")),
+  ], [
+    { kind: "invalid", status: 422, fields: { pillar: "invalid", "secondarySections.0.pillar": "invalid" } },
+    { kind: "invalid", status: 422, fields: {} },
+    { kind: "slug_conflict", status: 409 },
+    { kind: "slug_conflict", status: 409 },
+    { kind: "internal", status: 500, name: "TypeError" },
+  ]);
+  expect("U estimateReadMin: empty ⇒ 1, 220 words ⇒ 1, 2,200 ⇒ 10, 40,000 ⇒ 120 (clamped)", [handlers.estimateReadMin(""), handlers.estimateReadMin(rep("w ", 220)), handlers.estimateReadMin(rep("w ", 2200)), handlers.estimateReadMin(rep("w ", 40000))], [1, 1, 10, 120]);
+
+  // ── parseKinds / hubBlock / isHubArticleId reuse ──
+  expect("U parseKinds: absent ⇒ pillars+authors (unchanged); new kinds accepted in fixed order; unknown ⇒ 400 reason", [
+    query.parseKinds(null), query.parseKinds("cities,tags,pillars"), query.parseKinds("subsections,countries"), query.parseKinds("foo,tags"),
+  ], [
+    { ok: true, kinds: ["pillars", "authors"] }, { ok: true, kinds: ["pillars", "tags", "cities"] }, { ok: true, kinds: ["subsections", "countries"] }, { ok: false, reason: "unknown kind", values: ["foo"] },
+  ]);
+  {
+    const docs = Array.from({ length: 4 }, (_, i) => ({ id: i + 1, slug: `s${i}` }));
+    const sani = (d: Doc) => ({ id: d.id });
+    expect("U hubBlock: cut to cap + truncated; under cap not truncated; disabledBlock shape", [
+      blocks.hubBlock(docs, 10, 3, sani), blocks.hubBlock(docs.slice(0, 2), 2, 3, sani), blocks.disabledBlock(),
+    ], [
+      { items: [{ id: 1 }, { id: 2 }, { id: 3 }], count: 3, totalDocs: 10, truncated: true }, { items: [{ id: 1 }, { id: 2 }], count: 2, totalDocs: 2, truncated: false }, { items: [], count: 0, totalDocs: 0, truncated: false, disabled: true },
+    ]);
+  }
+  expect("U isHubArticleId reused (int4)", ["1", "2147483647", "2147483648", "01", "-1"].map(isHubArticleId), [true, true, false, false, false]);
+
+  // ── isHubAuthoredDoc (pure lookup with a fake) ──
+  {
+    const fp = fakePayload6({ engines: { "7": { id: 7, hubAuthor: true }, "8": { id: 8, hubAuthor: false }, "9": { id: 9, hubAuthor: null } } });
+    const r = await Promise.all([
+      authM.isHubAuthoredDoc(fp as never, { lastEngine: 7 }), authM.isHubAuthoredDoc(fp as never, { lastEngine: { id: 7 } }), authM.isHubAuthoredDoc(fp as never, { lastEngine: 8 }),
+      authM.isHubAuthoredDoc(fp as never, { lastEngine: 9 }), authM.isHubAuthoredDoc(fp as never, { lastEngine: null }), authM.isHubAuthoredDoc(fp as never, { lastEngine: 404 }),
+    ]);
+    expect("U isHubAuthoredDoc: hubAuthor true (id / populated) ⇒ true; false / NULL / no engine / missing ⇒ false", r, [true, true, false, false, false, false]);
+  }
+
+  // ── findSlugConflict: the draft lookup ALWAYS carries the tenant clause (M21, E16) ──
+  {
+    const fp = fakePayload6({
+      finds: (a) => {
+        const where = JSON.stringify(a.where);
+        if (a.draft === true && where.includes('"tenant":{"equals":2}') && where.includes('"slug":{"equals":"y"}')) return [{ id: 77 }];
+        if (a.draft === true && where.includes('"tenant":{"equals":1}') && where.includes('"slug":{"equals":"self"}')) return [{ id: 5 }];
+        return [];
+      },
+    });
+    const otherTenant = await refs.findSlugConflict({ payload: fp as never, tenantId: 1, slug: "y" });
+    const self = await refs.findSlugConflict({ payload: fp as never, tenantId: 1, slug: "self", excludeId: 5 });
+    const hit = await refs.findSlugConflict({ payload: fp as never, tenantId: 2, slug: "y" });
+    const draftCalls = fp.calls.filter((c) => c.op === "find" && c.args.draft === true);
+    const allHaveTenant = draftCalls.every((c) => JSON.stringify(c.args.where).includes('"tenant":{"equals":'));
+    const mainCalls = fp.calls.filter((c) => c.op === "find" && c.args.draft !== true);
+    expect("U M21 findSlugConflict: draft lookup has {tenant:{equals:T}} every time; other tenant's draft slug ⇒ null (no leak); itself excluded by id; same tenant ⇒ {id}", [
+      allHaveTenant, draftCalls.length, mainCalls.every((c) => JSON.stringify(c.args.where).includes('"tenant":{"equals":')), otherTenant, self, hit,
+    ], [true, 3, true, null, null, { id: 77 }]);
+  }
+
+  // ── handler seams (vii-c AC29 handler, M22 E7, E22 getPayload) ──
+  {
+    const tenantDoc = { id: 1, slug: "dtw", status: "active", defaultLanguage: "en", features: { articles: true } };
+    const okAuth = (async () => ({ ok: true, engine: { id: 7, name: "author", status: "active", hubRead: true, hubAuthor: true }, tenants: [{ id: 1, slug: "dtw" }] })) as never;
+    const finds = (a: Doc) => {
+      if (a.collection === "pillars") return [{ id: 11, slug: "p" }];
+      if (a.collection === "authors") return [{ id: 3 }];
+      return [];
+    };
+    const req = (method: string, b: unknown) => new Request("http://localhost/api/hub/articles", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
+    const actor = { email: "a@b.co", role: "editor" };
+    // POST + convert ⇒ too_slow
+    const fp = fakePayload6({ tenant: tenantDoc, finds });
+    const res = await handlers.handleHubDraftCreateWith(req("POST", { tenant: "dtw", title: "T", pillarSlug: "p", authorId: 3, actor, bodyMarkdown: "hello" }), {
+      getPayload: async () => fp as never,
+      authenticate: okAuth,
+      convert: async () => ({ ok: false, reason: "too_slow", error: { name: "Error", code: "ERR_SCRIPT_EXECUTION_TIMEOUT" } }),
+    });
+    const rb = await res.json();
+    const creates = fp.calls.filter((c) => c.op === "create").length;
+    const updates = fp.calls.filter((c) => c.op === "update").length;
+    const logClean = fp.logs.every((l) => !l.includes("hello")) && fp.logs.some((l) => l.includes("reason=too_slow") && l.includes("code=ERR_SCRIPT_EXECUTION_TIMEOUT"));
+    expect("U (vii-c) handler + convert too_slow ⇒ 422 fields.bodyMarkdown = too_slow; 0 create (incl. ActivityLog / integration_error), 0 update; log = reason + name + code only", [res.status, rb, creates, updates, logClean], [422, { ok: false, status: "invalid", reason: "one or more fields are invalid", fields: { bodyMarkdown: "too_slow" } }, 0, 0, true]);
+    // PATCH: main row turns published between the gate read and the write ⇒ 422 not_editable status (M22)
+    const draftDoc = { id: 5, tenant: 1, origin: "manual", workflowStatus: "draft", version: 3, lastEngine: 7, title: "Old", pillar: 11 };
+    const fp2 = fakePayload6({ tenant: tenantDoc, finds, engines: { "7": { id: 7, hubAuthor: true } }, articles: { "5": { latest: draftDoc, main: draftDoc } } });
+    let mainReads = 0;
+    const res2 = await handlers.handleHubDraftUpdateWith(req("PATCH", { tenant: "dtw", actor, expectedVersion: 3, title: "New" }), { params: Promise.resolve({ id: "5" }) }, {
+      getPayload: async () => fp2 as never,
+      authenticate: okAuth,
+      findMain: async () => (mainReads++ === 0 ? draftDoc : { ...draftDoc, workflowStatus: "published" }),
+    });
+    expect("U M22 PATCH re-reads the main row right before the write: became published ⇒ 422 not_editable status, 0 update", [res2.status, await res2.json(), mainReads, fp2.calls.filter((c) => c.op === "update").length], [422, { ok: false, status: "not_editable", reason: "status" }, 2, 0]);
+    expect("U M22 assertStillEditable", [handlers.assertStillEditable(draftDoc), handlers.assertStillEditable({ ...draftDoc, workflowStatus: "published" }), handlers.assertStillEditable(null)], [{ ok: true }, { ok: false, reason: "status" }, { ok: false, reason: "status" }]);
+    // PATCH happy path through the seams: draft:true update, changed by request key, context hubAuthor fields
+    const fp3 = fakePayload6({ tenant: tenantDoc, finds, engines: { "7": { id: 7, hubAuthor: true } }, articles: { "5": { latest: draftDoc, main: draftDoc } } });
+    const res3 = await handlers.handleHubDraftUpdateWith(req("PATCH", { tenant: "dtw", actor, expectedVersion: 3, title: "New", dek: null }), { params: Promise.resolve({ id: "5" }) }, { getPayload: async () => fp3 as never, authenticate: okAuth });
+    const up = fp3.calls.find((c) => c.op === "update")?.args ?? {};
+    expect("U PATCH via seams: 200 changed [title]; update uses draft:true, forces draft, context.hubAuthor.fields = [title], disableRevalidate", [
+      res3.status, await res3.json(), up.draft, (up.data as Doc | undefined)?.workflowStatus, (up.data as Doc | undefined)?._status, ((up.context as Doc | undefined)?.hubAuthor as Doc | undefined)?.fields, (up.context as Doc | undefined)?.disableRevalidate,
+    ], [200, { ok: true, id: 5, tenant: "dtw", workflowStatus: "draft", version: 2, changed: ["title"] }, true, "draft", "draft", ["title"], true]);
+    // version conflict, not hub-authored, 404 shapes, 413, bad JSON — through seams
+    const res4 = await handlers.handleHubDraftUpdateWith(req("PATCH", { tenant: "dtw", actor, expectedVersion: 2, title: "N" }), { params: Promise.resolve({ id: "5" }) }, { getPayload: async () => fakePayload6({ tenant: tenantDoc, finds, engines: { "7": { id: 7, hubAuthor: true } }, articles: { "5": { latest: draftDoc, main: draftDoc } } }) as never, authenticate: okAuth });
+    const res5 = await handlers.handleHubDraftUpdateWith(req("PATCH", { tenant: "dtw", actor, expectedVersion: 3, title: "N" }), { params: Promise.resolve({ id: "5" }) }, { getPayload: async () => fakePayload6({ tenant: tenantDoc, finds, engines: { "7": { id: 7, hubAuthor: false } }, articles: { "5": { latest: draftDoc, main: draftDoc } } }) as never, authenticate: okAuth });
+    const res6 = await handlers.handleHubDraftUpdateWith(req("PATCH", { tenant: "dtw", actor, expectedVersion: 3 }), { params: Promise.resolve({ id: "2147483648" }) }, { getPayload: async () => fakePayload6({ tenant: tenantDoc }) as never, authenticate: okAuth });
+    const big = new Request("http://localhost/api/hub/articles", { method: "POST", body: rep("a", 1_000_001) });
+    const res7 = await handlers.handleHubDraftCreateWith(big, { getPayload: async () => fakePayload6({}) as never, authenticate: okAuth });
+    const res8 = await handlers.handleHubDraftCreateWith(new Request("http://localhost/api/hub/articles", { method: "POST", body: "{nope" }), { getPayload: async () => fakePayload6({}) as never, authenticate: okAuth });
+    const res9 = await handlers.handleHubDraftCreateWith(req("POST", { tenant: "wad", title: "T", pillarSlug: "p", authorId: 3, actor }), { getPayload: async () => fakePayload6({}) as never, authenticate: okAuth });
+    const res10 = await handlers.handleHubDraftCreateWith(req("POST", { tenant: "dtw", title: "T", pillarSlug: "p", authorId: 3, actor }), { getPayload: async () => fakePayload6({ tenant: { ...tenantDoc, features: { articles: false } } }) as never, authenticate: okAuth });
+    expect("U frozen bodies via seams: 409 version_conflict / 422 not_hub_authored / 404 int4 / 413 / 400 bad JSON / 403 tenant / 403 feature_disabled", [
+      [res4.status, await res4.json()], [res5.status, await res5.json()], [res6.status, await res6.json()], [res7.status, await res7.json()], [res8.status, await res8.json()], [res9.status, await res9.json()], [res10.status, await res10.json()],
+    ], [
+      [409, { ok: false, status: "version_conflict", reason: "article version changed", currentVersion: 3 }],
+      [422, { ok: false, status: "not_editable", reason: "not_hub_authored" }],
+      [404, { ok: false, status: "not_found", reason: "article not found for tenant" }],
+      [413, { ok: false, status: "too_large", reason: "request body exceeds 1000000 bytes" }],
+      [400, { ok: false, status: "bad_request", reason: "body must be valid JSON" }],
+      [403, { ok: false, status: "forbidden", reason: "tenant not in allowed scope", allowedTenants: ["dtw"] }],
+      [403, { ok: false, status: "feature_disabled", reason: "articles feature disabled for tenant" }],
+    ]);
+  }
+
+  // ── view=edit sanitizer + gate reasons ──
+  expect("U editableReasonOf + sanitizeHubArticleEdit(editable:false) has ONLY two keys", [
+    editSel.editableReasonOf({ origin: "engine", workflowStatus: "draft" }), editSel.editableReasonOf({ origin: "manual", workflowStatus: "published" }), editSel.editableReasonOf({ origin: "manual", workflowStatus: "draft" }),
+    editSel.sanitizeHubArticleEdit({ title: "x", origin: "manual" }, { bodyEditable: true, editable: false, editableReason: "status" }),
+  ], ["origin", "status", null, { editable: false, editableReason: "status" }]);
+  {
+    const e = editSel.sanitizeHubArticleEdit(
+      { origin: "manual", version: 4, pillar: { id: 1, slug: "p" }, subSection: null, secondarySections: [{ pillar: { slug: "q" }, subSection: { slug: "s" } }], tags: [{ slug: "t" }], countries: [{ slug: "vn" }], cities: [], author: { id: 3, name: "A" }, coAuthors: [4, { id: 5 }], breaking: true, exclusive: true, sponsor: null, lastEngine: { id: 9, tokenHash: "x" } },
+      { bodyEditable: true, editable: true, editableReason: "ok" },
+    );
+    expect("U sanitizeHubArticleEdit(editable:true): fresh object, slugs + ids, read-only flags, never lastEngine", e, {
+      origin: "manual", version: 4, editable: true, editableReason: "ok", bodyEditable: true, pillarSlug: "p", subSectionSlug: null, secondary: [{ pillarSlug: "q", subSectionSlug: "s" }],
+      tagSlugs: ["t"], countrySlugs: ["vn"], citySlugs: [], authorId: 3, coAuthorIds: [4, 5],
+      flags: { aiAssisted: false, breaking: true, sponsored: false, affiliate: false, deepDive: false, longHaul: false, pinnedToLatest: false, exclusive: true }, sponsor: null,
+    });
+  }
+}
+
+/** Hidden mode for the M25 unit (i): the never-ending importer under T = 100 ms, then a normal call. */
+async function guardChild6(): Promise<void> {
+  const body = await import("../src/lib/hub-author-body");
+  const lexOf = (text: string) => ({ root: { type: "root", children: [{ type: "paragraph", children: [{ type: "text", text, format: 0 }] }] } });
+  const t0 = performance.now();
+  const first = body.convertBodyGuarded({} as never, "x", 100, {
+    toLexical: () => {
+      for (;;) {
+        /* never ends */
+      }
+    },
+    toMarkdown: () => "x",
+  });
+  const ms = Math.round(performance.now() - t0);
+  const second = body.convertBodyGuarded({} as never, "x", 100, { toLexical: () => lexOf("x"), toMarkdown: () => "x" });
+  console.log(JSON.stringify({ first: first.ok ? "ok" : first.reason, ms, second: second.ok ? "ok" : second.reason }));
+  process.exit(0);
+}
+
+// ── --setup6 / --check6 (HTTP + Local API groups) ───────────────────────────
+
+const A6_ENGINES = {
+  author: "apcghub-cms6-author",
+  noauthor: "apcghub-cms6-noauthor",
+  nullauthor: "apcghub-cms6-nullauthor",
+  writeonly: "apcghub-cms6-writeonly",
+  limited: "apcghub-cms6-limited",
+} as const;
+type A6Key = keyof typeof A6_ENGINES;
+
+/** The frozen `--setup6 --out <file>` shape (Public Contracts §Cấu trúc `--setup6 --out`). */
+interface Setup6 {
+  version: 1;
+  base: string;
+  engines: Record<A6Key, { id: number; name: string; tokenFile: string }>;
+  tenants: Record<string, { id: number; articlesEnabled: boolean; citiesMap: boolean }>;
+  articles: Record<
+    "engine" | "published" | "manualDraftByCmsUser" | "manualDraftRelationBody" | "hubDraftPublishedThenSavedDraft",
+    { id: number; tenant: string; slug: string }
+  >;
+  fixtures: Record<string, { pillars: string[]; subsections: { slug: string; pillar: string }[]; tags: string[]; cities: string[]; countries: string[]; authors: number[] }>;
+  publicReadTokenFile: Record<string, string>;
+}
+
+const SETUP6_TENANTS = ["dtw", "gcv", "world-travel-brief"] as const;
+
+async function ensureBySlug6(payload: P, collection: "pillars" | "tags" | "cities", tenantId: number, slug: string, data: Doc): Promise<number> {
+  const found = (await payload.find({ collection, where: { and: [{ tenant: { equals: tenantId } }, { slug: { equals: slug } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as { id: number } | undefined;
+  if (found) return found.id;
+  return ((await payload.create({ collection, overrideAccess: true, context: { disableRevalidate: true }, data: { tenant: tenantId, slug, ...data } as never })) as unknown as { id: number }).id;
+}
+
+async function ensureSub6(payload: P, tenantId: number, pillarId: number, slug: string): Promise<number> {
+  const found = (await payload.find({ collection: "subsections", where: { and: [{ tenant: { equals: tenantId } }, { slug: { equals: slug } }, { pillar: { equals: pillarId } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as { id: number } | undefined;
+  if (found) return found.id;
+  return ((await payload.create({ collection: "subsections", overrideAccess: true, data: { tenant: tenantId, slug, title: slug, pillar: pillarId } as never })) as unknown as { id: number }).id;
+}
+
+async function setup6() {
+  assertLocalTargets();
+  const out = arg("out");
+  if (!out) throw new Error("--out <file> required (tokens go to <file>.<key>.token, never printed)");
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const tenants = await tenantsBySlug(payload);
+  const grant = SETUP6_TENANTS.map((s) => need(tenants, s));
+  need(tenants, "wad"); // present, deliberately NOT granted
+  const dtw = need(tenants, "dtw");
+  const engines = {} as Setup6["engines"];
+  const flags: Record<A6Key, Doc> = {
+    author: { hubRead: true, hubAuthor: true, hubWrite: false, allowedTenants: grant },
+    noauthor: { hubRead: true, hubAuthor: false, hubWrite: false, allowedTenants: grant },
+    nullauthor: { hubRead: true, hubAuthor: false, hubWrite: false, allowedTenants: grant },
+    writeonly: { hubRead: true, hubAuthor: false, hubWrite: true, allowedTenants: grant },
+    limited: { hubRead: true, hubAuthor: true, hubWrite: false, allowedTenants: [dtw] },
+  };
+  for (const key of Object.keys(A6_ENGINES) as A6Key[]) {
+    const name = A6_ENGINES[key];
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", ...flags[key] };
+    let id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else id = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", allowedActions: ["import"], ...data } as never })) as unknown as { id: number }).id;
+    const tokenFile = `${out}.${key}.token`;
+    writeFileSync(tokenFile, token, { mode: 0o600 });
+    engines[key] = { id, name, tokenFile };
+  }
+  // hubAuthor NULL needs raw SQL (create fills the checkbox default).
+  await db.execute(sql`UPDATE content_engines SET hub_author = NULL WHERE id = ${engines.nullauthor.id}`);
+  const nullRes = (await db.execute(sql`SELECT (hub_author IS NULL) AS n FROM content_engines WHERE id = ${engines.nullauthor.id}`)) as { rows?: { n: boolean }[] };
+  if (nullRes.rows?.[0]?.n !== true) throw new Error("nullauthor engine: hub_author is not NULL");
+
+  // Taxonomy fixtures on the three granted tenants.
+  const fixtures: Setup6["fixtures"] = {};
+  const tenantInfo: Setup6["tenants"] = {};
+  for (const slug of [...SETUP6_TENANTS, "wad", "brief-asia"]) {
+    const id = tenants.get(slug);
+    if (id == null) continue;
+    const t = (await payload.findByID({ collection: "tenants", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const f = (t.features ?? {}) as Doc;
+    tenantInfo[slug] = { id, articlesEnabled: f.articles !== false, citiesMap: f.citiesMap === true };
+    if (!(SETUP6_TENANTS as readonly string[]).includes(slug)) continue;
+    const pMain = await ensurePillar(payload, id, "p6-main", "P6 Main", 90);
+    const pOther = await ensurePillar(payload, id, "p6-other", "P6 Other", 91);
+    await ensureSub6(payload, id, pMain, "p6-sub");
+    await ensureSub6(payload, id, pOther, "p6-sub"); // same sub-section slug under two pillars (resolved by PAIR)
+    await ensureSub6(payload, id, pMain, "p6-sub2");
+    const tags = ["p6-tag-a", "p6-tag-b"];
+    for (const s of tags) await ensureBySlug6(payload, "tags", id, s, { title: s });
+    const cities: string[] = [];
+    if (tenantInfo[slug].citiesMap) {
+      await ensureBySlug6(payload, "cities", id, "p6-city-a", { name: "P6 City" });
+      cities.push("p6-city-a");
+    }
+    const a1 = await ensureAuthor(payload, id, "p6-author-1", "P6 Author One");
+    const a2 = await ensureAuthor(payload, id, "p6-author-2", "P6 Author Two");
+    const pillars = ["p6-main", "p6-other"];
+    if (slug === "gcv") {
+      await ensurePillar(payload, id, "exclusive", "Exclusive", 99);
+      pillars.push("exclusive");
+    }
+    fixtures[slug] = {
+      pillars,
+      subsections: [{ slug: "p6-sub", pillar: "p6-main" }, { slug: "p6-sub", pillar: "p6-other" }, { slug: "p6-sub2", pillar: "p6-main" }],
+      tags,
+      cities,
+      countries: ["vietnam", "singapore"],
+      authors: [a1, a2],
+    };
+  }
+
+  // Seeded articles (dtw).
+  const stamp = Date.now().toString(36);
+  const pMain = await ensurePillar(payload, dtw, "p6-main", "P6 Main", 90);
+  const a1 = fixtures.dtw!.authors[0]!;
+  const mkArt = async (slug: string, data: Doc, opts: { draft?: boolean; context?: Doc } = {}) =>
+    ((await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      locale: "en",
+      ...(opts.draft ? { draft: true } : {}),
+      context: { disableRevalidate: true, ...(opts.context ?? {}) },
+      data: { tenant: dtw, title: `S6 ${slug}`, slug, pillar: pMain, author: a1, ...data } as never,
+    })) as unknown as { id: number }).id;
+  const sEngine = `s6-engine-${stamp}`;
+  const sPub = `s6-published-${stamp}`;
+  const sCms = `s6-cms-draft-${stamp}`;
+  const sRel = `s6-rel-draft-${stamp}`;
+  const sLive = `s6-live-${stamp}`;
+  const engineId = await mkArt(sEngine, { origin: "engine", workflowStatus: "pending_review" }, { context: { engineWrite: true, engineId: engines.author.id } });
+  const pubId = await mkArt(sPub, { origin: "manual", workflowStatus: "published", _status: "published" });
+  const cmsId = await mkArt(sCms, { origin: "manual", workflowStatus: "draft" }, { draft: true });
+  const relBody = {
+    root: {
+      type: "root", format: "", indent: 0, version: 1, direction: null,
+      children: [
+        { type: "paragraph", format: "", indent: 0, version: 1, direction: null, textFormat: 0, textStyle: "", children: [{ type: "text", text: "quan hệ:", format: 0, detail: 0, mode: "normal", style: "", version: 1 }] },
+        { type: "relationship", format: "", version: 2, relationTo: "articles", value: pubId },
+      ],
+    },
+  };
+  const relId = await mkArt(sRel, { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id, body: relBody }, { draft: true });
+  // Hub-created draft → CMS admin Publish → CMS admin Save Draft (workflowStatus draft): the "live" case (P-c).
+  const liveId = await mkArt(sLive, { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id, editedByHuman: true }, { context: { hubAuthor: { actor: { email: "setup6@example.com", role: "editor" }, action: "create" }, engineId: engines.author.id } });
+  await payload.update({ collection: "articles", id: liveId, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { _status: "published", workflowStatus: "published" } as never });
+  await payload.update({ collection: "articles", id: liveId, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { title: "S6 live saved draft", workflowStatus: "draft" } as never });
+
+  // Public read token for dtw (sha256 stored; raw only in a 0o600 file).
+  const pubTok = randomBytes(24).toString("hex");
+  const tDoc = (await payload.findByID({ collection: "tenants", id: dtw, depth: 0, overrideAccess: true })) as unknown as Doc;
+  const prevTokens = ((tDoc.readTokens as Doc[] | undefined) ?? []).filter((r) => r.label !== "probe6");
+  await payload.update({
+    collection: "tenants",
+    id: dtw,
+    overrideAccess: true,
+    context: { disableRevalidate: true },
+    data: { readTokens: [...prevTokens, { label: "probe6", tokenHash: sha256Hex6(pubTok), tokenPrefix: pubTok.slice(0, 6), status: "active" }] } as never,
+  });
+  const pubFile = `${out}.public-dtw.token`;
+  writeFileSync(pubFile, pubTok, { mode: 0o600 });
+
+  const setupOut: Setup6 = {
+    version: 1,
+    base: BASE,
+    engines,
+    tenants: tenantInfo,
+    articles: {
+      engine: { id: engineId, tenant: "dtw", slug: sEngine },
+      published: { id: pubId, tenant: "dtw", slug: sPub },
+      manualDraftByCmsUser: { id: cmsId, tenant: "dtw", slug: sCms },
+      manualDraftRelationBody: { id: relId, tenant: "dtw", slug: sRel },
+      hubDraftPublishedThenSavedDraft: { id: liveId, tenant: "dtw", slug: sLive },
+    },
+    fixtures,
+    publicReadTokenFile: { dtw: pubFile },
+  };
+  writeFileSync(out, JSON.stringify(setupOut, null, 2), { mode: 0o600 });
+  console.log(`[setup6] written ${out} (+ one 0600 token file per engine; tokens NOT printed). author grant = dtw,gcv,world-travel-brief; wad present, not granted`);
+  process.exit(0);
+}
+
+function sha256Hex6(s: string): string {
+  return createHash("sha256").update(s).digest("hex");
+}
+
+async function check6() {
+  const unitOnly = flag("unit-only");
+  const hooksOnly = flag("hooks-only");
+  const { state, expect } = makeExpect();
+
+  if (unitOnly) {
+    await check6Unit(expect);
+    console.log(`\n[check6] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+  assertLocalTargets();
+  const payload = await getPayload({ config });
+
+  if (hooksOnly) {
+    await check6Hooks(payload, expect);
+    console.log(`\n[check6 --hooks-only] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+
+  const inFile = arg("in");
+  if (!inFile) throw new Error("--in <file from --setup6> required (or --unit-only / --hooks-only)");
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const tok = (k: A6Key) => readFileSync(s6.engines[k].tokenFile, "utf8").trim();
+  const T = { author: tok("author"), noauthor: tok("noauthor"), nullauthor: tok("nullauthor"), writeonly: tok("writeonly"), limited: tok("limited") };
+  const pubTok = readFileSync(s6.publicReadTokenFile.dtw!, "utf8").trim();
+  const stamp = Date.now().toString(36);
+  let seq = 0;
+  const uniq = (p: string) => `${p}-${stamp}-${seq++}`;
+  const fx = s6.fixtures.dtw!;
+  const actor = { email: "probe6@example.com", role: "editor", id: "hub-user-6" };
+
+  type Reply = { status: number; text: string; body: Doc; ms: number };
+  const call = async (method: string, path: string, body?: unknown, token: string | null = T.author, raw?: string, signal?: AbortSignal): Promise<Reply> => {
+    const t0 = performance.now();
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: { ...(body !== undefined || raw !== undefined ? { "content-type": "application/json" } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: raw ?? (body !== undefined ? JSON.stringify(body) : undefined),
+      signal,
+    });
+    const text = await res.text();
+    const ms = Math.round(performance.now() - t0);
+    let parsed: Doc = {};
+    try {
+      parsed = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, text, body: parsed, ms };
+  };
+  const post = (b: Doc, token: string | null = T.author) => call("POST", "/api/hub/articles", b, token);
+  const patch = (id: number | string, b: Doc, token: string | null = T.author) => call("PATCH", `/api/hub/articles/${id}`, b, token);
+  const getA = (id: number | string, q = "", token: string | null = T.author) => call("GET", `/api/hub/articles/${id}?tenant=dtw${q}`, undefined, token);
+  const draft = (extra: Doc = {}): Doc => ({ tenant: "dtw", title: `P6 ${uniq("t")}`, slug: uniq("p6"), pillarSlug: "p6-main", authorId: fx.authors[0], actor, ...extra });
+  const logCount = async () => (await payload.count({ collection: "activityLog", overrideAccess: true })).totalDocs;
+  const errCount = async () => (await payload.count({ collection: "activityLog", where: { eventType: { equals: "integration_error" } }, overrideAccess: true })).totalDocs;
+  const artCount = async () => (await payload.count({ collection: "articles", overrideAccess: true })).totalDocs;
+  const readMain = async (id: number) => (await payload.findByID({ collection: "articles", id, depth: 0, locale: "en", overrideAccess: true })) as unknown as Doc;
+  const readLatest = async (id: number) => (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, locale: "en", overrideAccess: true })) as unknown as Doc;
+  const INVALID = (fields: Doc) => ({ ok: false, status: "invalid", reason: "one or more fields are invalid", fields });
+  const NOT_FOUND = { ok: false, status: "not_found", reason: "article not found for tenant" };
+
+  // ══ A — authentication ═══════════════════════════════════════════════════
+  {
+    const before = await logCount();
+    const r0 = await post(draft(), null);
+    const r1 = await post(draft(), "not-a-real-token");
+    expect("A 401 no token / wrong token (POST)", [[r0.status, r0.body], [r1.status, r1.body]], [[401, { ok: false, status: "unauthorized" }], [401, { ok: false, status: "unauthorized" }]]);
+    const pa = await patch(s6.articles.manualDraftByCmsUser.id, { tenant: "dtw", actor, expectedVersion: 1 }, null);
+    expect("A 401 no token (PATCH)", [pa.status, pa.body], [401, { ok: false, status: "unauthorized" }]);
+    const NOAUTH = { ok: false, status: "forbidden", reason: "hub author not allowed for this engine" };
+    const denials: Reply[] = [];
+    for (const k of ["noauthor", "nullauthor", "writeonly"] as const) denials.push(await post(draft(), T[k]));
+    expect("A 403 hubAuthor false / NULL / hubWrite-only ⇒ hub author not allowed", denials.map((r) => [r.status, r.body]), [[403, NOAUTH], [403, NOAUTH], [403, NOAUTH]]);
+    const deniedRows = (await payload.find({ collection: "activityLog", where: { eventType: { equals: "engine_action_denied" } }, sort: "-id", limit: 3, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+    expect("A each hubAuthor denial logged engine_action_denied {action: hub_author}", deniedRows.map((d) => (d.detail as Doc | undefined)?.action), ["hub_author", "hub_author", "hub_author"]);
+    obs6("A log delta for 2×401 + 1×401 + 3×403", (await logCount()) - before);
+    // hubRead false (temporarily on the noauthor engine) ⇒ the read gate answers first.
+    await payload.update({ collection: "content-engines", id: s6.engines.noauthor.id, overrideAccess: true, data: { hubRead: false } as never });
+    const nr = await post(draft(), T.noauthor);
+    await payload.update({ collection: "content-engines", id: s6.engines.noauthor.id, overrideAccess: true, data: { hubRead: true } as never });
+    expect("A 403 hubRead false ⇒ hub read not allowed (checked before hubAuthor)", [nr.status, nr.body], [403, { ok: false, status: "forbidden", reason: "hub read not allowed for this engine" }]);
+    // tenant outside the grant
+    const tBefore = await logCount();
+    const wad = await post({ ...draft(), tenant: "wad" });
+    const wadAllowed = ((wad.body.allowedTenants as string[] | undefined) ?? []).slice().sort();
+    expect("A 403 tenant outside grant (wad) + allowedTenants", [wad.status, { ...wad.body, allowedTenants: wadAllowed }], [403, { ok: false, status: "forbidden", reason: "tenant not in allowed scope", allowedTenants: ["dtw", "gcv", "world-travel-brief"] }]);
+    const lastDenied = ((await payload.find({ collection: "activityLog", where: { eventType: { equals: "engine_tenant_denied" } }, sort: "-id", limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined)?.detail as Doc | undefined;
+    expect("A tenant denial logged engine_tenant_denied {scope: hub/articles/author, requested: wad}", [(await logCount()) - tBefore >= 1, lastDenied?.scope, lastDenied?.requested], [true, "hub/articles/author", "wad"]);
+    const huge = await post({ ...draft(), tenant: rep("z", 900000) });
+    const hugeRow = ((await payload.find({ collection: "activityLog", where: { eventType: { equals: "engine_tenant_denied" } }, sort: "-id", limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined)?.detail as Doc | undefined;
+    expect("A E15 tenant of 900,000 chars ⇒ 403 and logged requested.length ≤ 64", [huge.status, String(hugeRow?.requested ?? "").length <= 64], [403, true]);
+    // feature_disabled (transient: gcv features.articles = false, restored in finally)
+    const gcvId = s6.tenants.gcv!.id;
+    const gDoc = (await payload.findByID({ collection: "tenants", id: gcvId, depth: 0, overrideAccess: true })) as unknown as Doc;
+    let fd: Reply;
+    try {
+      await payload.update({ collection: "tenants", id: gcvId, overrideAccess: true, context: { disableRevalidate: true }, data: { features: { ...((gDoc.features as Doc) ?? {}), articles: false } } as never });
+      fd = await post({ ...draft(), tenant: "gcv" });
+    } finally {
+      await payload.update({ collection: "tenants", id: gcvId, overrideAccess: true, context: { disableRevalidate: true }, data: { features: gDoc.features } as never });
+    }
+    expect("A 403 feature_disabled (gcv articles off, transient)", [fd.status, fd.body], [403, { ok: false, status: "feature_disabled", reason: "articles feature disabled for tenant" }]);
+    // the author token cannot use intake or /status
+    const intake = await call("POST", "/api/engine/intake", { publicationId: "dtw", title: "x", pillarSlug: "p6-main", body_markdown: "x", byline: "x" }, T.author);
+    expect("A author token ⇒ POST /api/engine/intake = 403 action not allowed", [intake.status, intake.body.status, String(intake.body.reason ?? "").startsWith("action not allowed")], [403, "forbidden", true]);
+    const st = await call("POST", `/api/hub/articles/${s6.articles.published.id}/status`, { tenant: "dtw", to: "archived", expectedStatus: "published", reason: "probe reason", actor }, T.author);
+    expect("A author token ⇒ POST /api/hub/articles/{id}/status = 403 hub write not allowed", [st.status, st.body], [403, { ok: false, status: "forbidden", reason: "hub write not allowed for this engine" }]);
+    const lim = await post({ ...draft(), tenant: "gcv" }, T.limited);
+    expect("A limited engine (dtw only) ⇒ gcv 403 with allowedTenants [dtw]", [lim.status, lim.body.allowedTenants], [403, ["dtw"]]);
+  }
+
+  // ══ C — create ═══════════════════════════════════════════════════════════
+  let createdId = 0;
+  let createdSlug = "";
+  {
+    const b = draft({ dek: "Dek một", bodyMarkdown: "Xin chào **đậm** và [liên kết](https://example.com/a).\n\n- một\n- hai", takeaways: ["Ý một", "Ý hai"], countrySlugs: ["vietnam", "singapore"], tagSlugs: ["p6-tag-a"], subSectionSlug: "p6-sub", flags: { aiAssisted: true }, readMin: 3 });
+    const logBefore = await logCount();
+    const r = await post(b);
+    createdId = r.body.id as number;
+    createdSlug = b.slug as string;
+    expect("C 201 shape", [r.status, Object.keys(r.body).sort(), r.body.tenant, r.body.slug, r.body.workflowStatus, r.body.version], [201, ["id", "ok", "slug", "tenant", "version", "workflowStatus"], "dtw", b.slug, "draft", 1]);
+    const d = await readMain(createdId);
+    const vn = (await payload.find({ collection: "countries", where: { slug: { equals: "vietnam" } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc;
+    expect("C DB: tenant, origin manual, workflowStatus draft, _status draft, editedByHuman, version 1, contentType, sourceLanguage, lastEngine, country = countries[0], takeaways joined", [
+      String(toId6(d.tenant)), d.origin, d.workflowStatus, d._status, d.editedByHuman, d.version, d.contentType, typeof d.sourceLanguage === "string", toId6(d.lastEngine), toId6(d.country), d.takeaways,
+    ], [String(s6.tenants.dtw!.id), "manual", "draft", "draft", true, 1, "article", true, s6.engines.author.id, vn.id, "Ý một\nÝ hai"]);
+    expect("H POST ⇒ exactly ONE ActivityLog row (article_created, detail via hub + actor + action create)", (await logCount()) - logBefore, 1);
+    const row = (await payload.find({ collection: "activityLog", where: { and: [{ targetId: { equals: String(createdId) } }, { eventType: { equals: "article_created" } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined;
+    expect("H article_created row: actorType engine, detail {via, actor, action}", [row?.actorType, row?.detail], ["engine", { via: "hub", actor, action: "create" }]);
+    const g = await getA(createdId);
+    expect("C GET detail round trip: 200, draft, bodyState ok", [g.status, (g.body.article as Doc | undefined)?.workflowStatus, (g.body.article as Doc | undefined)?.bodyState], [200, "draft", "ok"]);
+    const list = await call("GET", "/api/hub/articles?tenants=dtw&status=draft&limit=200", undefined, T.author);
+    const listed = ((list.body.articles ?? list.body.docs ?? list.body.items) as Doc[] | undefined) ?? [];
+    expect("C listed in the hub list with workflowStatus draft", listed.some((a) => a.id === createdId && a.workflowStatus === "draft"), true);
+    const pub = await call("GET", `/api/public/articles/${createdSlug}`, undefined, pubTok);
+    const pubList = await call("GET", "/api/public/articles?limit=100", undefined, pubTok);
+    expect("C NOT public: /api/public/articles/{slug} 404, absent from the public list", [pub.status, pubList.text.includes(createdSlug)], [404, false]);
+    const viewsSlug = await call("POST", "/api/public/views", { slug: createdSlug }, pubTok);
+    const viewsId = await call("POST", "/api/public/views", { id: createdId }, pubTok);
+    obs6("C /api/public/views slug branch / id branch (K31: id branch OBS only)", { slug: [viewsSlug.status, viewsSlug.body], id: [viewsId.status, viewsId.body] });
+    const n0 = await artCount();
+    const wf = await post({ ...draft(), workflowStatus: "published" });
+    expect("C/K workflowStatus in the body ⇒ 400 unknown field(s), no article created", [wf.status, wf.body, (await artCount()) - n0], [400, { ok: false, status: "bad_request", reason: "unknown field(s): workflowStatus" }, 0]);
+  }
+
+  // ══ K — forbidden keys + strict types over HTTP ══════════════════════════
+  {
+    const n0 = await artCount();
+    const e0 = await errCount();
+    const keys = ["exclusive", "translationAssisted", "_status", "origin", "publishedAt", "scheduledFor", "engineDraftId", "version", "id", "heroImage", "body", "pinnedToLatest", "pinnedUntil"];
+    const rs: unknown[] = [];
+    for (const k of keys) {
+      const r = await post({ ...draft(), [k]: true });
+      rs.push([r.status, r.body.reason]);
+    }
+    expect("K every forbidden root key ⇒ 400 unknown field(s): <key>", rs, keys.map((k) => [400, `unknown field(s): ${k}`]));
+    const fl = await post({ ...draft(), flags: { exclusive: true, pinnedToLatest: true } });
+    const pr = await call("POST", "/api/hub/articles", undefined, T.author, `{"tenant":"dtw","__proto__":{"x":1}}`);
+    const tn = await post({ ...draft(), tenant: 5 });
+    const ty = await post({ ...draft(), flags: { breaking: "false" } });
+    let nest: unknown = "x";
+    for (let i = 0; i < 100000; i++) nest = [nest];
+    const deep = await post({ ...draft(), takeaways: [nest] });
+    const deepFlag = await post({ ...draft(), flags: { breaking: nest } });
+    const deepUnknown = await post({ ...draft(), deep: nest });
+    const many: Doc = draft();
+    for (let i = 0; i < 1000; i++) many[`k${i}_${rep("z", 70)}`] = 1;
+    const kk = await post(many);
+    expect("K flags.exclusive / pinnedToLatest, __proto__, tenant non-string, flags.breaking 'false', 100k nesting (known / unknown key), 1,000 unknown keys", [
+      [fl.status, fl.body.reason], [pr.status, pr.body.reason], [tn.status, tn.body.reason], [ty.status, ty.body], [deep.status, deep.body], [deepFlag.status, deepFlag.body], [deepUnknown.status, deepUnknown.body.reason],
+      [kk.status, String(kk.body.reason).endsWith(", …"), String(kk.body.reason).split(", ").length],
+    ], [
+      [400, "unknown field(s): flags.exclusive, flags.pinnedToLatest"], [400, "unknown field(s): __proto__"], [400, "tenant is required"], [422, INVALID({ "flags.breaking": "type" })],
+      [422, INVALID({ takeaways: "type" })], [422, INVALID({ "flags.breaking": "type" })], [400, "unknown field(s): deep"], [400, true, 21],
+    ]);
+    expect("K no article created, 0 integration_error rows", [(await artCount()) - n0, (await errCount()) - e0], [0, 0]);
+  }
+
+  // ══ R — tenant isolation + ids ═══════════════════════════════════════════
+  {
+    const e0 = await errCount();
+    const gfx = s6.fixtures.gcv!;
+    const r = async (extra: Doc) => (await post(draft(extra))).body.fields;
+    const tag = await r({ tagSlugs: ["p6-tag-zzz-nope"] });
+    const crossAuthor = await r({ authorId: gfx.authors[0] });
+    const crossCo = await r({ coAuthorIds: [gfx.authors[0]] });
+    const subOther = await r({ subSectionSlug: "p6-sub2", pillarSlug: "p6-other" });
+    const city = await r({ citySlugs: ["p6-city-a"] });
+    const pair = await post(draft({ pillarSlug: "p6-other", subSectionSlug: "p6-sub" }));
+    expect("R refs: unknown tag, other-tenant author / co-author ⇒ unknown_ref; sub-section of another pillar ⇒ unknown_ref; city at dtw (no citiesMap) ⇒ not_enabled; shared sub slug by PAIR ⇒ 201", [
+      tag, crossAuthor, crossCo, subOther, city, pair.status,
+    ], [{ tagSlugs: "unknown_ref" }, { authorId: "unknown_ref" }, { coAuthorIds: "unknown_ref" }, { subSectionSlug: "unknown_ref" }, { citySlugs: "not_enabled" }, 201]);
+    const ids = await Promise.all([PG_INT4_MAX6 + 1, 1e21, -1, 0, "12", 1.5].map(async (x) => (await post(draft({ authorId: x }))).body.fields));
+    expect("R authorId 2147483648 / 1e21 / -1 / 0 / '12' / 1.5", ids, [{ authorId: "out_of_range" }, { authorId: "type" }, { authorId: "out_of_range" }, { authorId: "out_of_range" }, { authorId: "type" }, { authorId: "type" }]);
+    const gcvArticle = await post({ ...draft(), tenant: "gcv", pillarSlug: "p6-main", authorId: gfx.authors[0] });
+    const nf = await Promise.all([gcvArticle.body.id as number, 999999999, "abc", "2147483648", "01"].map(async (id) => {
+      const x = await patch(id, { tenant: "dtw", actor, expectedVersion: 1, title: "x" });
+      return [x.status, x.text];
+    }));
+    expect("R PATCH: other tenant's id / missing / malformed / > int4 / leading zero ⇒ SAME 404 body", nf, nf.map(() => [404, JSON.stringify(NOT_FOUND)]));
+    expect("R 0 integration_error rows", (await errCount()) - e0, 0);
+    // M21 (HTTP part): slug that exists ONLY in another tenant's latest draft ⇒ this tenant may use it.
+    const ySlug = uniq("p6-other-tenant-y");
+    const g = await post({ ...draft(), tenant: "gcv", pillarSlug: "p6-main", authorId: gfx.authors[0] });
+    const gv = (g.body.version as number) ?? 1;
+    await patch(g.body.id as number, { tenant: "gcv", actor, expectedVersion: gv, slug: ySlug });
+    const mine = await post(draft({ slug: ySlug }));
+    expect("R/M21 slug present only in ANOTHER tenant's latest draft ⇒ POST here 201, no existing.id leak", [mine.status, "existing" in mine.body], [201, false]);
+  }
+
+  // ══ L — data checks ══════════════════════════════════════════════════════
+  {
+    const e0 = await errCount();
+    const f = async (extra: Doc) => {
+      const x = await post(draft(extra));
+      return x.status === 201 ? 201 : x.body.fields ?? `${x.status}:${x.body.status}`;
+    };
+    expect("L title 300 ⇒ 201 / 301 ⇒ too_long; body 200,000 ⇒ 201 / 200,001 ⇒ too_large", [
+      await f({ title: rep("a", 300) }), await f({ title: rep("a", 301) }), await f({ bodyMarkdown: rep("a", 199998) + "😀" }), await f({ bodyMarkdown: rep("a", 199999) + "😀" }),
+    ], [201, { title: "too_long" }, 201, { bodyMarkdown: "too_large" }]);
+    const big = await call("POST", "/api/hub/articles", undefined, T.author, JSON.stringify({ ...draft(), dek: rep("a", 1_000_001) }));
+    expect("L body > 1 MB ⇒ 413", [big.status, big.body], [413, { ok: false, status: "too_large", reason: "request body exceeds 1000000 bytes" }]);
+    const linkVecs = [
+      "[x](javascript:alert(1))", "[x](JaVaScRiPt:alert(1))", "[x](vbscript:a)", "[x](data:text/html,a)", "[x](java\tscript:a)", "[x](java\nscript:a)", "[x](\u00a0javascript:a)",
+      "[x]: javascript:alert(1)", "<javascript:alert(1)>", "[x](\u0001javascript:a)",
+    ];
+    const lr = [];
+    for (const v of linkVecs) lr.push(await f({ bodyMarkdown: v }));
+    expect("L dangerous link syntax ⇒ link (or c0 for the C0-prefixed one)", lr, [...linkVecs.slice(0, -1).map(() => ({ bodyMarkdown: "link" })), { bodyMarkdown: "c0" }]);
+    const urlVecs = ["[x](java&#115;cript&#58;alert(1))", "[x](//evil)", "[x](\\/\\/evil)", "[x](foo/bar)", "[x](ftp://a)"];
+    const ur = [];
+    for (const v of urlVecs) ur.push(await f({ bodyMarkdown: v }));
+    obs6("L URL vectors (allowlist on the tree)", ur);
+    expect("L URL vectors refused (url, or node / link when the importer does not make a link node)", ur.every((x) => x !== 201), true);
+    expect("L image / NUL dek / NUL takeaways / bidi title / lone surrogate title + body / takeaways newline", [
+      await f({ bodyMarkdown: "![a](b)" }), await f({ dek: "a\u0000" }), await f({ takeaways: ["a\u0001"] }), await f({ title: "a\u202e" }), await f({ title: "a\ud800" }), await f({ bodyMarkdown: "a\ud800" }), await f({ takeaways: ["a\nb"] }),
+    ], [{ bodyMarkdown: "image" }, { dek: "c0" }, { takeaways: "c0" }, { title: "bidi" }, { title: "surrogate" }, { bodyMarkdown: "surrogate" }, { takeaways: "newline" }]);
+    const W = [0x20, 0xa0, 0x3000, 0xfeff, 0x2028].map((c) => String.fromCharCode(c));
+    const wr = [];
+    for (const c of W) wr.push([await f({ bodyMarkdown: "](" + rep(c, 257) + "x)" }), await f({ bodyMarkdown: "](" + rep(c, 257) }), await f({ bodyMarkdown: "](" + rep(c, 256) + "x)" })]);
+    expect("L W run: ](+257×c+x) ⇒ ws_run; no suffix ⇒ 201 (trimmed); ](+256×c+x) ⇒ 201", wr, W.map(() => [{ bodyMarkdown: "ws_run" }, 201, 201]));
+    expect("L whole-W body ⇒ 201 empty; 300 LF at end ⇒ 201; 300 LF in the middle ⇒ ws_run; 300 VT / U+0001 ⇒ c0", [
+      await f({ bodyMarkdown: rep("\u00a0", 300) }), await f({ bodyMarkdown: "Bài.\n" + rep("\n", 300) }), await f({ bodyMarkdown: "Bài.\n" + rep("\n", 300) + "Tiếp." }), await f({ bodyMarkdown: rep("\u000b", 300) }), await f({ bodyMarkdown: rep("\u0001", 300) }),
+    ], [201, 201, { bodyMarkdown: "ws_run" }, { bodyMarkdown: "c0" }, { bodyMarkdown: "c0" }]);
+    expect("L sponsored without sponsor / secondary duplicate + primary / blocked pillar (gcv exclusive, primary + secondary) / readMin 0 / 121 / slug derived empty", [
+      await f({ flags: { sponsored: true } }), await f({ secondary: [{ pillarSlug: "p6-main" }] }),
+      (await post({ ...draft(), tenant: "gcv", pillarSlug: "exclusive", authorId: s6.fixtures.gcv!.authors[0] })).body.fields,
+      (await post({ ...draft(), tenant: "gcv", pillarSlug: "p6-main", secondary: [{ pillarSlug: "exclusive" }], authorId: s6.fixtures.gcv!.authors[0] })).body.fields,
+      await f({ readMin: 0 }), await f({ readMin: 121 }), await f({ title: "Đ", slug: undefined }),
+    ], [{ sponsor: "required" }, { secondary: "duplicate" }, { pillarSlug: "blocked_pillar" }, { "secondary[0].pillarSlug": "blocked_pillar" }, { readMin: "out_of_range" }, { readMin: "out_of_range" }, { slug: "required" }]);
+    const derived = draft({ title: `Đường ${uniq("đ")}` });
+    delete derived.slug;
+    const dr = await post(derived);
+    expect("L slug derived from the title (Đ/đ dropped by slugify)", [dr.status, typeof dr.body.slug === "string" && /^[a-z0-9-]+$/.test(dr.body.slug as string)], [201, true]);
+    const clash = await post(draft({ slug: createdSlug }));
+    expect("L slug in use ⇒ 409 slug_conflict with existing.id", [clash.status, clash.body], [409, { ok: false, status: "slug_conflict", reason: "slug already exists for this tenant", existing: { id: createdId } }]);
+    expect("L actor: unknown key ⇒ 400; email 255 ⇒ too_long; role viewer ⇒ format", [
+      (await post({ ...draft(), actor: { ...actor, x: 1 } })).body.reason, await f({ actor: { email: rep("a", 250) + "@b.co", role: "editor" } }), await f({ actor: { email: "a@b.co", role: "viewer" } }),
+    ], ["unknown field(s): actor.x", { "actor.email": "too_long" }, { "actor.role": "format" }]);
+    expect("L E1 too_many: tagSlugs 21", await f({ tagSlugs: Array.from({ length: 21 }, (_, i) => `t${i}`) }), { tagSlugs: "too_many" });
+    expect("L 0 integration_error rows", (await errCount()) - e0, 0);
+  }
+
+  // ══ D2 — frozen vectors over HTTP (timing recorded) ══════════════════════
+  const timings: Doc[] = [];
+  {
+    const vecs = d2Vectors().filter((v) => v.http !== undefined);
+    for (const v of vecs) {
+      const md = v.md();
+      const runs = v.http === 201 ? 1 : v.http === "too_slow" ? 3 : 5;
+      const ms: number[] = [];
+      let last: Reply | null = null;
+      let created = 0;
+      for (let k = 0; k < runs; k++) {
+        const n0 = await artCount();
+        try {
+          last = await call("POST", "/api/hub/articles", draft({ bodyMarkdown: md }), T.author, undefined, AbortSignal.timeout(8_000));
+        } catch (e) {
+          last = { status: 0, text: String((e as Error).name), body: {}, ms: 8000 };
+        }
+        ms.push(last.ms);
+        created += (await artCount()) - n0;
+        if (v.http === 201) break;
+      }
+      const med = median(ms);
+      const got = last!.status === 201 ? 201 : (last!.body.fields as Doc | undefined)?.bodyMarkdown ?? `${last!.status}`;
+      const t: Doc = { name: v.name, got, medianMs: med, runs: ms.length };
+      if (last!.status === 201) {
+        const id = last!.body.id as number;
+        const g1 = await getA(id);
+        const e1 = await getA(id, "&view=edit");
+        t.getMs = g1.ms;
+        t.editMs = e1.ms;
+        t.bodyEditable = ((e1.body.edit as Doc | undefined) ?? {}).bodyEditable;
+      }
+      timings.push(t);
+      if (v.http === "too_slow") {
+        expect(`D2 ${v.name} ⇒ 422 too_slow in [T-50, T+300] (median of 3), DB unchanged`, [got, med >= 1450 && med <= 1800, created], ["too_slow", true, 0]);
+      } else if (v.http === 201) {
+        expect(`D2 ${v.name} ⇒ 201 (≤ 2,000 ms), GET + view=edit 200 within budget, bodyEditable true`, [got, med <= 2000, (t.getMs as number) <= 2000, (t.editMs as number) <= 2000, t.bodyEditable], [201, true, true, true, true]);
+      } else {
+        expect(`D2 ${v.name} ⇒ 422 ${v.http}, DB unchanged`, [got, created], [v.http, 0]);
+      }
+    }
+    // (a) gate F over HTTP
+    const fv = async (md: string) => {
+      const x = await post(draft({ bodyMarkdown: md }));
+      return x.status === 201 ? 201 : (x.body.fields as Doc | undefined)?.bodyMarkdown;
+    };
+    const unstableV = ["***x***", "**_x_**", "*__x__*", "a\\b", "C:\\Users\\a\\b"];
+    const stableV = ["**đậm** *nghiêng*", "*nghiêng **đậm** nghiêng*", "5\\* hotel", "\\_", "\\~"];
+    const uo = [];
+    for (const m of unstableV) uo.push(await fv(m));
+    const so = [];
+    for (const m of stableV) so.push(await fv(m));
+    expect("D2(a) gate F over HTTP: unstable list ⇒ unstable; controls ⇒ 201", [uo, so], [unstableV.map(() => "unstable"), stableV.map(() => 201)]);
+    // (a) lex2 vector: 201 → view=edit bodyEditable → PATCH body 200; read back by Local API equals the stored lex2
+    const sentence = "The **Grand** is a 5* hotel with *great* views.";
+    const c = await post(draft({ bodyMarkdown: sentence }));
+    const cid = c.body.id as number;
+    const ed = await getA(cid, "&view=edit");
+    const pv = ((ed.body.edit as Doc | undefined)?.version as number) ?? 1;
+    const pb = await patch(cid, { tenant: "dtw", actor, expectedVersion: pv, bodyMarkdown: sentence.replace("Grand", "Grande") });
+    expect("D2(a) lex2 vector: 201, view=edit bodyEditable true, PATCH body ⇒ 200 (not body_not_editable)", [c.status, (ed.body.edit as Doc | undefined)?.bodyEditable, pb.status, pb.body.changed], [201, true, 200, ["bodyMarkdown"]]);
+    obs6("D2(a) `5*` md1 after save (OBS only)", (ed.body.article as Doc | undefined)?.bodyMarkdown);
+    // (e) after 201: two GETs equal; PATCH title only keeps bodyMarkdown; stored tree = re-import of md1 (ES-14)
+    const real = await post(draft({ bodyMarkdown: realBody6(40000, { line: 150, bold: 300, link: 1000, ital: 600, seed: 40 }) }));
+    const rid = real.body.id as number;
+    const ga = await getA(rid, "&view=edit");
+    const gb = await getA(rid, "&view=edit");
+    const rv = ((ga.body.edit as Doc | undefined)?.version as number) ?? 1;
+    const pt = await patch(rid, { tenant: "dtw", actor, expectedVersion: rv, title: `retitled ${uniq("r")}` });
+    const gc = await getA(rid, "&view=edit");
+    const latest = await readLatest(rid);
+    const body = await import("../src/lib/hub-author-body");
+    const { loadHubEditorConfig } = await import("../src/lib/hub-article-markdown");
+    const ec = (await loadHubEditorConfig(payload.config)) as never;
+    const md1 = (ga.body.article as Doc | undefined)?.bodyMarkdown as string;
+    const reimport = body.convertBodyGuarded(ec, md1.trim());
+    expect("D2(e) real 40k: two GETs equal; PATCH title only ⇒ changed [title], same bodyMarkdown; Local-API tree equals lex2 (ignoring id / direction / textFormat / textStyle)", [
+      (ga.body.article as Doc).bodyMarkdown === (gb.body.article as Doc).bodyMarkdown, pt.body.changed, (gc.body.article as Doc).bodyMarkdown === md1,
+      reimport.ok && body.lexicalTreesEqual(latest.body, reimport.lexical),
+    ], [true, ["title"], true, true]);
+  }
+  obs6("D2 timings", timings);
+
+  // ══ P — PATCH ════════════════════════════════════════════════════════════
+  {
+    const mk = async (extra: Doc = {}) => {
+      const r = await post(draft(extra));
+      return { id: r.body.id as number, version: r.body.version as number, slug: r.body.slug as string };
+    };
+    const a = await mk({ dek: "d0", sponsor: "S", flags: { breaking: true }, readMin: 7, bodyMarkdown: "A [link](https://example.com/x) here." });
+    const vc = await patch(a.id, { tenant: "dtw", actor, expectedVersion: a.version + 5, title: "x" });
+    expect("P expectedVersion stale ⇒ 409 version_conflict currentVersion", [vc.status, vc.body], [409, { ok: false, status: "version_conflict", reason: "article version changed", currentVersion: a.version }]);
+    const l0 = await logCount();
+    const t = await patch(a.id, { tenant: "dtw", actor, expectedVersion: a.version, title: "New title", flags: { affiliate: true } });
+    const after = await readLatest(a.id);
+    expect("P title + flags: 200 changed [title, flags], version +1, flags merged per key, absent keys unchanged (dek, readMin, sponsor, breaking)", [
+      t.status, t.body.changed, t.body.version, after.affiliate, after.breaking, after.dek, after.readMin, after.sponsor,
+    ], [200, ["title", "flags"], a.version + 1, true, true, "d0", 7, "S"]);
+    expect("H PATCH with a change ⇒ ONE human_edit row with field NAMES", (await logCount()) - l0, 1);
+    const he = (await payload.find({ collection: "activityLog", where: { and: [{ targetId: { equals: String(a.id) } }, { eventType: { equals: "human_edit" } }] }, sort: "-id", limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined;
+    expect("H human_edit detail {via hub, actor, action update, fields}", he?.detail, { via: "hub", actor, action: "update", fields: ["title", "flags"] });
+    const l1 = await logCount();
+    const same = await patch(a.id, { tenant: "dtw", actor, expectedVersion: a.version + 1, title: "New title" });
+    expect("P no change ⇒ 200 changed [], version unchanged, 0 log rows", [same.status, same.body.changed, same.body.version, (await logCount()) - l1], [200, [], a.version + 1, 0]);
+    const cl = await patch(a.id, { tenant: "dtw", actor, expectedVersion: a.version + 1, dek: null, flags: { sponsored: false }, sponsor: null });
+    const afterCl = await readLatest(a.id);
+    expect("P null clears dek / sponsor", [cl.status, afterCl.dek ?? null, afterCl.sponsor ?? null], [200, null, null]);
+    const t2 = await patch(a.id, { tenant: "dtw", actor, expectedVersion: (cl.body.version as number) ?? 0, title: "Third" });
+    expect("P title only on a hub draft whose body has an https link ⇒ 200 [title] (not body_not_editable)", [t2.status, t2.body.changed], [200, ["title"]]);
+    const v3 = t2.body.version as number;
+    expect("P merge rules: pillar change without subSectionSlug ⇒ subSectionSlug required; sponsor null while sponsored ⇒ sponsor required", [
+      (await patch(a.id, { tenant: "dtw", actor, expectedVersion: v3, pillarSlug: "p6-other" })).body.fields,
+      (await patch(a.id, { tenant: "dtw", actor, expectedVersion: v3, flags: { sponsored: true }, sponsor: null })).body.fields,
+    ], [{ subSectionSlug: "required" }, { sponsor: "required" }]);
+    const ne = async (k: keyof Setup6["articles"]) => {
+      const x = await patch(s6.articles[k].id, { tenant: "dtw", actor, expectedVersion: 1, title: "x" });
+      return [x.status, x.body];
+    };
+    expect("P not_editable: engine ⇒ origin; published ⇒ status; CMS-user draft ⇒ not_hub_authored; P-c live then saved-draft ⇒ status", [
+      await ne("engine"), await ne("published"), await ne("manualDraftByCmsUser"), await ne("hubDraftPublishedThenSavedDraft"),
+    ], [
+      [422, { ok: false, status: "not_editable", reason: "origin" }], [422, { ok: false, status: "not_editable", reason: "status" }],
+      [422, { ok: false, status: "not_editable", reason: "not_hub_authored" }], [422, { ok: false, status: "not_editable", reason: "status" }],
+    ]);
+    const live = s6.articles.hubDraftPublishedThenSavedDraft;
+    const livePub = await call("GET", `/api/public/articles/${live.slug}`, undefined, pubTok);
+    expect("P-c the live article is still public (200) after the refused PATCH", livePub.status, 200);
+    const rel = s6.articles.manualDraftRelationBody;
+    const relLatest = await readLatest(rel.id);
+    const bn = await patch(rel.id, { tenant: "dtw", actor, expectedVersion: relLatest.version as number, bodyMarkdown: "x" });
+    expect("P body_not_editable for a stored body with a relationship node", [bn.status, bn.body], [422, { ok: false, status: "body_not_editable", reason: "existing body cannot be edited as Markdown" }]);
+    // P-a: CMS admin Save Draft (title X) ⇒ view=edit sees the latest; stale version ⇒ 409; right version ⇒ keeps X
+    const b = await mk();
+    await payload.update({ collection: "articles", id: b.id, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { title: "X-saved" } as never });
+    const be = await getA(b.id, "&view=edit");
+    const bv = (be.body.edit as Doc | undefined)?.version as number;
+    const stale = await patch(b.id, { tenant: "dtw", actor, expectedVersion: b.version, dek: "y" });
+    const good = await patch(b.id, { tenant: "dtw", actor, expectedVersion: bv, dek: "y" });
+    const bl = await readLatest(b.id);
+    expect("P-a Save Draft: view=edit shows the latest (title X-saved, newer version), stale ⇒ 409, right version ⇒ 200 keeping X-saved, still not public", [
+      (be.body.article as Doc | undefined)?.title, bv > b.version, stale.status, good.status, bl.title, (await call("GET", `/api/public/articles/${b.slug}`, undefined, pubTok)).status,
+    ], ["X-saved", true, 409, 200, "X-saved", 404]);
+    // P-b: Save Draft with workflowStatus published ⇒ not editable
+    const c = await mk();
+    await payload.update({ collection: "articles", id: c.id, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { title: "X-pub", workflowStatus: "published" } as never });
+    const ce = await getA(c.id, "&view=edit");
+    const cp = await patch(c.id, { tenant: "dtw", actor, expectedVersion: 99, dek: "z" });
+    expect("P-b Save Draft workflowStatus published ⇒ edit {editable:false, status}, article.title from MAIN, PATCH 422 before the version check", [
+      ce.body.edit, (ce.body.article as Doc | undefined)?.title === "X-pub", cp.status, cp.body.reason,
+    ], [{ editable: false, editableReason: "status" }, false, 422, "status"]);
+    // Slug two sources (S4-3)
+    const d = await mk();
+    const ySlug = uniq("p6-y");
+    const dv = await patch(d.id, { tenant: "dtw", actor, expectedVersion: d.version, slug: ySlug });
+    const postY = await post(draft({ slug: ySlug }));
+    const postX = await post(draft({ slug: d.slug }));
+    const other = await mk();
+    const toOther = await patch(other.id, { tenant: "dtw", actor, expectedVersion: other.version, slug: ySlug });
+    const keep = await patch(d.id, { tenant: "dtw", actor, expectedVersion: dv.body.version as number, slug: ySlug, title: "keep own slug" });
+    expect("P slug two sources: PATCH X→Y; POST Y ⇒ 409 (existing = that article); POST X ⇒ 409 (main table still X, OBS-intended); PATCH another to Y ⇒ 409; keep own slug ⇒ 200", [
+      dv.status, [postY.status, (postY.body.existing as Doc | undefined)?.id], postX.status, toOther.status, keep.status,
+    ], [200, [409, d.id], 409, 409, 200]);
+    const intakeY = await call("POST", "/api/engine/intake", { publicationId: "dtw", title: "intake y", pillarSlug: "p6-main", body_markdown: "x", byline: "Probe", slug: ySlug }, process.env.SEED_ENGINE_TOKEN ?? null);
+    const intakeX = await call("POST", "/api/engine/intake", { publicationId: "dtw", title: "intake x", pillarSlug: "p6-main", body_markdown: "x", byline: "Probe", slug: d.slug }, process.env.SEED_ENGINE_TOKEN ?? null);
+    obs6("P-17 intake with Y (only in the latest draft) / X (main table)", { y: [intakeY.status, intakeY.body.status], x: [intakeX.status, intakeX.body.status] });
+  }
+
+  // ══ T — taxonomy + view=edit ═════════════════════════════════════════════
+  {
+    const dflt = await call("GET", "/api/hub/taxonomy?tenants=dtw", undefined, T.author);
+    const entry = ((dflt.body.tenants as Doc[] | undefined) ?? [])[0] ?? {};
+    expect("T default kinds: only pillars + authors keys", Object.keys(entry).sort(), ["authors", "pillars", "tenant"]);
+    const all = await call("GET", "/api/hub/taxonomy?tenants=dtw,world-travel-brief&kinds=subsections,tags,countries,cities", undefined, T.author);
+    const [d, w] = (all.body.tenants as Doc[] | undefined) ?? [];
+    const sub = ((d?.subsections as Doc | undefined)?.items as Doc[] | undefined) ?? [];
+    expect("T new kinds: shapes, countries global, cities disabled at dtw / enabled at wtb", [
+      all.status, Object.keys(sub[0] ?? {}).sort(), Object.keys((((d?.tags as Doc | undefined)?.items as Doc[] | undefined) ?? [])[0] ?? {}).sort(),
+      Object.keys((((d?.countries as Doc | undefined)?.items as Doc[] | undefined) ?? [])[0] ?? {}).sort(), (d?.cities as Doc | undefined)?.disabled,
+      JSON.stringify(d?.countries) === JSON.stringify(w?.countries), Array.isArray((w?.cities as Doc | undefined)?.items) && (w?.cities as Doc | undefined)?.disabled === undefined,
+    ], [200, ["id", "order", "pillarId", "slug", "title"], ["id", "slug", "title"], ["code", "id", "name", "slug"], true, true, true]);
+    const bad = await call("GET", "/api/hub/taxonomy?kinds=foo", undefined, T.author);
+    expect("T kinds=foo ⇒ 400 unknown kind", [bad.status, bad.body.reason], [400, "unknown kind"]);
+    const again = await call("GET", "/api/hub/taxonomy?tenants=dtw&kinds=tags,subsections", undefined, T.author);
+    expect("T deterministic order (two reads equal)", again.text === (await call("GET", "/api/hub/taxonomy?tenants=dtw&kinds=tags,subsections", undefined, T.author)).text, true);
+    for (const k of ["published", "engine", "manualDraftByCmsUser"] as const) {
+      const art = s6.articles[k];
+      const plain = await getA(art.id);
+      const xyz = await getA(art.id, "&view=xyz");
+      const edit = await getA(art.id, "&view=edit");
+      expect(`T ${k}: no view ⇒ no edit key, view=xyz byte-identical to no view; view=edit ⇒ edit has only {editable,editableReason}, article from MAIN`, [
+        "edit" in plain.body, plain.text === xyz.text, Object.keys((edit.body.edit as Doc | undefined) ?? {}).sort(), JSON.stringify(edit.body.article) === JSON.stringify(plain.body.article),
+      ], [false, true, ["editable", "editableReason"], true]);
+    }
+    const rel = await getA(s6.articles.manualDraftRelationBody.id, "&view=edit");
+    expect("T relationship body ⇒ editable true, bodyEditable false", [(rel.body.edit as Doc | undefined)?.editable, (rel.body.edit as Doc | undefined)?.bodyEditable], [true, false]);
+    const mine = await getA(createdId, "&view=edit");
+    const e = (mine.body.edit ?? {}) as Doc;
+    const dbv = (await readLatest(createdId)).version;
+    expect("T hub draft view=edit: editable true, version matches DB, slugs back", [e.editable, e.editableReason, e.version, e.pillarSlug, e.subSectionSlug, e.countrySlugs, e.tagSlugs], [true, "ok", dbv, "p6-main", "p6-sub", ["vietnam", "singapore"], ["p6-tag-a"]]);
+  }
+
+  // ══ W — webhook suppressed (D8; positive control) ════════════════════════
+  {
+    const http = await import("node:http");
+    let hits = 0;
+    const server = http.createServer((req, res) => {
+      if (req.method === "POST") hits++;
+      req.resume();
+      res.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as { port: number }).port;
+    const dtwId = s6.tenants.dtw!.id;
+    const tDoc = (await payload.findByID({ collection: "tenants", id: dtwId, depth: 0, overrideAccess: true })) as unknown as Doc;
+    try {
+      await payload.update({ collection: "tenants", id: dtwId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: `http://127.0.0.1:${port}` } as never });
+      let h0 = hits;
+      const w = await post(draft());
+      await patch(w.body.id as number, { tenant: "dtw", actor, expectedVersion: w.body.version as number, title: "w2" });
+      await new Promise((r) => setTimeout(r, 300));
+      const routeHits = hits - h0;
+      h0 = hits;
+      await payload.update({ collection: "articles", id: w.body.id as number, overrideAccess: true, locale: "en", draft: true, data: { dek: "control" } as never });
+      await new Promise((r) => setTimeout(r, 300));
+      const controlHits = hits - h0;
+      expect("W route POST + PATCH ⇒ 0 webhook; Local API update without the flag ⇒ ≥ 1 (positive control)", [routeHits, controlHits >= 1], [0, true]);
+    } finally {
+      await payload.update({ collection: "tenants", id: dtwId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: tDoc.frontendUrl ?? null } as never });
+      server.close();
+    }
+  }
+
+  // ══ X — concurrency (OBS + no 5xx) ═══════════════════════════════════════
+  {
+    const slug = uniq("p6-race");
+    const [x1, x2] = await Promise.all([post(draft({ slug })), post(draft({ slug }))]);
+    obs6("X1 two POSTs, same slug (P-6b)", [x1.status, x2.status]);
+    const base = await post(draft());
+    const [y1, y2] = await Promise.all([
+      patch(base.body.id as number, { tenant: "dtw", actor, expectedVersion: base.body.version as number, title: "race A" }),
+      patch(base.body.id as number, { tenant: "dtw", actor, expectedVersion: base.body.version as number, title: "race B" }),
+    ]);
+    const fin = await readLatest(base.body.id as number);
+    obs6("X2 two PATCHes, same expectedVersion (P-7)", { statuses: [y1.status, y2.status], finalVersion: fin.version });
+    expect("X no 5xx", [x1.status, x2.status, y1.status, y2.status].every((s) => s < 500), true);
+  }
+
+  // ══ I — intake regression (path in production use) ═══════════════════════
+  {
+    const tokI = process.env.SEED_ENGINE_TOKEN ?? null;
+    const r = await call("POST", "/api/engine/intake", { publicationId: "dtw", title: `Intake ${uniq("i")}`, pillarSlug: "p6-main", body_markdown: "Một bài intake.", byline: "Probe Intake" }, tokI);
+    obs6("I intake POST", [r.status, r.body.status]);
+    expect("I intake still answers 201 for a valid draft (seed engine token)", r.status, 201);
+  }
+
+  console.log(`\n[check6] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(state.failures === 0 ? 0 : 1);
+}
+
+const PG_INT4_MAX6 = 2147483647;
+
+function toId6(v: unknown): number | string | null {
+  if (v == null) return null;
+  if (typeof v === "number" || typeof v === "string") return v;
+  const id = (v as { id?: unknown }).id;
+  return typeof id === "number" || typeof id === "string" ? id : null;
+}
+
+/** Group H, `--hooks-only` (AC10 / 3.3): OBS of `detail` + `actorEngine` of `article_created` for five
+ *  non-hub-author contexts (compare base vs branch with `diff`), plus the hubAuthor rows (branch only). */
+async function check6Hooks(payload: P, expect: (label: string, actual: unknown, wanted: unknown) => void): Promise<void> {
+  const tenants = await tenantsBySlug(payload);
+  const dtw = need(tenants, "dtw");
+  const pillar = await ensurePillar(payload, dtw, "p6-main", "P6 Main", 90);
+  const author = await ensureAuthor(payload, dtw, "p6-author-1", "P6 Author One");
+  const admin = (await payload.find({ collection: "users", where: { role: { equals: "systemAdmin" } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as (Doc & { id: number }) | undefined;
+  if (!admin) throw new Error("no systemAdmin user — run `npm run db:seed` first");
+  const engine = (await payload.find({ collection: "content-engines", limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as { id: number } | undefined;
+  const stamp = Date.now().toString(36);
+  const row = async (id: number, ev: string) => {
+    const d = (await payload.find({ collection: "activityLog", where: { and: [{ targetId: { equals: String(id) } }, { eventType: { equals: ev } }] }, sort: "-id", limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined;
+    return d ? { actorType: d.actorType, actorEngineSet: d.actorEngine != null, detail: d.detail ?? null } : null;
+  };
+  const base = (k: string) => ({ tenant: dtw, title: `H6 ${k} ${stamp}`, slug: `h6-${k}-${stamp}`, pillar, author, workflowStatus: "draft" });
+  const scen: [string, () => Promise<number>][] = [
+    ["human", async () => ((await payload.create({ collection: "articles", locale: "en", overrideAccess: false, user: admin as never, context: { disableRevalidate: true }, data: base("human") as never })) as unknown as { id: number }).id],
+    ["engine", async () => ((await payload.create({ collection: "articles", locale: "en", overrideAccess: true, context: { disableRevalidate: true, engineWrite: true, engineId: engine?.id }, data: base("engine") as never })) as unknown as { id: number }).id],
+    ["translationWrite", async () => ((await payload.create({ collection: "articles", locale: "en", overrideAccess: true, context: { disableRevalidate: true, translationWrite: true }, data: base("tr") as never })) as unknown as { id: number }).id],
+    ["hubWrite", async () => ((await payload.create({ collection: "articles", locale: "en", overrideAccess: true, context: { disableRevalidate: true, hubWrite: { actor: { email: "h@example.com", role: "editor" }, reason: "probe" }, engineId: engine?.id }, data: base("hw") as never })) as unknown as { id: number }).id],
+    ["systemWrite", async () => ((await payload.create({ collection: "articles", locale: "en", overrideAccess: true, context: { disableRevalidate: true, systemWrite: true }, data: base("sys") as never })) as unknown as { id: number }).id],
+  ];
+  for (const [name, fn] of scen) {
+    const id = await fn();
+    console.log(`OBS   H-hooks ${name} article_created  ${JSON.stringify(await row(id, "article_created"))}`);
+  }
+  // hubAuthor (branch only): create ⇒ detail {via, actor, action create}; draft update ⇒ ONE human_edit with fields
+  const actor = { email: "h6@example.com", role: "editor" };
+  const hid = ((await payload.create({ collection: "articles", locale: "en", overrideAccess: true, context: { disableRevalidate: true, hubAuthor: { actor, action: "create" }, engineId: engine?.id }, data: { ...base("ha"), origin: "manual", lastEngine: engine?.id } as never })) as unknown as { id: number }).id;
+  const c = await row(hid, "article_created");
+  const before = (await payload.count({ collection: "activityLog", where: { targetId: { equals: String(hid) } }, overrideAccess: true })).totalDocs;
+  await payload.update({ collection: "articles", id: hid, draft: true, locale: "en", overrideAccess: true, context: { disableRevalidate: true, hubAuthor: { actor, action: "update", fields: ["title"] }, engineId: engine?.id }, data: { title: `H6 ha2 ${stamp}`, workflowStatus: "draft", _status: "draft" } as never });
+  const after = (await payload.count({ collection: "activityLog", where: { targetId: { equals: String(hid) } }, overrideAccess: true })).totalDocs;
+  const u = await row(hid, "human_edit");
+  expect("H hubAuthor create ⇒ article_created actorType engine, detail {via hub, actor, action create}", c, { actorType: "engine", actorEngineSet: engine != null, detail: { via: "hub", actor, action: "create" } });
+  expect("H hubAuthor draft update ⇒ exactly ONE new row: human_edit with field names", [after - before, u], [1, { actorType: "engine", actorEngineSet: engine != null, detail: { via: "hub", actor, action: "update", fields: ["title"] } }]);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -3963,10 +5517,16 @@ const run = flag("setup")
                       ? check5
                       : flag("explore6")
                         ? explore6
-                        : null;
+                        : flag("setup6")
+                          ? setup6
+                          : flag("check6")
+                            ? check6
+                            : flag("guard-child")
+                              ? guardChild6
+                              : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links]",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only",
   );
   process.exit(2);
 }
