@@ -12,7 +12,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test:media-redirect": "tsx --test src/lib/media-redirect.test.ts",
-    "test:single-home": "tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts",
+    "test:single-home": "tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts scripts/lib/local-db-guard.test.ts",
     "payload": "payload",
     "payload:generate-types": "payload generate:types",
     "payload:generate-importmap": "payload generate:importmap",
