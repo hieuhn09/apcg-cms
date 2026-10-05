@@ -60,9 +60,10 @@ and status.
   BriefAsia web deploys are Ready. Run `npm run audit:add-pressroom` (dry run, review),
   then `npm run audit:add-pressroom -- --apply --confirm-host=<prod DB host>` from an
   interactive terminal (the script refuses non-local DBs without both, never overwrites
-  an existing row, and must not be run with a tunnelled prod DB open). Only after that,
-  teach the content engine to send Pressroom (and check `autoPublishEngineDrafts` for
-  the tenant). Never rename or delete the `pressroom` pillar slug once articles exist
+  an existing row, and must not be run with a tunnelled prod DB open). Pressroom is
+  editor-only: the content engine is blocked from it (422 `pillar not writable by
+  engine: pressroom`, create and refresh). Rollback note: removing the `brief-asia`
+  entry from `ENGINE_BLOCKED_PILLARS` re-enables engine writes. Never rename or delete the `pressroom` pillar slug once articles exist
   (the Pillars guards refuse it). Rollback per step: revert the PR(s); delete the row
   only while zero Pressroom articles/sub-sections exist; to remove content, stop the
   engine and archive the articles first. Before re-enabling after any rollback, audit

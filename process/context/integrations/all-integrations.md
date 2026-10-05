@@ -10,7 +10,7 @@ metadata:
 
 # Integrations Context
 
-Last updated: 2026-10-05 (new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+Last updated: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
 hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
 Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
 new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
@@ -461,7 +461,7 @@ or wrong-tenant article, no log row. See the WRITE section above for the helper 
 ## Single-home pillar rule (BriefAsia Pressroom, 2026-10-05)
 
 A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:43`, `{ "brief-asia": ["pressroom"] }`,
-keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:33`) owns its articles
+keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:38`) owns its articles
 exclusively: a code constant, **no schema field, no migration**. WAD also has a `pressroom` pillar and
 is deliberately NOT affected. The rule (`src/lib/single-home-pillars.ts:7-15`): V1 primary = P means no
 secondary rows (a persisted duplicate of the primary counts), V2 no sub-section, V3 a secondary row = P
@@ -493,25 +493,38 @@ intake, scripts):
   `beforeChange` no-op unless `operation === 'update'`; blocks slug rename (ValidationError, path `slug`)
   and tenant move (APIError 400), `beforeDelete` refuses while articles (primary or secondary), sub-sections,
   newsletter `vertical` or latest draft version reference the pillar. Creating the row stays allowed.
-- **Intake** (`src/app/api/engine/intake/route.ts:173`): pure `checkIntakeSingleHome` pre-check **before**
-  the idempotency lookup (covers create AND refresh, and avoids orphan tag/author/hero writes), logged as
-  `integration_error`; the catch (`:273`) maps ONLY `pillar rule:` errors (`isSingleHomeRuleError`,
-  `single-home-pillars.ts:288`) to 422, everything else keeps its 500.
+- **Intake** (`src/app/api/engine/intake/route.ts`): two pure gates run **before** the idempotency lookup
+  (so they cover create AND refresh and avoid orphan tag/author/hero writes), in this order: **3b
+  engine-blocked pillar** (`isEngineBlockedPillar`, see below) then **3c single-home pre-check**
+  (`checkIntakeSingleHome`). Both are logged as `integration_error`; the catch maps ONLY `pillar rule:`
+  errors (`isSingleHomeRuleError`, `single-home-pillars.ts:288`) to 422, everything else keeps its 500.
 - **Console** unwraps ValidationError field messages via `humanErrorMessage` (`single-home-pillars.ts:298`;
   `articles/actions.ts:84,129`, `manage/collection-actions.ts:52,69`); the Pillars delete button now shows
   a refused delete.
 
-**New engine-contract 422 reasons** (mirrored in `docs/08-content-engine-integration.md`):
-`pillar not writable by engine: <slug>` (`ENGINE_BLOCKED_PILLARS`; create AND refresh) and
+**Engine is blocked from Pressroom (Amendment 1, 2026-10-05; owner instruction: Pressroom takes no
+content-engine articles).** `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive"], "brief-asia": ["pressroom"] }`
+(`src/lib/constants.ts:38`); `normalizeEngineBlockedSlug` (trim + lower-case) and `isEngineBlockedPillar`
+make the match case/whitespace-insensitive. Gate 3b in `intake/route.ts:156` runs after auth + tenant/pillar
+resolution and BEFORE 3c and the idempotency lookup, so engine create AND refresh get 422
+`pillar not writable by engine: pressroom` plus an `integration_error` row. WAD's own `pressroom` and other
+tenants are unaffected. Pressroom articles are created by editors only, so "teach the engine Pressroom" and the
+`autoPublishEngineDrafts`-for-Pressroom concern are moot. Rollback: remove the `brief-asia` entry (engine
+writes re-enabled; the single-home rule still applies). Only `engine/intake` takes a pillar from an engine actor.
+
+**OPEN (owner decision pending): `POST /api/engine/translation` is NOT gated.** It takes no pillar, so it can
+still write translated text onto an EXISTING brief-asia Pressroom article. Decide whether to block it.
+
+**Engine-contract 422 reasons** (mirrored in `docs/08-content-engine-integration.md`):
+`pillar not writable by engine: <slug>` (above; terminal) and
 `pillar rule: "<slug>" is a single-home pillar: ...` (Pressroom may carry no other `sections[]` entry, no
 `subSectionSlug`/`subSectionSlugs[]`/`secondarySubSections`; no article may list `pressroom` in
-`sections[]`; `secondaryPillarSlugs` is never checked). Both are terminal: fix the payload, do not retry.
-Engine 4xx-terminal behaviour is UNVERIFIED (client code lives in the content-engine repo).
+`sections[]`, so the pre-check still refuses cross-posts; `secondaryPillarSlugs` is never checked). Both are
+terminal: fix the payload, do not retry. Engine 4xx-terminal behaviour is UNVERIFIED (client code lives in
+the content-engine repo).
 
-**The engine must be taught Pressroom first** — only after the `pressroom` Pillars row exists
-(`npm run audit:add-pressroom`, owner-run, LAST in the rollout; runbook in `docs/11-operations.md`).
-`Tenants.autoPublishEngineDrafts` (`Tenants.ts:267`) decides whether Pressroom items land `published` or
-`pending_review` (`intake/route.ts:225`); check it before the first send.
+The `pressroom` Pillars row is still created by the owner (`npm run audit:add-pressroom`, LAST in the
+rollout; runbook in `docs/11-operations.md`) so editors can use it.
 
 **Accepted residuals** (all outside the application trust boundary or by design): raw SQL / psql /
 Supabase-Neon consoles bypass every hook; deleting a Tenant (systemAdmin) sets `pillars.tenant_id` NULL

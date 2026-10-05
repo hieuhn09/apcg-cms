@@ -1,6 +1,6 @@
 # apcg-cms — All Context
 
-Last updated: 2026-10-05 (BriefAsia Pressroom single-home pillar rule — `SINGLE_HOME_PILLARS` in `src/lib/constants.ts`, enforced by Articles/Pillars/SubSections hooks + an intake 422 pre-check; owner-run `npm run audit:add-pressroom`; shared `scripts/lib/local-db-guard.ts`; scoped tests `test:single-home` + `probe:single-home`; see **Key Patterns** and `integrations/all-integrations.md` §Single-home pillar rule)
+Last updated: 2026-10-05 (Amendment 1: content engine blocked from brief-asia `pressroom` via `ENGINE_BLOCKED_PILLARS`; earlier: BriefAsia Pressroom single-home pillar rule — `SINGLE_HOME_PILLARS` in `src/lib/constants.ts`, enforced by Articles/Pillars/SubSections hooks + an intake 422 pre-check; owner-run `npm run audit:add-pressroom`; shared `scripts/lib/local-db-guard.ts`; scoped tests `test:single-home` + `probe:single-home`; see **Key Patterns** and `integrations/all-integrations.md` §Single-home pillar rule)
 
 Previously: 2026-09-29 (R2_PUBLIC_BASE_URL redirect shim + one R2 switch `resolveR2PublicBase`; `npm run test:media-redirect`, the one scoped `node:test` script; see **Environment and Configuration** → Media straight from R2)
 
@@ -301,8 +301,9 @@ migration); enforced in the Articles `beforeChange` hook on the *resulting* stat
 Payload's backfill), SubSections/secondary-row validators, Pillars row guards, an intake 422 pre-check,
 and Console error unwrapping. The `pressroom` Pillars row is created LAST by the owner
 (`npm run audit:add-pressroom`, dry-run first, `--apply --confirm-host=<prod DB host>` from a TTY) via the
-shared local-DB guard `scripts/lib/local-db-guard.ts`; the engine must be taught Pressroom only after
-that. Full detail, residuals and the new engine 422 reasons:
+shared local-DB guard `scripts/lib/local-db-guard.ts`. The content engine is BLOCKED from Pressroom
+(`ENGINE_BLOCKED_PILLARS["brief-asia"] = ["pressroom"]`, intake gate 3b, 422 `pillar not writable by engine`,
+create AND refresh; editors create Pressroom articles). Full detail, residuals and the engine 422 reasons:
 `process/context/integrations/all-integrations.md` §Single-home pillar rule.
 
 **Content-engine intake is a cross-repo wire contract, not a Payload-native feature.** The JSON
@@ -392,7 +393,7 @@ independent verification, not from guessing.
 | `npm run payload:migrate` / `payload:migrate:create` | apply / scaffold a migration |
 | `npm run db:seed` | `tsx scripts/seed.ts` — system admin + sample tenants + taxonomy + sample engine. `SEED_INCLUDE_PRESSROOM=true` (default OFF) adds a brief-asia `pressroom` pillar fixture and hard-refuses any non-local `DATABASE_URL` (seed re-upserts fixtures and has run against prod; the prod row is created by `audit:add-pressroom`, never by a re-seed) |
 | `npm run audit:add-pressroom` | `tsx scripts/audit/add-pressroom-pillar.ts` — OWNER-RUN, LAST in the Pressroom rollout; dry run by default, `--apply` creates the brief-asia `pressroom` pillar; non-local DB needs `--confirm-host=<exact host>` AND a TTY (`scripts/lib/local-db-guard.ts`); idempotent, never overwrites |
-| `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table); no DB, no network |
+| `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table), 166 tests; no DB, no network |
 | `npm run probe:single-home` | `tsx scripts/single-home-probe.ts` (`-- --http` adds REST/GraphQL checks) — LOCAL DISPOSABLE Postgres only, creates and deletes rows; see `tests/all-tests.md` |
 | `npm run db:status` | `tsx scripts/db-status.ts` |
 | `npm run r2:cors` | `tsx scripts/set-r2-cors.ts` — required once for R2 client-side uploads to work |
@@ -470,8 +471,10 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
 ## Open Questions / Outstanding Work
 
 - **Pressroom rollout is owner-gated (2026-10-05, CMS PR hieuhn09/apcg-cms#26 + FE PR hieuhn09/brief-asia-web#32).**
-  Code merges in any order; the `pressroom` Pillars row is created LAST (`npm run audit:add-pressroom`),
-  then the engine is taught Pressroom. Open items: engine 4xx-terminal handling of the new 422 reasons is
+  Code merges in any order; the `pressroom` Pillars row is created LAST (`npm run audit:add-pressroom`).
+  The engine is blocked from Pressroom (Amendment 1), so nothing is taught to it. Open items: OWNER DECISION
+  pending on `POST /api/engine/translation`, which is not gated and can still write translated text onto an
+  existing Pressroom article; engine 4xx-terminal handling of the 422 reasons is
   unverified (client is in content-engine); /admin Save Draft shows only a generic "field is invalid" toast
   for a rule violation (Console shows the full text); pre-existing `translation_jobs.article_id` is NOT NULL
   with `ON DELETE SET NULL`, so deleting a published article fails (see `database/all-database.md`);
