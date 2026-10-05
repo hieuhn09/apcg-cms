@@ -2135,7 +2135,8 @@ const BODY6_PROBES = ["P-20", "P-21", "P-22", "P-23", "P-24", "P-25", "P-26"];
 const LIM6 = { lines: 5000, starUnd: 3000, links: 1000 };
 /** Revised proposal under test (after the P-22 / P-23 measurements): total lines, `*`+`_` chars, mark runs, `](`, per-paragraph-unit runs / links, tree caps. */
 const REV6 = (() => {
-  const d = { lines: 1200, starUnd: 5000, runs: 2500, links: 500, unitRuns: 30, unitLinks: 20, markChars: 5000, nodes: 12000, json: 1_500_000, indent: 16 };
+  // Stage 0.5b (OQ41): defaults = the seven frozen 1b thresholds + tree caps (Public Contracts), so the §9.2 D2 vectors are right BY NAME.
+  const d = { lines: 1000, starUnd: 5000, runs: 2500, links: 500, unitRuns: 30, unitLinks: 20, markChars: 5000, nodes: 9000, json: 1_200_000, indent: 16 };
   const o = process.argv.includes("--rev") ? process.argv[process.argv.indexOf("--rev") + 1] : undefined; // lines,starUnd,runs,links,unitRuns,unitLinks,markChars,nodes,json,indent
   if (o) {
     const k = Object.keys(d) as (keyof typeof d)[];
@@ -2157,84 +2158,156 @@ interface Pre6 {
   runs: number;
   maxRun: number;
   links: number;
+  units: number;
   maxUnitLines: number;
   maxUnitRuns: number;
   maxUnitLinks: number;
   backticks: number;
   tildes: number;
+  markChars: number;
   maxIndent: number;
 }
 
+/** The W class (JS `\s` minus LF, which splits lines): what leading indentation is counted in. */
+function isW6(c: number): boolean {
+  return c === 9 || c === 11 || c === 12 || c === 13 || c === 32 || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a) ||
+    c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff;
+}
+
+/** `s[i]` is a space or tab and `i` is inside the line (`i < end`). */
+function spAt6(s: string, i: number, end: number): boolean {
+  if (i >= end) return false;
+  const c = s.charCodeAt(i);
+  return c === 32 || c === 9;
+}
+
 /**
- * O(n) pre-check counters: lines (LF, CR, U+2028, U+2029 each one), `*`+`_` characters, mark RUNS (maximal runs of ONE of `*` `_` `` ` `` `~`),
- * `](`, plus the per-UNIT maxima. A unit = what the importer converts as one text node: consecutive non-blank lines of one paragraph;
- * a blank line ends a unit, and a line that starts a list item / quote / heading (`-`,`+`,`*␠`,`>`,`#`, `1.`/`1)`) is its own unit.
+ * Executable reference (oracle) of `precheckBodyLinear` (CMS) and `mdPrecheckLinear` (hub) — Stage 0.5b, "1b unit definition"
+ * (Public Contracts; OQ15 / OQ33 / OQ36). Both must return the SAME counts as this function on the shared vector table.
+ * O(n): every character is looked at a bounded number of times.
+ *  (i)   lines: each LF, CR, U+2028, U+2029 is one break (CRLF = 2); lines = breaks + 1.
+ *  (ii)  units are split ONLY on LF.
+ *  (iii) a blank line is `^[\t ]*$` (space / tab only); a line of only CR / NBSP / other W is NOT blank and merges.
+ *  (iv)  a non-blank line opens a NEW unit only if it matches `^>[ \t]`, `^#{1,6}[ \t]`, `^[ \t]*[-*+][ \t]` or `^[ \t]*[0-9]{1,9}\.[ \t]`;
+ *        any other non-blank line continues the current unit; a blank line ends it.
+ *  (v)   `1)`, `[ ]`, table rows, HTML, fences are NOT fences (merge = stricter).
+ *  (vi)  mark runs (maximal runs of ONE of `*` `_` `` ` `` `~`) and `](` add up over every line of a unit; any other
+ *        character (CR, NBSP, LF included) cuts a run.
+ *  indent = leading W characters of each LF line; markChars = `*`+`_` + backticks + tildes.
  */
 function pre6(s: string): Pre6 {
-  let lf = 0, cr = 0, ls = 0, ps = 0, starUnd = 0, links = 0, runs = 0, maxRun = 0, curRun = 0, curCh = 0, backticks = 0, tildes = 0, indent = 0, maxIndent = 0;
-  let ul = 0, ur = 0, uk = 0, mul = 0, mur = 0, muk = 0;
+  const n = s.length;
+  let lf = 0, cr = 0, ls = 0, ps = 0, starUnd = 0, links = 0, runs = 0, maxRun = 0, backticks = 0, tildes = 0, maxIndent = 0, units = 0;
+  let ul = 0, ur = 0, uk = 0, mul = 0, mur = 0, muk = 0, inUnit = false;
   const flush = () => {
-    if (ul > mul) mul = ul;
-    if (ur > mur) mur = ur;
-    if (uk > muk) muk = uk;
+    if (inUnit) {
+      units++;
+      if (ul > mul) mul = ul;
+      if (ur > mur) mur = ur;
+      if (uk > muk) muk = uk;
+    }
     ul = ur = uk = 0;
+    inUnit = false;
   };
-  let atLineStart = true;
-  let lineHasText = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c === 10 || c === 13 || c === 0x2028 || c === 0x2029) {
-      if (c === 10) lf++;
-      else if (c === 13) cr++;
-      else if (c === 0x2028) ls++;
-      else ps++;
-      if (!lineHasText) flush();
-      lineHasText = false;
-      atLineStart = true;
-      indent = 0;
-      curRun = 0;
-      curCh = 0;
-      continue;
-    }
-    if (atLineStart && (c === 32 || c === 9)) {
-      indent++;
-      if (indent > maxIndent) maxIndent = indent;
-    }
-    if (atLineStart && c !== 32 && c !== 9) {
-      atLineStart = false;
-      const n1 = s.charCodeAt(i + 1);
-      let digitsEnd = i;
-      while (s.charCodeAt(digitsEnd) >= 48 && s.charCodeAt(digitsEnd) <= 57) digitsEnd++;
-      const startsUnit =
-        c === 45 || c === 43 || c === 62 || c === 35 || (c === 42 && (n1 === 32 || n1 === 9)) ||
-        (digitsEnd > i && digitsEnd - i <= 9 && (s.charCodeAt(digitsEnd) === 46 || s.charCodeAt(digitsEnd) === 41) && s.charCodeAt(digitsEnd + 1) === 32);
-      if (startsUnit) flush();
-      lineHasText = true;
-      ul++; // approximate: counts unit lines
-    } else if (c !== 32 && c !== 9) lineHasText = true;
-    if (c === 42 || c === 95 || c === 96 || c === 126) {
-      if (c === 42 || c === 95) starUnd++;
-      if (c === 96) backticks++;
-      else if (c === 126) tildes++;
-      if (c === curCh) curRun++;
-      else {
-        curCh = c;
-        curRun = 1;
-        runs++;
-        ur++;
-      }
-      if (curRun > maxRun) maxRun = curRun;
+  let start = 0;
+  while (start <= n) {
+    let end = s.indexOf("\n", start);
+    if (end === -1) end = n;
+    else lf++;
+    // leading [ \t] (blank test + list / ordered fences) and leading W (indent)
+    let p = start;
+    while (p < end && (s.charCodeAt(p) === 32 || s.charCodeAt(p) === 9)) p++;
+    let w = start;
+    while (w < end && isW6(s.charCodeAt(w))) w++;
+    if (w - start > maxIndent) maxIndent = w - start;
+    if (p === end) {
+      flush(); // blank line ends the unit
     } else {
-      curCh = 0;
-      curRun = 0;
-      if (c === 93 && s.charCodeAt(i + 1) === 40) {
-        links++;
-        uk++;
+      const c0 = s.charCodeAt(start);
+      let fence = false;
+      if (c0 === 62 && spAt6(s, start + 1, end)) fence = true; // ^>[ \t]
+      else if (c0 === 35) {
+        let h = start;
+        while (h < end && h - start <= 6 && s.charCodeAt(h) === 35) h++;
+        if (h - start <= 6 && spAt6(s, h, end)) fence = true; // ^#{1,6}[ \t]
+      }
+      if (!fence) {
+        const c = s.charCodeAt(p);
+        if ((c === 45 || c === 42 || c === 43) && spAt6(s, p + 1, end)) fence = true; // ^[ \t]*[-*+][ \t]
+        else {
+          let d = p;
+          while (d < end && d - p <= 9 && s.charCodeAt(d) >= 48 && s.charCodeAt(d) <= 57) d++;
+          if (d > p && d - p <= 9 && d < end && s.charCodeAt(d) === 46 && spAt6(s, d + 1, end)) fence = true; // ^[ \t]*[0-9]{1,9}\.[ \t]
+        }
+      }
+      if (fence) flush();
+      inUnit = true;
+      ul++;
+      let curCh = 0, curRun = 0;
+      for (let i = start; i < end; i++) {
+        const c = s.charCodeAt(i);
+        if (c === 13) cr++;
+        else if (c === 0x2028) ls++;
+        else if (c === 0x2029) ps++;
+        if (c === 42 || c === 95 || c === 96 || c === 126) {
+          if (c === 42 || c === 95) starUnd++;
+          else if (c === 96) backticks++;
+          else tildes++;
+          if (c === curCh) curRun++;
+          else {
+            curCh = c;
+            curRun = 1;
+            runs++;
+            ur++;
+          }
+          if (curRun > maxRun) maxRun = curRun;
+        } else {
+          curCh = 0;
+          curRun = 0;
+          if (c === 93 && i + 1 < end && s.charCodeAt(i + 1) === 40) {
+            links++;
+            uk++;
+          }
+        }
       }
     }
+    if (end === n) break;
+    start = end + 1;
   }
   flush();
-  return { len: s.length, lines: lf + cr + ls + ps + 1, lf, cr, ls, ps, starUnd, runs, maxRun, links, maxUnitLines: mul, maxUnitRuns: mur, maxUnitLinks: muk, backticks, tildes, maxIndent };
+  return {
+    len: n, lines: lf + cr + ls + ps + 1, lf, cr, ls, ps, starUnd, runs, maxRun, links, units, maxUnitLines: mul, maxUnitRuns: mur, maxUnitLinks: muk,
+    backticks, tildes, markChars: starUnd + backticks + tildes, maxIndent,
+  };
+}
+
+/** `s` repeated `n` times (file level since Stage 0.5b, OQ41: `--check6` builds the §9.2 D2 vectors from these). */
+function rep(s: string, n: number): string {
+  return s.repeat(n);
+}
+
+/** `k` units, each = `unit` repeated `n` times joined by ONE space then trimmed; units joined by a blank line (§9.2 D2(c)). */
+function unitsJoin(unit: string, n: number, k: number): string {
+  return Array.from({ length: k }, () => rep(unit + " ", n).trim()).join("\n\n");
+}
+
+/** (`\t`×tabs + `- x\n- y\n`) repeated up to `lines` lines, cut at `cap` chars (§9.2 D2(g)). */
+function zig(tabs: number, lines: number, cap = 200000): string {
+  let s = "";
+  let l = 0;
+  while (l < lines && s.length < cap) {
+    s += rep("\t", tabs) + "- x\n- y\n";
+    l += 2;
+  }
+  return s.slice(0, cap);
+}
+
+/** Synthetic dense body `normal_200k` (§9.2 D2(d); ⇒ 422 `too_large`): the paragraph × 4 + blank line, until ≥ 199,000 chars. */
+function normal200k(): string {
+  const para = "Đây là một đoạn văn **bình thường** với [liên kết](https://example.com/a) và *nghiêng*, dài vừa phải cho một bài báo. ";
+  let s = "";
+  while (s.length < 199000) s += rep(para, 4) + "\n\n";
+  return s;
 }
 
 function seeded6(seed: number): () => number {
@@ -2301,7 +2374,6 @@ interface V6 {
 
 function body6Vectors(lim: { lines: number; starUnd: number; links: number } = LIM6): Record<string, V6> {
   const v: Record<string, V6> = {};
-  const rep = (s: string, n: number) => s.repeat(n);
   const add = (probe: string, name: string, gen: () => string) => {
     v[name] = { probe, gen };
   };
@@ -2334,15 +2406,6 @@ function body6Vectors(lim: { lines: number; starUnd: number; links: number } = L
     add("P-22", `p22_crlf_${n}`, () => rep("line\r\n", n));
   }
   for (const n of [5000, 10000]) add("P-22", `p22_dash_${n}`, () => rep("- a\n", n));
-  const zig = (tabs: number, lines: number, cap = 200000) => {
-    let s = "";
-    let l = 0;
-    while (l < lines && s.length < cap) {
-      s += rep("\t", tabs) + "- x\n- y\n";
-      l += 2;
-    }
-    return s.slice(0, cap);
-  };
   for (const n of [2000, 5000, 10000]) add("P-22", `p22_zigzag63_${n}`, () => zig(63, n));
   for (const n of [500, 1000, 2000, 5000]) {
     add("P-22", `p22_link_${n}`, () => rep("[a](/b) ", n));
@@ -2490,11 +2553,10 @@ function body6Vectors(lim: { lines: number; starUnd: number; links: number } = L
     return rows.join("\n");
   });
   // vectors that PASS the revised pre-check at its limits (per-unit caps stuffed, then the totals)
-  const unitsJoin = (unit: string, n: number, k: number) => Array.from({ length: k }, () => rep(unit + " ", n).trim()).join("\n\n");
   const nLinkUnits = Math.floor(REV6.links / REV6.unitLinks);
   const nRunUnits = Math.floor(REV6.runs / REV6.unitRuns);
   add("P-24", "p24_cap_f13_units", () => unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), nLinkUnits));
-  add("P-24", "p24_cap_f13b_units", () => unitsJoin("[a](/b)*\\**", REV6.unitLinks, nLinkUnits));
+  add("P-24", "p24_cap_f13b_units", () => unitsJoin("[a](/b)*\\**", Math.floor(REV6.unitRuns / 2), nLinkUnits));
   add("P-24", "p24_cap_star_link_units", () => unitsJoin("*[a](/b)", REV6.unitLinks, nLinkUnits));
   add("P-24", "p24_cap_bt_star_units", () => unitsJoin("`a *[b](/c)", Math.floor(REV6.unitRuns / 2), nLinkUnits));
   add("P-24", "p24_cap_tilde_link_units", () => unitsJoin("~~[a](/b)", REV6.unitLinks, nLinkUnits));
@@ -2512,8 +2574,10 @@ function body6Vectors(lim: { lines: number; starUnd: number; links: number } = L
   add("P-24", "p24_cap_combo_zigzag_edge", () => zig(31, Math.floor((REV6.nodes - 600) / 9)) + "\n\n" + unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), nLinkUnits));
   add("P-24", "p24_cap_combo_zigzag15_units", () => zig(REV6.indent, REV6.lines - 80) + "\n\n" + unitsJoin("[a](/b)[a][a](/b)*\\**a", Math.floor(REV6.unitLinks / 2), nLinkUnits));
   add("P-24", "p24_cap_combo_fence_free", () => rep("|a|b|\n", Math.floor((REV6.lines - 80) / 2)) + "\n" + rep("# a\n", Math.floor((REV6.lines - 80) / 2)) + "\n\n" + unitsJoin("*[a](/b)", REV6.unitLinks, nLinkUnits));
-  add("P-24", "p24_cap_combo_table_f13b", () => rep("|a|b|\n", REV6.lines - 100) + "\n" + unitsJoin("[a](/b)*\\**", REV6.unitLinks, nLinkUnits));
-  add("P-24", "p24_cap_combo_zigzag15_f13b", () => zig(REV6.indent, REV6.lines - 80) + "\n\n" + unitsJoin("[a](/b)*\\**", REV6.unitLinks, nLinkUnits));
+  add("P-24", "p24_cap_combo_table_f13b", () => rep("|a|b|\n", REV6.lines - 100) + "\n" + unitsJoin("[a](/b)*\\**", Math.floor(REV6.unitRuns / 2), nLinkUnits));
+  add("P-24", "p24_cap_combo_zigzag15_f13b", () => zig(REV6.indent, REV6.lines - 80) + "\n\n" + unitsJoin("[a](/b)*\\**", Math.floor(REV6.unitRuns / 2), nLinkUnits));
+  // OQ55 upper edge: same formula, unit repeated 16 times = 32 mark runs per unit > unitRuns 30 ⇒ MUST be blocked by 1b.
+  add("P-24", "p24_cap_combo_zigzag15_f13b_x16", () => zig(REV6.indent, REV6.lines - 80) + "\n\n" + unitsJoin("[a](/b)*\\**", Math.floor(REV6.unitRuns / 2) + 1, nLinkUnits));
   add("P-24", "p24_cap_zigzag_nodes", () => zig(31, REV6.lines));
   add("P-24", "p24_cap_list_items", () => rep("- a **b** [c](/d)\n", REV6.lines));
   add("P-24", "p24_normal_199k", () => {
@@ -3717,12 +3781,7 @@ async function explore6() {
     vec.quote_nest_100k = () => rep(">", 100000) + " x";
     vec.dash_nest_50k = () => rep("- ", 50000) + "x";
     vec.one_line_200k = () => rep("lorem ", 33333);
-    vec.normal_200k = () => {
-      const para = "Đây là một đoạn văn **bình thường** với [liên kết](https://example.com/a) và *nghiêng*, dài vừa phải cho một bài báo. ";
-      let s = "";
-      while (s.length < 199000) s += rep(para, 4) + "\n\n";
-      return s;
-    };
+    vec.normal_200k = normal200k;
     vec.links_40k = () => rep("[a](b)", 40000);
     vec.links_rel_28k = () => rep("[a](/b) ", 24000);
     vec.bold_30k = () => rep("**a**", 30000);
