@@ -8,7 +8,7 @@ feature: general
 # GCV Pressroom parity with BriefAsia — PLAN (COMPLEX, 2 repos)
 
 Complexity: COMPLEX
-Status: VALIDATED (CONDITIONAL) — awaiting ENTER EXECUTE MODE
+Status: COMPLETE_WITH_GAPS — executed, merged (apcg-cms#29, gcv-web#10), archived
 
 ## Overview
 GCV already has a CMS `pressroom` pillar; make it behave exactly like BriefAsia Pressroom across apcg-cms (rules) and gcv-web (display). Reference implementation: brief-asia-web (read-only).
@@ -171,3 +171,28 @@ Execute-agent instructions:
 Test gates: as in Verification Evidence.
 
 Backlog (write `process/general-plans/backlog/gcv-pressroom-followups_NOTE_05-10-26.md` at UPDATE PROCESS): engine translation route ungated; engine 4xx handling of new 422 unverified; Distributed string English-only; gcv-web test coverage; /admin Save Draft generic toast.
+
+## EVL and Closeout
+Date: 05-10-26. Merged: apcg-cms#29 (9e92fc4, Stream A), gcv-web#10 (28d3457, Stream B).
+
+### Stream A (apcg-cms) — EVL CLEAN
+- Shipped: `SINGLE_HOME_PILLARS = { "brief-asia": ["pressroom"], gcv: ["pressroom"] }`, `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive","pressroom"], "brief-asia": ["pressroom"] }` (`src/lib/constants.ts`). No migration; `add-pressroom-pillar.ts` unchanged (GCV row already in prod).
+- Gates (independent vc-tester): `test:single-home` 181 (was 171), `test:media-redirect` 173, probe 66/66 and 76/76 `--http`, typecheck loose + strict 0 errors, lint 20 baseline warnings.
+- Behavior confirmed: engine create / refresh / ` PRESSROOM ` variant 422 with rows unchanged; gcv exclusive still 422; gcv ordinary pillar 201/200; brief-asia pressroom 422; wad pressroom 201 (negative control); author-less gcv Pressroom publishes with public API `author:null`; author-less ordinary article rejected; secondary / rename / move / delete-in-use rejected; docs/11 violator SQL ran cleanly on the disposable DB.
+
+### Stream B (gcv-web) — EVL WITH_GAPS
+- F1: footer link and `/press` -> `/pressroom` redirect 404 until the CMS pillar row is visible to the site (footer link is unconditional).
+- F2: the media-enquiries chip/email line lived on the deleted static `/press` page; it is gone (address remains in footer and /contact).
+- F3: Pressroom items that do carry an author still list on author/tag/search pages as a bare "N min".
+- F4: `BylineWired` unused, so its `distributed` prop is untested; most-read is code-reviewed only.
+
+### Deviations
+- No `ArticleGridFeed` extraction: GCV Exclusive already uses the shared `PillarContent`.
+- A5 (seed fixture) skipped on purpose: it would collide with the probe's gcv row.
+- JSON-LD author name is "The Global Chic Voyage".
+
+### Post-merge fact
+GCV has NO Pressroom articles yet, so the docs/11 pre-deploy violator SQL is optional/moot; the rule applies cleanly from the first article.
+
+### Closeout classification
+Ready for UPDATE PROCESS archival (Gate CONDITIONAL, gaps accepted by the owner and registered as backlog: `process/general-plans/backlog/gcv-pressroom-followups_NOTE_05-10-26.md`). SPEC achievement: all locked criteria met by the passing automated/probe gates for Stream A; Stream B display criteria met by manual/code verification with F1-F4 gaps registered. Drift: MEDIUM (constants, tests, probe, docs, context; no harness files). Recommend UPDATE PROCESS -- significant changes detected.

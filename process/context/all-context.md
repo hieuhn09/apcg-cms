@@ -1,6 +1,6 @@
 # apcg-cms — All Context
 
-Last updated: 2026-10-05 (GCV Pressroom parity: `gcv` joins `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` (`gcv: ["exclusive","pressroom"]`); GCV row already exists in prod, no `audit:add-pressroom`; owner runs the read-only violator SQL in `docs/11-operations.md` before deploy; WAD stays the negative control; test:single-home 181, probe 66/66, 76/76 `--http`)
+Last updated: 2026-10-05 (GCV Pressroom parity: `gcv` joins `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` (`gcv: ["exclusive","pressroom"]`); GCV row already exists in prod, no `audit:add-pressroom`; the `docs/11-operations.md` violator SQL is optional/moot because GCV has no Pressroom articles; PRs apcg-cms#29 + gcv-web#10 MERGED; WAD stays the negative control; test:single-home 181, probe 66/66, 76/76 `--http`)
 
 Previously: 2026-10-05 (Pressroom rollout MERGED, PRs #26 and #27; production `pressroom` row created by hand in /admin; Pressroom optional author: `Articles.author` `required: false` + `articleAuthorValidate`, required except for single-home pillars; see `integrations/all-integrations.md` §Single-home pillar rule)
 
@@ -490,6 +490,16 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
   author UI and `scripts/hub-probe.ts` were not run for #27 (static null-safety check only). Residuals:
   `integrations/all-integrations.md` §Single-home pillar rule. Plan archive:
   `process/general-plans/completed/pressroom-optional-author_05-10-26/`.
+- **GCV Pressroom parity is SHIPPED (2026-10-05): apcg-cms#29 (constants `gcv` in `SINGLE_HOME_PILLARS` and
+  `ENGINE_BLOCKED_PILLARS`, no migration) and hieuhn09/gcv-web#10 (display) are MERGED.** The GCV `pressroom`
+  row already existed in production; GCV has no Pressroom articles yet, so the rule applies cleanly from the
+  first one and the `docs/11-operations.md` violator SQL is optional. Open items (backlog
+  `process/general-plans/backlog/gcv-pressroom-followups_NOTE_05-10-26.md`): `POST /api/engine/translation`
+  still ungated (owner decision: keep); engine 4xx handling of the new gcv 422 unverified; /admin Save Draft
+  shows a generic toast; gcv-web has only a scoped `test:single-home`; the press media-enquiries contact was
+  removed with the static `/press` page; gcv-web footer link 404s until the pillar row is visible; owner
+  action: `git rm` the tracked `login.json` (credential-shaped token; never open it). Plan archive:
+  `process/general-plans/completed/gcv-pressroom_05-10-26/`.
 - **This repo's own `CLAUDE.md` Bootstrap Guard is factually wrong about the size of the gap it
   describes.** It says a missing `process/context/all-context.md` means "the context router,
   protocol docs, and the validator suite are absent." At the start of this pass, only the context
