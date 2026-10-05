@@ -173,6 +173,20 @@ async function main() {
     const aArt = await expectOk("ordinary asia article with a finance secondary row", () =>
       create("articles", art(ba.id, baAuthor.id, { pillar: asia.id, subSection: asiaSub.id, secondarySections: [{ pillar: finance.id }], workflowStatus: "published", _status: "published" })),
     );
+
+    console.log("\n[AUTHOR] author optional only for single-home");
+    const noAuthor = await expectOk("pressroom article with NO author publishes", () =>
+      create("articles", art(ba.id, null as unknown as Id, { pillar: pressroom!.id, workflowStatus: "published", _status: "published" })),
+    );
+    if (noAuthor) {
+      // Remove now so the later 0-reference pressroom delete/move checks stay valid.
+      await remove("articles", noAuthor.id);
+      created.splice(created.findIndex((c) => c.collection === "articles" && c.id === noAuthor.id), 1);
+    }
+    await expectReject("ordinary asia article with NO author is rejected on publish", () =>
+      create("articles", art(ba.id, null as unknown as Id, { pillar: asia.id, workflowStatus: "published", _status: "published" })),
+      "This field is required.",
+    );
     if (pArt) {
       await expectReject("update pressroom article: partial {secondarySections} (draft)", () => update("articles", pArt.id, { secondarySections: [{ pillar: asia.id }] }, { draft: true }), V1);
       await expectReject("update pressroom article: partial {secondarySections} (publish)", () => update("articles", pArt.id, { secondarySections: [{ pillar: asia.id }] }), V1);

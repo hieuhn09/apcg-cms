@@ -339,6 +339,8 @@ Postgres instance in deployed environments.
 
 ## Taxonomy hooks and foreign-key facts (single-home pillar rule, 05-10-26)
 
+- `Articles.author` is `required: false` in config since 05-10-26 (column already nullable, no migration); a custom validate keeps it required except for single-home (Pressroom) articles.
+
 - **Hooks on the taxonomy collections** (rule detail: `process/context/integrations/all-integrations.md`
   §Single-home pillar rule): `Articles.hooks.beforeChange: [singleHomePillar, articleBookkeeping]`
   (`src/collections/Articles.ts:123`); `Pillars.hooks.beforeChange/beforeDelete` row guards

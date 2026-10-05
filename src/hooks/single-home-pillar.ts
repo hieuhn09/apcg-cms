@@ -141,6 +141,41 @@ export function makeSubSectionPillarValidate(base: RelationshipValidate = relati
 export const subSectionPillarValidate = makeSubSectionPillarValidate();
 
 /**
+ * Articles `author` validate. The field is `required: false` in the schema;
+ * this restores the stock requirement (base `relationship` with
+ * `required: true`, so the message is Payload's own) for every article whose
+ * effective primary pillar is NOT single-home. A single-home (Pressroom)
+ * article may have no author. Fails CLOSED: an unknown pillar or a lookup
+ * error means the author is required. Field validate is skipped on drafts,
+ * exactly as the stock `required` was.
+ */
+export function makeArticleAuthorValidate(base: RelationshipValidate = relationship) {
+  return async (value: RelValue, options: RelOptions): Promise<string | true> => {
+    const required = (): Promise<string | true> | string | true => base(value, { ...options, required: true });
+    const o = options as unknown as {
+      siblingData?: Record<string, unknown>;
+      data?: Record<string, unknown>;
+      originalDoc?: Record<string, unknown>;
+    };
+    const pillar = o.siblingData?.pillar ?? o.data?.pillar ?? o.originalDoc?.pillar;
+    let singleHome = false;
+    try {
+      const key = idKey(pillar);
+      if (key !== null) {
+        const m = await resolveSingleHome({ pillarIds: [key], find: findFor(options.req), context: contextOf(options.req) });
+        singleHome = (m.get(key) ?? null) !== null;
+      }
+    } catch {
+      singleHome = false;
+    }
+    if (!singleHome) return required();
+    return base(value, { ...options, required: false });
+  };
+}
+
+export const articleAuthorValidate = makeArticleAuthorValidate();
+
+/**
  * Articles `secondarySections[].pillar` filterOptions — UX ONLY, never throws:
  * exactly `true` for an unconfigured / unresolvable tenant or any lookup error;
  * `false` when the primary is single-home; else hide the single-home slugs.

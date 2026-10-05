@@ -460,6 +460,12 @@ or wrong-tenant article, no log row. See the WRITE section above for the helper 
 
 ## Single-home pillar rule (BriefAsia Pressroom, 2026-10-05)
 
+**Optional author (05-10-26):** `Articles.author` is `required: false` + `articleAuthorValidate`
+(`src/hooks/single-home-pillar.ts`): a single-home (Pressroom) article may have no author; every other
+article gets Payload's stock required check ("This field is required.", non-draft saves only, as before);
+unresolvable pillar or lookup error = author required (fail closed). REST/GraphQL `author` can be null
+for Pressroom articles only.
+
 A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:43`, `{ "brief-asia": ["pressroom"] }`,
 keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:38`) owns its articles
 exclusively: a code constant, **no schema field, no migration**. WAD also has a `pressroom` pillar and
