@@ -11,7 +11,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { SINGLE_HOME_PILLARS, ENGINE_BLOCKED_PILLARS } from "./constants";
+import { SINGLE_HOME_PILLARS, ENGINE_BLOCKED_PILLARS, isEngineBlockedPillar } from "./constants";
 import {
   MSG,
   ruleMessage,
@@ -44,8 +44,24 @@ const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed t
 describe("constants", () => {
   it("SINGLE_HOME_PILLARS = { brief-asia: [pressroom] } beside ENGINE_BLOCKED_PILLARS", () => {
     assert.deepEqual(SINGLE_HOME_PILLARS, { "brief-asia": ["pressroom"] });
-    assert.deepEqual(ENGINE_BLOCKED_PILLARS, { gcv: ["exclusive"] });
+    assert.deepEqual(ENGINE_BLOCKED_PILLARS, { gcv: ["exclusive"], "brief-asia": ["pressroom"] });
     assert.deepEqual(singleHomeSlugUnion(), ["pressroom"]);
+  });
+  it("Amendment 1: brief-asia pressroom is engine-blocked; wad pressroom is not; gcv unchanged", () => {
+    assert.ok(ENGINE_BLOCKED_PILLARS["brief-asia"]?.includes("pressroom"));
+    assert.equal(ENGINE_BLOCKED_PILLARS["wad"], undefined);
+    assert.deepEqual(ENGINE_BLOCKED_PILLARS.gcv, ["exclusive"]);
+  });
+  it("isEngineBlockedPillar is case/whitespace-insensitive and tenant-keyed (C11g)", () => {
+    assert.equal(isEngineBlockedPillar("brief-asia", "pressroom"), true);
+    assert.equal(isEngineBlockedPillar("brief-asia", "PRESSROOM"), true);
+    assert.equal(isEngineBlockedPillar("brief-asia", " Pressroom "), true);
+    assert.equal(isEngineBlockedPillar("gcv", " EXCLUSIVE"), true);
+    assert.equal(isEngineBlockedPillar("wad", "pressroom"), false);
+    assert.equal(isEngineBlockedPillar("brief-asia", "finance"), false);
+    assert.equal(isEngineBlockedPillar("brief-asia", "exclusive"), false);
+    assert.equal(isEngineBlockedPillar(undefined, "pressroom"), false);
+    assert.equal(isEngineBlockedPillar("brief-asia", ""), false);
   });
 });
 
@@ -247,6 +263,8 @@ describe("intake pre-check (checkIntakeSingleHome)", () => {
     assert.equal(ba({ pillarSlug: "asia", secondaryPillarSlugs: ["pressroom"] }), null);
     assert.equal(ba({ pillarSlug: "pressroom", secondaryPillarSlugs: ["asia"] }), null);
   });
+  // Pre-check level only: since Amendment 1 the route's engine-blocked gate 3b
+  // (ENGINE_BLOCKED_PILLARS) refuses a brief-asia pressroom primary FIRST.
   it("valid pressroom-only body and an ordinary body pass", () => {
     assert.equal(ba({ pillarSlug: "pressroom" }), null);
     assert.equal(ba({ pillarSlug: "asia", sections: ["finance"], subSectionSlug: "x" }), null);

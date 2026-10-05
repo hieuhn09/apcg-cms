@@ -40,7 +40,7 @@ import { getPayload } from "payload";
 import config from "@payload-config";
 import { authenticateEngine } from "@/lib/engine-auth";
 import { scopedCreate, scopedUpdate, scopedFind } from "@/lib/scoped";
-import { toContentTypeValue, ENGINE_BLOCKED_PILLARS } from "@/lib/constants";
+import { toContentTypeValue, isEngineBlockedPillar, normalizeEngineBlockedSlug } from "@/lib/constants";
 import { featureEnabled } from "@/lib/tenant";
 import { markdownToLexical } from "@/lib/markdown";
 import { logActivity } from "@/lib/activity";
@@ -160,9 +160,12 @@ export async function POST(request: Request): Promise<Response> {
   //
   // NOTE: `exclusive` here is GCV's hand-curated PILLAR slug, unrelated to
   // BriefAsia's `Articles.exclusive` disclosure boolean.
-  if (ENGINE_BLOCKED_PILLARS[tenant.slug as string]?.includes(pillarSlugStr)) {
-    await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { reason: `pillar not writable by engine: ${pillarSlugStr}` } });
-    return json({ ok: false, status: "unprocessable", reason: `pillar not writable by engine: ${pillarSlugStr}` }, 422);
+  // The compare is case/whitespace-insensitive (` PRESSROOM ` is blocked too);
+  // the reason prints the normalised slug.
+  if (isEngineBlockedPillar(tenant.slug as string | undefined, pillarSlugStr)) {
+    const blockedReason = `pillar not writable by engine: ${normalizeEngineBlockedSlug(pillarSlugStr)}`;
+    await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { reason: blockedReason } });
+    return json({ ok: false, status: "unprocessable", reason: blockedReason }, 422);
   }
 
   // 3c. Single-home pillar pre-check (SINGLE_HOME_PILLARS). Pure on the request
