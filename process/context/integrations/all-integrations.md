@@ -464,7 +464,7 @@ or wrong-tenant article, no log row. See the WRITE section above for the helper 
 (`src/hooks/single-home-pillar.ts`): a single-home (Pressroom) article may have no author; every other
 article gets Payload's stock required check ("This field is required.", non-draft saves only, as before);
 unresolvable pillar or lookup error = author required (fail closed). REST/GraphQL `author` can be null
-for Pressroom articles only.
+for Pressroom articles only (merged as #27). Known gap: the admin required asterisk on Author is lost for all articles.
 
 A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:43`, `{ "brief-asia": ["pressroom"] }`,
 keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:38`) owns its articles
@@ -518,8 +518,8 @@ tenants are unaffected. Pressroom articles are created by editors only, so "teac
 `autoPublishEngineDrafts`-for-Pressroom concern are moot. Rollback: remove the `brief-asia` entry (engine
 writes re-enabled; the single-home rule still applies). Only `engine/intake` takes a pillar from an engine actor.
 
-**OPEN (owner decision pending): `POST /api/engine/translation` is NOT gated.** It takes no pillar, so it can
-still write translated text onto an EXISTING brief-asia Pressroom article. Decide whether to block it.
+**`POST /api/engine/translation` is NOT gated (owner decision 2026-10-05: keep).** It takes no pillar, so it can
+still write translated text onto an EXISTING brief-asia Pressroom article.
 
 **Engine-contract 422 reasons** (mirrored in `docs/08-content-engine-integration.md`):
 `pillar not writable by engine: <slug>` (above; terminal) and
@@ -529,8 +529,9 @@ still write translated text onto an EXISTING brief-asia Pressroom article. Decid
 terminal: fix the payload, do not retry. Engine 4xx-terminal behaviour is UNVERIFIED (client code lives in
 the content-engine repo).
 
-The `pressroom` Pillars row is still created by the owner (`npm run audit:add-pressroom`, LAST in the
-rollout; runbook in `docs/11-operations.md`) so editors can use it.
+The production `pressroom` Pillars row now exists (rollout merged 2026-10-05, PRs #26 and #27); the owner
+created it by hand in /admin, not via `npm run audit:add-pressroom` (script and runbook in
+`docs/11-operations.md` remain for fresh environments).
 
 **Accepted residuals** (all outside the application trust boundary or by design): raw SQL / psql /
 Supabase-Neon consoles bypass every hook; deleting a Tenant (systemAdmin) sets `pillars.tenant_id` NULL

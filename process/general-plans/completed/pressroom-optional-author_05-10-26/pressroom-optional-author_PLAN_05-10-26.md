@@ -72,3 +72,16 @@ Gate: PASS
 - L2 sections: validate factory PASS; Articles wiring PASS; types PASS; tests/probe PASS.
 - Execute-agent instructions: E1 call base validator with `required: true` for non-single-home so message is stock; E2 never run probe against non-local DB; E3 do not open login.json; E4 no hook/migration/engine/FE edits; E5 discard stray generated files except payload-types.ts.
 - Test gates: typecheck, lint, test:single-home, test:media-redirect, probe:single-home (+ --http).
+
+## EVL and Closeout (05-10-26)
+Closeout classification: Ready for UPDATE PROCESS archival (archived).
+Shipped: apcg-cms#27, commit 6542f2e (merged to main). Companion FE work in brief-asia-web#32-#35 (Pressroom shows "Distributed by BriefAsia" instead of an author).
+EVL result: CLEAN. Independent vc-tester re-run: typecheck, lint, test:single-home (171 tests), test:media-redirect, probe:single-home 59/59, probe `-- --http` 69/69 all green; 5 extra manual author checks (a)-(e) passed. Probe line `(cleanup) could not delete pillars N: Not Found` confirmed pre-existing on origin/main (probe double-delete bookkeeping), harmless.
+SPEC achievement: all criteria met by passing automated/Hybrid gates (Pressroom saves without author; normal articles keep the stock "This field is required."; Pressroom -> normal fails; unresolved pillar / lookup error fails closed; wad/gcv `pressroom` still requires author).
+Deviations: (1) `src/payload-types.ts` is gitignored, so checklist step 3 produced no tracked diff; (2) probe check pattern changed to the exact stock message; (3) probe deletes the author-less Pressroom article right away.
+Known gaps (accepted, backlog-worthy, none block archival):
+- Console UI not run; null-safety of `relId(doc.author)` checked statically only.
+- Admin required asterisk is lost on the Author field for ALL articles (mitigated by field description).
+- `scripts/hub-probe.ts` not run (not in the validate-contract).
+Follow-on (historical wording note): the production `pressroom` Pillars row was created by hand in /admin by the owner, not via `audit:add-pressroom`.
+Drift: MEDIUM. Recommend UPDATE PROCESS -- significant changes detected.
