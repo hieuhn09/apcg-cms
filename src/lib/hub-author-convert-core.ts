@@ -86,6 +86,10 @@ function isAsciiLetter(c: number): boolean {
   return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
 }
 
+function isAsciiAlnum(c: number): boolean {
+  return isAsciiLetter(c) || (c >= 48 && c <= 57);
+}
+
 /**
  * Starting at `i`: W*, ASCII letters (W allowed BETWEEN letters), W*, then `:`.
  * True when the letters spell a dangerous scheme (case-insensitive). Reads at most
@@ -119,8 +123,32 @@ function dangerousSchemeAt(s: string, i: number, end: number): boolean {
  */
 export function hasDangerousLinkSyntax(md: string): boolean {
   const n = md.length;
+  // Entity rule (PLAN-SUPPLEMENT 7 / 7b): after `](` / `]:` (+ W, one optional `<`, W) the
+  // target starts at `targetStart`; while `inTarget` and until the first W after that
+  // start, `&#` or `&` + [A-Za-z0-9]+ + `;` is a hit. One flag, same single pass.
+  let inTarget = false;
+  let targetStart = 0;
   for (let i = 0; i < n; i++) {
     const c = md.charCodeAt(i);
+    if (inTarget && i >= targetStart) {
+      if (isWs(c)) inTarget = false;
+      else if (c === 38 /* & */ && i + 1 < n) {
+        const e = md.charCodeAt(i + 1);
+        if (e === 35 /* # */) return true;
+        let j = i + 1;
+        while (j < n && isAsciiAlnum(md.charCodeAt(j))) j++;
+        if (j > i + 1 && j < n && md.charCodeAt(j) === 59 /* ; */) return true;
+      }
+    }
+    if (c === 93 /* ] */ && i + 1 < n) {
+      const o = md.charCodeAt(i + 1);
+      if (o === 40 /* ( */ || o === 58 /* : */) {
+        let t = skipWs(md, i + 2, n);
+        if (t < n && md.charCodeAt(t) === 60 /* < */) t = skipWs(md, t + 1, n);
+        inTarget = true;
+        targetStart = t;
+      }
+    }
     if (c === 93 /* ] */ && i + 1 < n) {
       const d = md.charCodeAt(i + 1);
       if (d === 40 /* ( */) {

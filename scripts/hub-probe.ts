@@ -4113,6 +4113,58 @@ function fakePayload6(o: {
   return fake;
 }
 
+// V-LINK — the shared link-vector table (plan §9.2 + contract round 9). The hub copy
+// (`mdDangerousLink` + `hub-composer-draft.test.ts`) uses the SAME ids and strings.
+const VLINK_REJECT: Record<string, string> = {
+  VL1: "[x](java&#115;cript&#58;alert(1))",
+  VL2: "[x](java&#115;cript&#58;alert)",
+  VL3: "[x](&#106;avascript:alert(1))",
+  VL4: "[x](&#x6A;avascript:alert(1))",
+  VL6: "[x]: java&#115;cript&#58;alert(1)",
+  VL7: "[x](   java&#115;cript:alert(1))",
+  VL7b: "[x](\u00a0java&#115;cript:alert(1))",
+  VL8: "[x](https://a.com/?a=1&amp;b=2)",
+  VL9: "[x](https://a.com/?a&copy;b)",
+  VL11: "[x](<&#106;avascript:alert(1)>)",
+  VL12: "[x](< &#106;avascript:alert(1)>)",
+  VL13: "[x](<\t&#106;avascript:alert(1)>)",
+  VR1: "[x](https://a.com)&mdash;great",
+  VR2: "[x](https://a.com)&nbsp;now",
+  VR3: "(see [a](https://a.com/x)&nbsp;now)",
+  VR4: "|[a](https://a.com)&nbsp;|",
+};
+const VLINK_OK: Record<string, string> = {
+  VC1: "[x](https://a.com/?a=1&b=2)",
+  VC2: "Tom & Jerry",
+  VC3: "Tom &amp; Jerry",
+  VC4: "a < b && c > d",
+  VC5: "[x](https://a.com/a_b?c=d&e=f#g)",
+  VC6: "[x](https://a.com) &amp; text",
+  VC7: "<java&#115;cript:alert(1)>",
+  VC8: "<https://a.com/?a=1&amp;b=2>",
+  VC9: "<b>R&amp;D</b>",
+  VC10: "<br>&nbsp;",
+  VC11: "a<b&amp;c",
+  VC12: "I <3&hearts; you",
+};
+const VLINK_BUDGET: Record<string, () => string> = {
+  "(1) < ×200,000": () => "<".repeat(200000),
+  "(2) ]( + & ×200,000": () => "](" + "&".repeat(200000),
+  "(3) ]( + &a ×100,000": () => "](" + "&a".repeat(100000),
+  "(4) ](& + a ×199,990 + x)": () => "](&" + "a".repeat(199990) + "x)",
+  "(5) ]( ×100,000": () => "](".repeat(100000),
+  "(6) ](&a ×50,000": () => "](&a".repeat(50000),
+};
+// Lexical-escaped backslash vectors (E37; observed codes, "≠ 201").
+const VLINK_BACKSLASH: Record<string, string> = {
+  BS1: "[x](javascript\\:alert(1))",
+  BS2: "[x](java\\script:alert(1))",
+  BS3: "[x](javascript\\&#58;alert(1))",
+  BS4: "<javascript\\:alert(1)>",
+  BS5: "[x]: javascript\\:alert(1)",
+  BS1b: "[x](javascript\\:alert)",
+};
+
 async function check6Unit(expect: (label: string, actual: unknown, wanted: unknown) => void): Promise<void> {
   const limits = await import("../src/lib/hub-author-limits");
   const core = await import("../src/lib/hub-author-convert-core");
@@ -4216,6 +4268,67 @@ async function check6Unit(expect: (label: string, actual: unknown, wanted: unkno
     expect("U M14 scanner flags ]( + 190,000 spaces + javascript: within 500 ms", [hit, median(ms) <= 500], [true, true]);
   }
 
+  // ── V-LINK (shared table, PLAN-SUPPLEMENT 7 / 7b + contract round 9 E33-E35/E38): entity rule ──
+  {
+    const rejIds = Object.keys(VLINK_REJECT);
+    const okIds = Object.keys(VLINK_OK);
+    expect("U V-LINK reject (VL1-VL4, VL6-VL13, VR1-VR4) ⇒ hasDangerousLinkSyntax true",
+      rejIds.map((k) => [k, core.hasDangerousLinkSyntax(VLINK_REJECT[k]!)]), rejIds.map((k) => [k, true]));
+    expect("U V-LINK reject ⇒ checkExportedMarkdown link",
+      rejIds.map((k) => [k, core.checkExportedMarkdown(VLINK_REJECT[k]!)]), rejIds.map((k) => [k, { ok: false, code: "link" }]));
+    expect("U V-LINK controls (VC1-VC12) ⇒ hasDangerousLinkSyntax false",
+      okIds.map((k) => [k, core.hasDangerousLinkSyntax(VLINK_OK[k]!)]), okIds.map((k) => [k, false]));
+    const budget: Doc = {};
+    const over: string[] = [];
+    for (const [k, mk] of Object.entries(VLINK_BUDGET)) {
+      const s = mk();
+      const ms: number[] = [];
+      let hit = true;
+      for (let r = 0; r < 5; r++) {
+        const t0 = performance.now();
+        hit = core.hasDangerousLinkSyntax(s);
+        ms.push(performance.now() - t0);
+      }
+      const med = Math.round(median(ms) * 100) / 100;
+      budget[k] = { len: s.length, ms: med, hit };
+      if (hit || med > 50) over.push(`${k}: hit=${hit} ms=${med}`);
+    }
+    obs6("U V-LINK budget cases (median of 5, ms)", budget);
+    expect("U V-LINK six budget cases ⇒ false, each ≤ 50 ms (E33: (5) ]( ×100,000 and (6) ](&a ×50,000 kill a per-opener rescan)", over, []);
+    // E38: seeded parity with a brute-force reference. The alphabet has no letters that can
+    // spell a dangerous scheme, so the reference only has to model the entity rule.
+    const isW = (ch: string) => core.isWs(ch.charCodeAt(0));
+    const refEntity = (s: string): boolean => {
+      const n = s.length;
+      for (let i = 0; i + 1 < n; i++) {
+        if (s[i] !== "]" || (s[i + 1] !== "(" && s[i + 1] !== ":")) continue;
+        let t = i + 2;
+        while (t < n && isW(s[t]!)) t++;
+        if (t < n && s[t] === "<") { t++; while (t < n && isW(s[t]!)) t++; }
+        for (let p = t; p < n && !isW(s[p]!); p++) {
+          if (s[p] !== "&") continue;
+          if (/^&(#|[A-Za-z0-9]+;)/.test(s.slice(p))) return true;
+        }
+      }
+      return false;
+    };
+    const alpha = ["]", "(", ")", "<", ">", ":", "&", "#", ";", "a", "b", "Z", "1", "9", " ", "\t", "\u00a0", "\n", "&#", "&amp;", "](", "]:"];
+    const frnd = seeded6(38);
+    const diff: string[] = [];
+    let positives = 0;
+    const N = 20000;
+    for (let i = 0; i < N; i++) {
+      let s = "";
+      const len = 1 + Math.floor(frnd() * 14);
+      for (let k = 0; k < len; k++) s += alpha[Math.floor(frnd() * alpha.length)];
+      const want = refEntity(s);
+      if (want) positives++;
+      if (core.hasDangerousLinkSyntax(s) !== want) diff.push(JSON.stringify(s));
+    }
+    obs6("U V-LINK fuzz parity (seed 38)", { strings: N, referencePositives: positives });
+    expect("U V-LINK fuzz: linear scanner == brute-force entity reference on 20,000 seeded strings", diff.slice(0, 5), []);
+  }
+
   // ── checkExportedMarkdown ──
   expect("U checkExportedMarkdown ws_run / link / ok", [
     core.checkExportedMarkdown("](\n" + rep(" ", 1024) + "- x"),
@@ -4241,6 +4354,7 @@ async function check6Unit(expect: (label: string, actual: unknown, wanted: unkno
     const refused = ["javascript:alert(1)", "java&#115;cript&#58;alert(1)", "&amp;", "//evil", "\\/\\/evil", "foo/bar", "x y", "\u0001https://a", "ftp://a", "data:text/html,a", "vbscript:a", "", " https://a", "https:x"];
     expect("U checkLexicalTree URL allowlist: allowed", allowed.map((u) => r(T(p(link(u))))), allowed.map(() => "ok"));
     expect("U checkLexicalTree URL allowlist: refused", refused.map((u) => r(T(p(link(u))))), refused.map(() => "url"));
+    expect("U checkLexicalTree entity clause (step 5): hand-built link node java&#115;cript:x ⇒ url", r(T(p(link("java&#115;cript:x")))), "url");
     // caps (M26)
     const many = T(...Array.from({ length: 9001 }, () => ({ type: "linebreak" })));
     const atCap = T(...Array.from({ length: 8999 }, () => ({ type: "linebreak" })));
@@ -4350,6 +4464,7 @@ async function check6Unit(expect: (label: string, actual: unknown, wanted: unkno
       g({ toLexical: () => lexOf("x"), toMarkdown: () => { throw new Error("boom"); } }),
       g({ toLexical: () => lexOf("x"), toMarkdown: () => "x" }),
     ], ["ws_run", "link", "node", "node", "ok"]);
+    expect("U V-LINK VL10: injected exporter returns VL1 ⇒ link at step (6)", g({ toLexical: () => lexOf("x"), toMarkdown: () => VLINK_REJECT.VL1! }), "link");
     expect("U E13 toLexical throws ⇒ node (not 500); err.code other than timeout ⇒ node", [
       g({ toLexical: () => { throw new RangeError("x"); }, toMarkdown: () => "x" }),
       g({ toLexical: () => { throw Object.assign(new Error("y"), { code: "ERR_OTHER" }); }, toMarkdown: () => "x" }),
@@ -5165,11 +5280,33 @@ async function check6() {
     const lr = [];
     for (const v of linkVecs) lr.push(await f({ bodyMarkdown: v }));
     expect("L dangerous link syntax ⇒ link (or c0 for the C0-prefixed one)", lr, [...linkVecs.slice(0, -1).map(() => ({ bodyMarkdown: "link" })), { bodyMarkdown: "c0" }]);
-    const urlVecs = ["[x](java&#115;cript&#58;alert(1))", "[x](//evil)", "[x](\\/\\/evil)", "[x](foo/bar)", "[x](ftp://a)"];
+    expect("L entity target [x](java&#115;cript&#58;alert(1)) ⇒ link (entity rule, step 3)", await f({ bodyMarkdown: "[x](java&#115;cript&#58;alert(1))" }), { bodyMarkdown: "link" });
+    const urlVecs = ["[x](//evil)", "[x](\\/\\/evil)", "[x](foo/bar)", "[x](ftp://a)"];
     const ur = [];
     for (const v of urlVecs) ur.push(await f({ bodyMarkdown: v }));
-    obs6("L URL vectors (allowlist on the tree)", ur);
-    expect("L URL vectors refused (url, or node / link when the importer does not make a link node)", ur.every((x) => x !== 201), true);
+    obs6("L non-entity URL vectors (allowlist on the tree; observed codes)", ur);
+    expect("L non-entity URL vectors refused (≠ 201)", ur.every((x) => x !== 201), true);
+    // V-LINK over HTTP (E35 / E37): every reject ⇒ 422 link, no new article; every control ⇒ not link.
+    {
+      const n0 = await artCount();
+      const rj: unknown[] = [];
+      for (const [k, v] of Object.entries(VLINK_REJECT)) rj.push([k, await f({ bodyMarkdown: v })]);
+      expect("L V-LINK reject (VL1-VL4, VL6-VL13, VR1-VR4) ⇒ 422 bodyMarkdown link", rj, Object.keys(VLINK_REJECT).map((k) => [k, { bodyMarkdown: "link" }]));
+      expect("L V-LINK reject ⇒ no article created", (await artCount()) - n0, 0);
+      const ok: unknown[] = [];
+      for (const [k, v] of Object.entries(VLINK_OK)) ok.push([k, await f({ bodyMarkdown: v })]);
+      obs6("L V-LINK controls VC1-VC12 (observed)", ok);
+      expect("L V-LINK controls VC1-VC12 ⇒ never link (expected 201)", ok.filter((x) => JSON.stringify((x as unknown[])[1]) === JSON.stringify({ bodyMarkdown: "link" })), []);
+      expect("L V-LINK controls VC1-VC12 ⇒ 201", ok, Object.keys(VLINK_OK).map((k) => [k, 201]));
+      const base = await post(draft({ bodyMarkdown: "Plain body." }));
+      const pr = await patch(base.body.id as number, { tenant: "dtw", actor, expectedVersion: 1, bodyMarkdown: VLINK_REJECT.VL1 });
+      const after = (await payload.findByID({ collection: "articles", id: base.body.id as number, depth: 0, locale: "en", overrideAccess: true, draft: true })) as unknown as Doc;
+      expect("L V-LINK PATCH VL1 ⇒ 422 link; version unchanged; stored body has no link node", [base.status, pr.status, pr.body.fields, after.version, JSON.stringify(after.body).includes('"type":"link"')], [201, 422, { bodyMarkdown: "link" }, 1, false]);
+      const bs: unknown[] = [];
+      for (const [k, v] of Object.entries(VLINK_BACKSLASH)) bs.push([k, await f({ bodyMarkdown: v })]);
+      obs6("L backslash vectors BS1-BS5 + BS1b (observed codes)", bs);
+      expect("L backslash vectors BS1-BS5 + BS1b ⇒ ≠ 201", bs.filter((x) => (x as unknown[])[1] === 201), []);
+    }
     expect("L image / NUL dek / NUL takeaways / bidi title / lone surrogate title + body / takeaways newline", [
       await f({ bodyMarkdown: "![a](b)" }), await f({ dek: "a\u0000" }), await f({ takeaways: ["a\u0001"] }), await f({ title: "a\u202e" }), await f({ title: "a\ud800" }), await f({ bodyMarkdown: "a\ud800" }), await f({ takeaways: ["a\nb"] }),
     ], [{ bodyMarkdown: "image" }, { dek: "c0" }, { takeaways: "c0" }, { title: "bidi" }, { title: "surrogate" }, { bodyMarkdown: "surrogate" }, { takeaways: "newline" }]);
