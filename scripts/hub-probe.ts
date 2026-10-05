@@ -5595,7 +5595,8 @@ async function check6() {
     const mine = await getA(createdId, "&view=edit");
     const e = (mine.body.edit ?? {}) as Doc;
     const dbv = (await readLatest(createdId)).version;
-    expect("T hub draft view=edit: editable true, version matches DB, slugs back", [e.editable, e.editableReason, e.version, e.pillarSlug, e.subSectionSlug, e.countrySlugs, e.tagSlugs], [true, "ok", dbv, "p6-main", "p6-sub", ["vietnam", "singapore"], ["p6-tag-a"]]);
+    // createdId's body carries an https link: a hub-saved body must stay bodyEditable (§9.2 T, M27).
+    expect("T hub draft view=edit: editable true, version matches DB, slugs back, https-link body ⇒ bodyEditable true", [e.editable, e.editableReason, e.version, e.pillarSlug, e.subSectionSlug, e.countrySlugs, e.tagSlugs, e.bodyEditable], [true, "ok", dbv, "p6-main", "p6-sub", ["vietnam", "singapore"], ["p6-tag-a"], true]);
   }
 
   // ══ W — webhook suppressed (D8; positive control) ════════════════════════
