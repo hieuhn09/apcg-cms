@@ -33,9 +33,11 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 //
 // BriefAsia `pressroom` (owner decision 05-10-26): the content engine may not
 // create or refresh Pressroom articles; they come only from editors (admin /
-// Console) and the owner's scripts. WAD's own `pressroom` pillar is a different
-// tenant and stays engine-writable.
-export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = { gcv: ["exclusive"], "brief-asia": ["pressroom"] };
+// Console) and the owner's scripts. GCV `pressroom` (owner decision 05-10-26,
+// GCV Pressroom parity) is blocked the same way: editor-only. WAD's own
+// `pressroom` pillar is a different tenant and stays engine-writable (the
+// negative control).
+export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = { gcv: ["exclusive", "pressroom"], "brief-asia": ["pressroom"] };
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */
 export function normalizeEngineBlockedSlug(slug: string): string {
@@ -58,11 +60,12 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // A single-home pillar's articles belong to nothing else: no secondary
 // sections, no sub-section, never added as another article's secondary section,
 // no sub-sections of its own, and (BriefAsia) never flagged `exclusive`.
-// Tenant-slug-keyed like ENGINE_BLOCKED_PILLARS (WAD also has a `pressroom`
-// pillar and is NOT affected). Code constant on purpose: no schema field, no
+// Tenant-slug-keyed like ENGINE_BLOCKED_PILLARS: BriefAsia and (since 05-10-26)
+// GCV `pressroom` are single-home; WAD also has a `pressroom` pillar and is NOT
+// affected (the negative control). Code constant on purpose: no schema field, no
 // migration. Enforced by src/lib/single-home-pillars.ts + its hooks; the slug is
 // protected from rename / tenant move / in-use delete by the Pillars guards.
-export const SINGLE_HOME_PILLARS: Record<string, string[]> = { "brief-asia": ["pressroom"] };
+export const SINGLE_HOME_PILLARS: Record<string, string[]> = { "brief-asia": ["pressroom"], gcv: ["pressroom"] };
 
 // ── Top-level user role (global identity) ───────────────────────────────────
 // Tenant-scoped roles live on TenantMemberships, not here.

@@ -10,7 +10,7 @@ metadata:
 
 # Integrations Context
 
-Last updated: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+Last updated: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
 hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
 Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
 new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
@@ -466,8 +466,8 @@ article gets Payload's stock required check ("This field is required.", non-draf
 unresolvable pillar or lookup error = author required (fail closed). REST/GraphQL `author` can be null
 for Pressroom articles only (merged as #27). Known gap: the admin required asterisk on Author is lost for all articles.
 
-A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:43`, `{ "brief-asia": ["pressroom"] }`,
-keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:38`) owns its articles
+A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, `{ "brief-asia": ["pressroom"], gcv: ["pressroom"] }`,
+keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:40`) owns its articles
 exclusively: a code constant, **no schema field, no migration**. WAD also has a `pressroom` pillar and
 is deliberately NOT affected. The rule (`src/lib/single-home-pillars.ts:7-15`): V1 primary = P means no
 secondary rows (a persisted duplicate of the primary counts), V2 no sub-section, V3 a secondary row = P
@@ -509,8 +509,8 @@ intake, scripts):
   a refused delete.
 
 **Engine is blocked from Pressroom (Amendment 1, 2026-10-05; owner instruction: Pressroom takes no
-content-engine articles).** `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive"], "brief-asia": ["pressroom"] }`
-(`src/lib/constants.ts:38`); `normalizeEngineBlockedSlug` (trim + lower-case) and `isEngineBlockedPillar`
+content-engine articles).** `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive", "pressroom"], "brief-asia": ["pressroom"] }`
+(`src/lib/constants.ts:40`; GCV `pressroom` added 05-10-26 for GCV Pressroom parity, same 422 on create and refresh); `normalizeEngineBlockedSlug` (trim + lower-case) and `isEngineBlockedPillar`
 make the match case/whitespace-insensitive. Gate 3b in `intake/route.ts:156` runs after auth + tenant/pillar
 resolution and BEFORE 3c and the idempotency lookup, so engine create AND refresh get 422
 `pillar not writable by engine: pressroom` plus an `integration_error` row. WAD's own `pressroom` and other

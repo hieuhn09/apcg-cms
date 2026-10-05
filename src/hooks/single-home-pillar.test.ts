@@ -27,12 +27,14 @@ const V4 = 'pillar rule: "pressroom" is a single-home pillar: it cannot have sub
 const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed there cannot be marked exclusive.';
 
 type Doc = Record<string, unknown>;
-// 10 = brief-asia pressroom (single-home), 11 = brief-asia asia, 12 = wad pressroom, 13 = gcv finance
+// 10 = brief-asia pressroom (single-home), 11 = brief-asia asia, 12 = wad pressroom, 13 = gcv finance,
+// 14 = gcv pressroom (single-home since GCV Pressroom parity)
 const PILLARS: Doc[] = [
   { id: 10, slug: "pressroom", tenant: 1 },
   { id: 11, slug: "asia", tenant: 1 },
   { id: 12, slug: "pressroom", tenant: 2 },
   { id: 13, slug: "finance", tenant: 3 },
+  { id: 14, slug: "pressroom", tenant: 3 },
 ];
 const TENANTS: Doc[] = [
   { id: 1, slug: "brief-asia" },
@@ -137,6 +139,13 @@ describe("Articles beforeChange hook: tenant keying negative controls", () => {
   it("wad pressroom (primary or secondary) is NOT blocked", async () => {
     assert.ok((await run({ operation: "create", data: { pillar: 12, subSection: 4, secondarySections: [{ pillar: 13 }], exclusive: true } })).out);
     assert.ok((await run({ operation: "create", data: { pillar: 13, secondarySections: [{ pillar: 12 }] } })).out);
+  });
+  it("gcv pressroom IS blocked (V1 secondary, V2 sub-section, V3 as secondary, V6 exclusive)", async () => {
+    await rejectsWith(run({ operation: "create", data: { pillar: 14, secondarySections: [{ pillar: 13 }] } }).then((r) => r.out), V1);
+    await rejectsWith(run({ operation: "create", data: { pillar: 14, subSection: 4 } }).then((r) => r.out), V2);
+    await rejectsWith(run({ operation: "create", data: { pillar: 13, secondarySections: [{ pillar: 14 }] } }).then((r) => r.out), V3);
+    await rejectsWith(run({ operation: "create", data: { pillar: 14, exclusive: true } }).then((r) => r.out), V6);
+    assert.ok((await run({ operation: "create", data: { pillar: 14 } })).out);
   });
   it("no tenant lookup when no referenced slug is in the single-home union (G79b)", async () => {
     const { req } = await run({ operation: "create", data: { pillar: 13, secondarySections: [{ pillar: 11 }] } });
@@ -290,6 +299,9 @@ describe("secondary row pillar validate (G54/G59/G77/G94)", () => {
     assert.equal(await v(11, opts(undefined)), "This relationship field has the following invalid selections");
     assert.equal(seen, undefined);
   });
+  it("a changed gcv pressroom row is blocked (V3)", async () => {
+    assert.equal(await validate(14, opts(undefined)), V3);
+  });
   it("ordinary and wad rows pass", async () => {
     assert.equal(await validate(11, opts(undefined)), true);
     assert.equal(await validate(12, opts(undefined)), true);
@@ -302,6 +314,9 @@ describe("SubSections pillar validate (V4)", () => {
   const validate = makeSubSectionPillarValidate((async () => true) as never) as unknown as V;
   it("a sub-section under the single-home pillar is refused", async () => {
     assert.equal(await validate(10, { req: makeReq() }), V4);
+  });
+  it("a sub-section under gcv pressroom is refused", async () => {
+    assert.equal(await validate(14, { req: makeReq() }), V4);
   });
   it("other pillars (incl. wad pressroom) are fine", async () => {
     assert.equal(await validate(11, { req: makeReq() }), true);
@@ -344,9 +359,13 @@ describe("Articles author validate (optional only for single-home)", () => {
     assert.equal(await validate(null, opts(999)), REQ);
     assert.equal(await validate(null, opts(10, makeReq({ failFind: true }))), REQ);
   });
-  it("a wad/gcv pillar named pressroom still requires an author (tenant-scoped)", async () => {
+  it("a wad pillar named pressroom and an ordinary gcv pillar still require an author (tenant-scoped)", async () => {
     assert.equal(await validate(null, opts(12)), REQ);
     assert.equal(await validate(null, opts(13, makeReq(), "data")), REQ);
+  });
+  it("a gcv Pressroom article may have no author", async () => {
+    assert.equal(await validate(null, opts(14)), true);
+    assert.equal(await validate(null, opts(14, makeReq(), "data")), true);
   });
 });
 
@@ -409,7 +428,11 @@ describe("Pillars row guard: beforeChange (V5 rename / move)", () => {
   });
   it("wad pressroom rename and a non-single-home move are allowed", async () => {
     assert.ok(await bc({ operation: "update", data: { slug: "press" }, originalDoc: { id: 12, tenant: 2, slug: "pressroom" }, req: makeReq() }));
-    assert.ok(await bc({ operation: "update", data: { tenant: 3 }, originalDoc: { id: 12, tenant: 2, slug: "pressroom" }, req: makeReq() }));
+    assert.ok(await bc({ operation: "update", data: { tenant: 2 }, originalDoc: { id: 13, tenant: 3, slug: "finance" }, req: makeReq() }));
+  });
+  it("gcv pressroom rename is blocked; moving WAD's pressroom into gcv is blocked (new pair single-home)", async () => {
+    await assert.rejects(bc({ operation: "update", data: { slug: "press" }, originalDoc: { id: 14, tenant: 3, slug: "pressroom" }, req: makeReq() }), /slug|invalid/);
+    await assert.rejects(bc({ operation: "update", data: { tenant: 3 }, originalDoc: { id: 12, tenant: 2, slug: "pressroom" }, req: makeReq() }), /moved to another tenant/);
   });
   it("renaming another brief-asia pillar to pressroom is blocked", async () => {
     await assert.rejects(bc({ operation: "update", data: { slug: "pressroom" }, originalDoc: { id: 11, tenant: 1, slug: "asia" }, req: makeReq() }), /slug|invalid/);
