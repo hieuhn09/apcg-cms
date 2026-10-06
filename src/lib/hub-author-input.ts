@@ -312,7 +312,7 @@ function parseCommon(raw: unknown, mode: "create" | "update"): HubParseResult {
     else value.readMin = raw.readMin;
   }
 
-  // pillarSlug (required on create)
+  // pillarSlug (optional on create since P5.1b: a draft needs only a title; required again at publish, P5.2)
   if (has("pillarSlug")) {
     if (typeof raw.pillarSlug !== "string") fail("pillarSlug", "type");
     else {
@@ -320,7 +320,7 @@ function parseCommon(raw: unknown, mode: "create" | "update"): HubParseResult {
       if (r.ok) value.pillarSlug = r.value;
       else fail("pillarSlug", r.code);
     }
-  } else if (create) fail("pillarSlug", "required");
+  }
 
   // subSectionSlug (null = none)
   if (has("subSectionSlug")) {
@@ -406,12 +406,12 @@ function parseCommon(raw: unknown, mode: "create" | "update"): HubParseResult {
     else fail(key, r.code);
   }
 
-  // authorId (required on create)
+  // authorId (optional on create since P5.1b; required again at publish, P5.2)
   if (has("authorId")) {
     const r = checkInt4(raw.authorId);
     if (r.ok) value.authorId = r.value;
     else fail("authorId", r.code);
-  } else if (create) fail("authorId", "required");
+  }
 
   // coAuthorIds: int4 ids, de-duplicated, ≤ 10
   if (has("coAuthorIds")) {
