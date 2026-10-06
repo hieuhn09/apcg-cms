@@ -1,16 +1,16 @@
 ---
 name: context:all-integrations
 description: "API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint"
-keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub, pillar, single-home, pressroom, 422
+keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub, pillar, single-home, pressroom, 422, hubAuthor, hub author, draft, composer, P5.1, bodyMarkdown, view=edit
 related: [context:all-database]
-date: 05-10-26
+date: 06-10-26
 metadata:
   read_when: "API contract questions, auth/authorization design, engine intake, cross-tenant read design, or anything bridging into this CMS from outside"
 ---
 
 # Integrations Context
 
-Last updated: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+Last updated: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
 hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
 Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
 new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
@@ -124,6 +124,7 @@ Update this group when:
 | `GET /api/preview/mint` | Payload human session (`payload.auth()`) | **Internal** — the admin "Preview" button | Verifies the signed-in user can access the article's tenant, mints a short-lived HMAC token (`signPayload`, 10 min), redirects to that tenant's own `frontendUrl`. |
 | `GET /api/hub/articles` | Hub engine bearer token (`authenticateHubEngine`, requires `ContentEngines.hubRead`) | **Internal** — consumed by APCGHub in the separate `content-engine` repo | The ONLY multi-tenant machine read in this repo (APCGHub P4 / CMS-1, 2026-09-24). Read-only. Filters `workflowStatus`, never `_status`. A tenant outside the engine's grant is a 403, never a silent drop. No rate limit (see §Cross-tenant reads). |
 | `GET /api/hub/articles/{id}?tenant=<slug>` | Hub engine bearer token (`authenticateHubEngine`, `hubRead` only — no `hubWrite`) | **Internal** — consumed by APCGHub's article view page (content-engine Hub-3) | APCGHub P4 / CMS-4. ONE article, ONE tenant, every `workflowStatus` (hidden/archived included), full fields + body as Markdown (`bodyMarkdown` + `bodyState`). Never a 500 for a body problem. See §Cross-tenant reads → READ ONE ARTICLE. |
+| `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET /api/hub/articles/{id}?view=edit` | Hub AUTHOR engine bearer token (`authenticateHubAuthorEngine`: `hubRead` + `hubAuthor`) | **Internal** — consumed by the APCGHub composer (content-engine P5.1) | Create / edit a TEXT draft (Markdown body in, Lexical out); never publishes. APCGHub P5.1, apcg-cms#25. See §Cross-tenant reads → AUTHOR DRAFTS. |
 | `/(payload)` route group | Payload's own admin session | **Framework-managed** | Payload-generated `/admin` UI + its own REST/GraphQL under `/api` — not a hand-written contract, changes with the Payload version. |
 | `/(console)/console/*` | Payload human session (reused, `src/console/auth.ts`) | **Internal** — staff-only alternate admin UI | See §Cross-tenant reads — this is the one surface with an existing "see multiple tenants at once" shape, and it is human-session-only. |
 
@@ -455,6 +456,124 @@ closes when the owner opens a few real articles through the hub's article view).
 **FIXED 2026-09-28 (CMS-4b, shared with CMS-3):** an id past `int4` used to return HTTP 500 + one
 `integration_error` log row here too; it now returns the same byte-identical 404 body as a missing
 or wrong-tenant article, no log row. See the WRITE section above for the helper and probe.
+
+---
+
+### AUTHOR DRAFTS (2026-10-06, APCGHub P5.1) — create + edit a TEXT draft from the hub
+
+Merged as apcg-cms#25 (2026-10-06T02:18:18Z, merge commit `574ed20`). Answer first: the hub composer
+can now create and edit **text-only drafts** in the CMS through three routes, under a **separate
+credential** (a second `ContentEngines` record with `hubRead` + `hubAuthor`); nothing can publish.
+
+| Route | Code | What it does |
+|---|---|---|
+| `POST /api/hub/articles` | `src/app/api/hub/articles/route.ts:72` → `handleHubDraftCreate` (`src/lib/hub-author-handlers.ts:244`) | Create ONE draft. 201 `{ok,id,tenant,slug,workflowStatus:"draft",version}` (`:324-333`). |
+| `PATCH /api/hub/articles/{id}` | `src/app/api/hub/articles/[id]/route.ts:58` → `handleHubDraftUpdate` (`hub-author-handlers.ts:341`) | Edit a hub-authored draft. 200 `{…,version,changed}`; nothing changed ⇒ 200 `changed: []`, no write (`:568`). `expectedVersion` optimistic lock ⇒ 409 `version_conflict` + `currentVersion`. |
+| `GET /api/hub/articles/{id}?tenant=<slug>&view=edit` | `[id]/route.ts:102,133-151`, gate in `src/lib/hub-article-edit-select.ts:156-182` | Same detail body plus an `edit` block. Any other `view` value is ignored (default response unchanged). |
+| `GET /api/hub/taxonomy?kinds=` (extended) | `src/app/api/hub/taxonomy/route.ts:8-17` | New `kinds`: `subsections`, `tags`, `countries` (global, not tenant-filtered), `cities` (a tenant without `citiesMap` ⇒ empty block, `disabled:true`). Caps 500/3000/300/1000; never silently cut (`truncated`). |
+
+- **Auth = `authenticateHubAuthorEngine`** (`src/lib/hub-author-auth.ts:35-57`): runs
+  `authenticateHubEngine()` (`hubRead` handshake) then requires `engine.hubAuthor === true` (strict;
+  NULL/false/absent deny) ⇒ 403 `hub author not allowed for this engine`, logged as
+  `engine_action_denied` with `detail.action:"hub_author"`. Separate from `hubRead` (reads) and
+  `hubWrite` (CMS-3 status route). The author record should hold `hubRead`+`hubAuthor` only (no
+  `hubWrite`, no `create_article`/`update_article`) so it can neither flip a status nor use
+  `/api/engine/intake`. Tenant = ONE explicit slug via `resolveHubWriteTenant`, never
+  `narrowHubTenants`.
+- **Flag + migration:** `ContentEngines.hubAuthor` (checkbox, default false;
+  `src/collections/ContentEngines.ts:184-192`). Migration
+  `src/migrations/20260930_000000_add_content_engines_hub_author.ts`: `SET LOCAL lock_timeout='5s'`;
+  `ALTER TABLE content_engines ADD COLUMN IF NOT EXISTS hub_author boolean DEFAULT false`; has a
+  `down` that drops the column. Hand-written, no `.json` snapshot (same reason as `hub_read` /
+  `hub_write`). Applied by the production build (`scripts/migrate-prod.mjs`, production env only).
+  **Hazard:** Preview shares the DB and does not migrate, so a Preview of this code fails engine/hub
+  auth until the column exists (the merge applied it). **Rollback = revert the PR** (the `down`
+  drops the column); no data to restore.
+- **What a draft is:** created with `data._status: "draft"`, `workflowStatus: "draft"`,
+  `origin: "manual"`, `editedByHuman: true`, `contentType: "article"`, `lastEngine` = the hub engine
+  (`hub-author-handlers.ts:280-294`). The create call does NOT pass Payload's `draft: true` option
+  (`:312-318`), so Payload validates required fields on create today (`pillar`, `author`). PATCH
+  DOES save with `draft: true` (`:582`), which skips field-level required validation: the main table
+  row stays frozen until a human publishes (plan D20 branch B), so a
+  published article can never be taken down by this route. Public API stays gated on
+  `workflowStatus === "published"`, so a draft is not visible (404 on the public URL).
+- **Edit gate** (`editableReasonOf` + `isHubAuthoredDoc`): editable only when the MAIN row AND the
+  latest draft are `origin === "manual"` and `workflowStatus === "draft"`, and the latest draft's
+  `lastEngine` has `hubAuthor === true` **right now**. Otherwise `editable:false` with reason
+  `origin` | `status` | `not_hub_authored`; PATCH answers 422 `not_editable` with the same reason.
+- **Body contract:** Markdown in, Lexical out (`convertMarkdownToLexical` /
+  `convertLexicalToMarkdown`), only `bodyMarkdown` is accepted. Check order, first failure wins
+  (`src/lib/hub-author-body.ts:5-14`): size ≤ 200,000 (`too_large`) → NUL/C0/lone surrogate → trim →
+  whitespace run > 256 (`ws_run`) → linear pre-checks "1b" (thresholds
+  `hub-author-limits.ts:55-62`) → `![` images rejected (`image`) → dangerous-link scanner (`link` /
+  `url`; any HTML entity in a link target is refused, "O1" rule, `hub-author-convert-core.ts:199`) →
+  conversion in ONE `node:vm` call, guard T = 1500 ms (`too_slow`; other throws `node`) → tree caps →
+  round-trip stability gate (`unstable`). Request body cap 1,000,000 bytes ⇒ 413. Closed list of 23
+  `fields.*` codes (15 common + 8 body-only) in `hub-author-limits.ts:97-126`; a 422 carries one
+  code per field, never free text. The hub keeps a hand-checked copy of the limits: change a value
+  only with a plan supplement. `HUB_BODY_CONVERT_TIMEOUT_MS` is a smoke-test switch (clamped to T);
+  never set it on Vercel.
+- **Check order overall** (first failure wins; `hub-author-handlers.ts:5-30`): POST = auth →
+  413 → JSON/tenant/unknown keys (400) → pure checks incl. body (422) → tenant ∈ grant (403, logged) →
+  `features.articles` (403 `feature_disabled`) → references + blocked pillar (422) → conversion (422)
+  → slug in use in main table OR latest draft (409 `slug_conflict`) → create. PATCH adds: id shape +
+  int4 (404), latest draft AND main row in that tenant, editable gate (422), `expectedVersion` (409),
+  stored-body round-trip (422 `body_not_editable`), merge rules, then a re-read of the main row right
+  before the write.
+- **Pillar rules interplay:** `ENGINE_BLOCKED_PILLARS` (`src/lib/hub-author-refs.ts:48`) is applied to
+  the hub author too ⇒ `fields.pillarSlug = blocked_pillar` (e.g. brief-asia/gcv `pressroom`); the
+  single-home rule (previous section) still runs in the Articles hooks. Create currently REQUIRES
+  `pillarSlug` and `authorId`; **P5.1b (planned, not built)** will make them optional on create
+  (title-only draft) by adding `draft: true` to the create call. Payload already accepts such drafts
+  with that flag (probe P-5 in the content-engine stage-0 report) and refuses them without it
+  (ValidationError "Pillar, Author"); PATCH cannot clear a pillar/author (set/change
+  only). Do not implement from this note.
+- **Activity log** (`src/hooks/article-workflow.ts:247-306`): exactly one row per call, actor type
+  `engine`, `actorEngineId` = the hub engine. Create ⇒ `article_created` with
+  `detail {via:"hub", actor, action:"create"}`; edit ⇒ `human_edit` with
+  `detail {via:"hub", actor, action:"update", fields:[names]}` (field NAMES only, never content;
+  logs never carry `err.message`, body text or a token). Failures are not logged except tenant
+  denial (`engine_tenant_denied`), auth denial and `integration_error`.
+- **Operating procedure (owner):**
+  1. Create the author engine record in the CMS **Console** `/console/engines/new` (the server
+     generates the token with `randomBytes(24).toString("hex")` and shows it ONCE;
+     `src/app/(console)/console/engines/actions.ts:39`; rotate at `/console/engines/[id]`). Do
+     NOT try the `/admin` "Raw Token" field: `rawToken` is `virtual: true`
+     (`ContentEngines.ts:96-98`) and Payload sanitize forces virtual fields read-only in `/admin`.
+  2. Then in `/admin` → Content Engines → that record, tick **Hub Read** and **Hub Author** (the
+     Console form has no hub flags and its update action never names them), and set Allowed
+     publications. Put the token only in the hub's server-side env (never in chat).
+  3. **Never delete or replace the record:** `Articles.lastEngine` is an FK `ON DELETE SET NULL`, so
+     deleting it makes every hub draft read `not_hub_authored` (uneditable from the hub). Rotate the
+     token instead.
+  4. **Kill-switch:** untick **Hub Author** on the record. Writes answer 403 (`hub_author`) at once,
+     and every hub draft reads `not_hub_authored` when opened. Re-ticking restores editing (proved
+     live 06-10-26: save worked again after untick → re-tick).
+  5. Where to look in `/admin`: article → tab **Engine contract** has Origin and Last engine; the
+     **Activity Log** collection is under the **System** group. Do NOT click "Publish changes" on a
+     test draft; delete test drafts last.
+- **Verification (all on a disposable local Postgres, never a deployed DB):**
+  `npx tsx scripts/hub-probe.ts --setup6 --out <file>` (fixtures + one 0600 token file per engine,
+  tokens never printed), then with `npm run dev` up and `HUB_PROBE_BASE` pointing at it:
+  `--check6 --in <file>` (every group), `--check6 --unit-only` (group U, no DB/server),
+  `--check6 --hooks-only` (group H, DB only) — header `scripts/hub-probe.ts:3948-3960`; it refuses to
+  run unless `DATABASE_URL` and `HUB_PROBE_BASE` are local. Error bodies are compared verbatim.
+  The PR body reported the family counts 19/17/12/125/79/87/31 (CMS-1..CMS-4b checks), the
+  `--check6` run as hub 134/0, `test:single-home` 181, `probe:single-home` 66/66 and 76/76 `--http`;
+  those counts are from the PR, not re-run by the context pass (the probe needs a disposable DB).
+- **Live acceptance 06-10-26 (production CMS, hub on a Vercel Preview):** WorldTravelBrief draft id
+  10734 created (v1), edited to v4; `/admin` showed Draft / origin `manual` / last engine
+  `apcghub-author`; Activity Log rows `article_created` + `human_edit` with Actor Engine
+  `apcghub-author` (the `detail` JSON itself was not seen); the draft's public URL answered 404 while
+  a published control answered 200; no new `publish_failed`. Not exercised live: real `marketer` /
+  `editor` / `viewer` roles, the write-path 403 message. The owner's "ok" was a general confirmation.
+  **Post-merge intake regression check is PENDING** (no publish attempt after the merge as of
+  ~03:40Z; do not claim it clean until `cms_publish_logs` shows attempts after 02:18Z all
+  `success`/201).
+- **Known follow-ups (not implemented):** P5.1b (optional pillar/author on create, and a clearer
+  note when Hub Author is merely switched off); `POST /api/engine/translation` can still write
+  translated text onto a Pressroom article (owner: keep); `isHubAuthoredDoc` checks the flag NOW,
+  not at creation time.
 
 ---
 

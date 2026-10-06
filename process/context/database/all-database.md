@@ -3,14 +3,14 @@ name: context:all-database
 description: "Payload collections, Postgres schema/migrations, the tenant/engine data model, and the two data-access lanes (Payload Local API vs Console's read-only Drizzle) — database context group entrypoint"
 keywords: database, schema, migration, migrations, postgres, drizzle, payload, collection, collections, tenant, tenants, multi-tenant, articles, workflow status, content type, console, dashboard, drizzle-kit
 related: [context:all-integrations]
-date: 05-10-26
+date: 06-10-26
 metadata:
   read_when: "schema/collection changes, migrations, tenant data model, or the console's Drizzle read layer"
 ---
 
 # Database Context
 
-Last updated: 2026-10-05 (taxonomy hook + FK facts section for the single-home pillar rule). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
+Last updated: 2026-10-06 (APCGHub P5.1: new `content_engines.hub_author` boolean column, migration `20260930_000000_add_content_engines_hub_author`, flag `ContentEngines.hubAuthor`; see §ContentEngines and §Migrations). Previously: 2026-10-05 (taxonomy hook + FK facts section for the single-home pillar rule). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
 
 This is the canonical database context entrypoint for **apcg-cms** (Central CMS).
 
@@ -165,7 +165,7 @@ with its own hashed token (`tokenHash` via `hashToken()`, `src/lib/crypto.ts`), 
 §Migrations pitfall #3 for why this is NOT just another `ENGINE_ACTIONS` value), gates the
 cross-tenant hub read path (`authenticateHubEngine()`, see
 `process/context/integrations/all-integrations.md` §Cross-tenant reads) — deliberately kept outside
-`allowedActions` so it does not surface on `/console/engines`' hand-written checkbox form. `rawToken` is a `virtual` field: paste a fresh
+`allowedActions` so it does not surface on `/console/engines`' hand-written checkbox form. Two more booleans of the same shape follow it: **`hubWrite`** (CMS-3, status route; migration `20260925_000000_add_content_engines_hub_write`) and **`hubAuthor`** (APCGHub P5.1, 2026-10-06; `ContentEngines.ts:184-192`; migration `20260930_000000_add_content_engines_hub_author`: `hub_author boolean DEFAULT false`, `IF NOT EXISTS`, `SET LOCAL lock_timeout='5s'`, has a `down`, hand-written with no `.json` snapshot). `hubAuthor` gates the hub text-draft routes (`integrations/all-integrations.md` §AUTHOR DRAFTS). Operational facts: `Articles.lastEngine` is an FK to this collection with `ON DELETE SET NULL`, so deleting the author engine record orphans every hub draft (they read as not hub-authored); create the record in the Console (`rawToken` is virtual, hence read-only in `/admin`), then tick the hub flags in `/admin`. `rawToken` is a `virtual` field: paste a fresh
 token, the `beforeChange` hook hashes it and clears the plaintext; it is shown to a human exactly
 once. `defaultPopulate` here is an **allow-list** (`{name,engineType,status}`, `ContentEngines.ts:43-47`)
 — see the `integrations` group for why this matters on public routes (`Articles.lastEngine`
@@ -273,7 +273,7 @@ on the bearer-token (engine / public-read-token) side.
 
 `src/migrations/` — Payload's Postgres migration format (paired `<timestamp>_<name>.ts` +
 matching `.json`), 9 migrations as of 2026-09-24 (`20260702_231336_initial_schema` through
-`20260924_000000_add_content_engines_hub_read`), run via `npm run payload:migrate`
+`20260924_000000_add_content_engines_hub_read`; later hand-written hub flag migrations: `…_hub_write` 25-09-26 and `20260930_000000_add_content_engines_hub_author`, applied to production by the build when PR #25 merged 06-10-26 — the count of 9 is as of 24-09-26), run via `npm run payload:migrate`
 (`payload migrate`) / created via `npm run payload:migrate:create`. `payload.config.ts:148`:
 `migrationDir` points here.
 
