@@ -311,6 +311,9 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     try {
       created = (await payload.create({
         collection: "articles",
+        // D6 (P5.1b): save in Payload draft mode, like the PATCH below — a draft needs only a
+        // title; Payload's field validators (pillar required, author) run again at publish.
+        draft: true,
         data: data as never,
         depth: 0,
         overrideAccess: true,
@@ -371,7 +374,8 @@ function secondaryKey(rows: { pillar: Id; subSection?: Id | null }[] | unknown):
 function mergeRules(v: HubDraftInput, refs: ResolvedRefs, latest: Doc): HubFieldErrors {
   const fields: HubFieldErrors = {};
   const pillarChanged = refs.pillar !== undefined && idOrNull(refs.pillar) !== idOrNull(latest.pillar);
-  if (pillarChanged && v.subSectionSlug === undefined) fields.subSectionSlug = "required";
+  // D4 (P5.1b): a draft with neither a pillar nor a sub-section yet may set its FIRST pillar without subSectionSlug.
+  if (pillarChanged && v.subSectionSlug === undefined && (latest.pillar != null || latest.subSection != null)) fields.subSectionSlug = "required";
   const primary = refs.pillar !== undefined ? idOrNull(refs.pillar) : idOrNull(latest.pillar);
   const secondary =
     refs.secondarySections ??

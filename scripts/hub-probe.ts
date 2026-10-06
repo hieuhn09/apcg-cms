@@ -39,6 +39,8 @@ import { ARTICLE_STATUSES, type ArticleStatus } from "../src/lib/constants";
 import { spawnSync } from "node:child_process";
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
+// P5.1b (--pb / --n10): the stronger local-DB guard (read / import only, never edited here).
+import { assertLocalDb, LocalDbGuardError } from "./lib/local-db-guard";
 
 const HUB_ENGINE_NAME = "apcghub-read";
 const BASE = process.env.HUB_PROBE_BASE ?? "http://localhost:3000";
@@ -4666,7 +4668,11 @@ async function check6Unit(expect: (label: string, actual: unknown, wanted: unkno
     ], ["a-nang-ep", { slug: "required" }, { slug: "required" }, { slug: "format" }, { slug: "too_long" }]);
     // readMin, required, actor, sponsor, secondary
     expect("U parse readMin: 0 / 121 ⇒ out_of_range, '5' ⇒ type, 1 / 120 ok", [fields(pc({ ...base(), readMin: 0 })), fields(pc({ ...base(), readMin: 121 })), fields(pc({ ...base(), readMin: "5" })), fields(pc({ ...base(), readMin: 1 })), fields(pc({ ...base(), readMin: 120 }))], [{ readMin: "out_of_range" }, { readMin: "out_of_range" }, { readMin: "type" }, "ok", "ok"]);
-    expect("U parse required (create): title, pillarSlug, authorId, actor", fields(pc({ tenant: "dtw" })), { title: "required", pillarSlug: "required", authorId: "required", actor: "required" });
+    expect("U parse required (create): title, actor", fields(pc({ tenant: "dtw" })), { title: "required", actor: "required" });
+    // P5.1b: pillarSlug / authorId are optional on create; '' / null keep their codes.
+    expect("U parse title-only parse ok (create)", fields(pc({ tenant: "dtw", title: "Chỉ tiêu đề", actor: { email: "a@b.co", role: "editor" } })), "ok");
+    expect("U parse POST pillarSlug '' ⇒ required", fields(pc({ ...base(), pillarSlug: "" })), { pillarSlug: "required" });
+    expect("U parse POST pillarSlug null ⇒ type", fields(pc({ ...base(), pillarSlug: null })), { pillarSlug: "type" });
     expect("U parse actor: email 255 ⇒ too_long, 'ab' ⇒ format, 'a@@b.c' ⇒ format, role 'viewer' ⇒ format, id 65 ⇒ too_long, actor 'x' ⇒ type", [
       fields(pc({ ...base(), actor: { email: rep("a", 250) + "@b.co", role: "editor" } })), fields(pc({ ...base(), actor: { email: "ab", role: "editor" } })),
       fields(pc({ ...base(), actor: { email: "a@@b.c", role: "editor" } })), fields(pc({ ...base(), actor: { email: "a@b.co", role: "viewer" } })),
@@ -4796,6 +4802,11 @@ async function check6Unit(expect: (label: string, actual: unknown, wanted: unkno
     expect("U PATCH via seams: 200 changed [title]; update uses draft:true, forces draft, context.hubAuthor.fields = [title], disableRevalidate", [
       res3.status, await res3.json(), up.draft, (up.data as Doc | undefined)?.workflowStatus, (up.data as Doc | undefined)?._status, ((up.context as Doc | undefined)?.hubAuthor as Doc | undefined)?.fields, (up.context as Doc | undefined)?.disableRevalidate,
     ], [200, { ok: true, id: 5, tenant: "dtw", workflowStatus: "draft", version: 2, changed: ["title"] }, true, "draft", "draft", ["title"], true]);
+    // P5.1b D6: the create handler saves in Payload draft mode (draft:true), like the PATCH above.
+    const fpc = fakePayload6({ tenant: tenantDoc, finds });
+    const resC = await handlers.handleHubDraftCreateWith(req("POST", { tenant: "dtw", title: "T", pillarSlug: "p", authorId: 3, actor }), { getPayload: async () => fpc as never, authenticate: okAuth });
+    const createCalls = fpc.calls.filter((c) => c.op === "create" && c.args.collection === "articles");
+    expect("U create via seams: 201; payload.create of the article called ONCE with args.draft === true (D6)", [resC.status, createCalls.length, createCalls[0]?.args.draft === true], [201, 1, true]);
     // version conflict, not hub-authored, 404 shapes, 413, bad JSON — through seams
     const res4 = await handlers.handleHubDraftUpdateWith(req("PATCH", { tenant: "dtw", actor, expectedVersion: 2, title: "N" }), { params: Promise.resolve({ id: "5" }) }, { getPayload: async () => fakePayload6({ tenant: tenantDoc, finds, engines: { "7": { id: 7, hubAuthor: true } }, articles: { "5": { latest: draftDoc, main: draftDoc } } }) as never, authenticate: okAuth });
     const res5 = await handlers.handleHubDraftUpdateWith(req("PATCH", { tenant: "dtw", actor, expectedVersion: 3, title: "N" }), { params: Promise.resolve({ id: "5" }) }, { getPayload: async () => fakePayload6({ tenant: tenantDoc, finds, engines: { "7": { id: 7, hubAuthor: false } }, articles: { "5": { latest: draftDoc, main: draftDoc } } }) as never, authenticate: okAuth });
@@ -5243,6 +5254,7 @@ async function check6() {
     expect("R refs: unknown tag, other-tenant author / co-author ⇒ unknown_ref; sub-section of another pillar ⇒ unknown_ref; city at dtw (no citiesMap) ⇒ not_enabled; shared sub slug by PAIR ⇒ 201", [
       tag, crossAuthor, crossCo, subOther, city, pair.status,
     ], [{ tagSlugs: "unknown_ref" }, { authorId: "unknown_ref" }, { coAuthorIds: "unknown_ref" }, { subSectionSlug: "unknown_ref" }, { citySlugs: "not_enabled" }, 201]);
+    expect("R refs: unknown countrySlugs ⇒ unknown_ref", await r({ countrySlugs: ["p6-country-zzz-nope"] }), { countrySlugs: "unknown_ref" });
     const ids = await Promise.all([PG_INT4_MAX6 + 1, 1e21, -1, 0, "12", 1.5].map(async (x) => (await post(draft({ authorId: x }))).body.fields));
     expect("R authorId 2147483648 / 1e21 / -1 / 0 / '12' / 1.5", ids, [{ authorId: "out_of_range" }, { authorId: "type" }, { authorId: "out_of_range" }, { authorId: "out_of_range" }, { authorId: "type" }, { authorId: "type" }]);
     const gcvArticle = await post({ ...draft(), tenant: "gcv", pillarSlug: "p6-main", authorId: gfx.authors[0] });
@@ -5645,6 +5657,209 @@ async function check6() {
     expect("X no 5xx", [x1.status, x2.status, y1.status, y2.status].every((s) => s < 500), true);
   }
 
+  // ══ N — P5.1b title-only drafts (D1, D2, D4, D6; N1–N9). Labels "Nk: " (colon) for the EVL grep ══
+  {
+    const db = rawDb(payload);
+    const one = async (q: ReturnType<typeof sql>): Promise<Doc | null> => (((await db.execute(q)) as { rows?: Doc[] }).rows ?? [])[0] ?? null;
+    const num = async (q: ReturnType<typeof sql>): Promise<number> => Number((await one(q))?.n ?? -1);
+    const dtwId = s6.tenants.dtw!.id;
+    const authorEngine = s6.engines.author.id;
+    const idOf = (r: Reply) => (typeof r.body.id === "number" ? (r.body.id as number) : -1);
+    const mainRow = async (id: number) => one(sql`SELECT pillar_id, author_id, sub_section_id, _status::text AS s, workflow_status::text AS w, origin::text AS o, last_engine_id FROM articles WHERE id = ${id}`);
+    const latestV = async (id: number) => one(sql`SELECT id, version_pillar_id AS p, version_author_id AS a, version_workflow_status::text AS w, version__status::text AS s, latest, version_version AS v FROM _articles_v WHERE parent_id = ${id} ORDER BY id DESC LIMIT 1`);
+    const pillarId = async (slug: string) => (await one(sql`SELECT id FROM pillars WHERE tenant_id = ${dtwId} AND slug = ${slug}`))?.id as number;
+    const pMain = await pillarId("p6-main");
+    const pOther = await pillarId("p6-other");
+    const subMain = (await one(sql`SELECT id FROM subsections WHERE tenant_id = ${dtwId} AND slug = 'p6-sub' AND pillar_id = ${pMain}`))?.id as number;
+    // Fixture: a hub-authored null/null draft (Local API, draft:true; lastEngine = the author engine).
+    const mkNull = async (extra: Doc = {}, tenant = dtwId) => {
+      const slug = uniq("n-fx");
+      const c = (await payload.create({
+        collection: "articles", overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true },
+        data: { tenant, title: `N fixture ${slug}`, slug, readMin: 1, origin: "manual", workflowStatus: "draft", _status: "draft", editedByHuman: true, lastEngine: authorEngine, ...extra } as never,
+      })) as unknown as { id: number; slug?: string };
+      return { id: c.id, slug };
+    };
+    const vOf = async (id: number) => ((await readLatest(id)).version as number) ?? 0;
+    const errOf = (e: unknown) => ({ name: (e as Error)?.name, paths: ((((e as { data?: { errors?: { path?: string }[] } })?.data?.errors) ?? []).map((x) => x.path)).sort() });
+
+    // N1 — POST {tenant, title, actor} only
+    const l0 = await logCount();
+    const n1 = await post({ tenant: "dtw", title: `N1 ${uniq("t")}`, actor });
+    const n1Id = idOf(n1);
+    expect("N1: title-only POST ⇒ 201, version 1, workflowStatus draft", [n1.status, n1.body.version, n1.body.workflowStatus], [201, 1, "draft"]);
+    expect("N1: DB main row pillar NULL, author NULL, _status draft, workflowStatus draft, origin manual, lastEngine = author engine", await mainRow(n1Id), { pillar_id: null, author_id: null, sub_section_id: null, s: "draft", w: "draft", o: "manual", last_engine_id: authorEngine });
+    expect("N1: exactly ONE activity_log article_created, ONE log row in total, ONE _articles_v row", [
+      await num(sql`SELECT count(*)::int AS n FROM activity_log WHERE target_id = ${String(n1Id)} AND event_type = 'article_created'`), (await logCount()) - l0, await num(sql`SELECT count(*)::int AS n FROM _articles_v WHERE parent_id = ${n1Id}`),
+    ], [1, 1, 1]);
+
+    // N2 — reads of a null/null hub draft (Local-API fixture)
+    {
+      const f = await mkNull();
+      const g = await getA(f.id);
+      const art = (g.body.article ?? {}) as Doc;
+      expect("N2: GET detail ⇒ 200, pillar null, author null, bodyState empty, no edit key", [g.status, art.pillar, art.author, art.bodyState, "edit" in g.body], [200, null, null, "empty", false]);
+      const list = await call("GET", `/api/hub/articles?tenants=dtw&status=draft&q=${encodeURIComponent(f.slug!)}`, undefined, T.author);
+      const row = (((list.body.articles ?? []) as Doc[]).find((a) => a.id === f.id)) ?? null;
+      expect("N2: GET list (q = fixture slug) ⇒ 200, the draft listed with pillar null", [list.status, row ? row.pillar : "absent"], [200, null]);
+      const e = await getA(f.id, "&view=edit");
+      const ed = (e.body.edit ?? {}) as Doc;
+      expect("N2: GET view=edit ⇒ editable true, pillarSlug null, authorId null, secondary [], bodyEditable true", [e.status, ed.editable, ed.pillarSlug, ed.authorId, ed.secondary, ed.bodyEditable], [200, true, null, null, [], true]);
+    }
+
+    // N3 — PATCH a null/null hub draft (fixture); D2: secondary without a primary pillar
+    {
+      const f = await mkNull();
+      const v = await vOf(f.id);
+      const la = await logCount();
+      const t = await patch(f.id, { tenant: "dtw", actor, expectedVersion: v, title: `N3 retitled ${uniq("t")}` });
+      const he = await num(sql`SELECT count(*)::int AS n FROM activity_log WHERE target_id = ${String(f.id)} AND event_type = 'human_edit'`);
+      expect("N3: PATCH title only ⇒ 200 changed [title], version +1, ONE human_edit row (one log row in total)", [t.status, t.body.changed, t.body.version, he, (await logCount()) - la], [200, ["title"], v + 1, 1, 1]);
+      const d = await patch(f.id, { tenant: "dtw", actor, expectedVersion: v + 1, dek: "N3 dek" });
+      const lb = await logCount();
+      const same = await patch(f.id, { tenant: "dtw", actor, expectedVersion: v + 2, dek: "N3 dek" });
+      expect("N3: PATCH dek ⇒ 200 [dek]; PATCH with no change ⇒ 200 changed [], version kept, 0 log rows", [d.status, d.body.changed, same.status, same.body.changed, same.body.version, (await logCount()) - lb], [200, ["dek"], 200, [], v + 2, 0]);
+      const g = await mkNull();
+      const gv = await vOf(g.id);
+      const sp = await patch(g.id, { tenant: "dtw", actor, expectedVersion: gv, secondary: [{ pillarSlug: "p6-other" }] });
+      const lv = await latestV(g.id);
+      const vSec = await num(sql`SELECT count(*)::int AS n FROM _articles_v_version_secondary_sections WHERE _parent_id = ${(lv?.id as number) ?? -1} AND pillar_id = ${pOther}`);
+      const mSec = await num(sql`SELECT count(*)::int AS n FROM articles_secondary_sections WHERE _parent_id = ${g.id}`);
+      expect("N3: PATCH secondary on a null/null draft ⇒ 200 [secondary], version +1; main pillar_id still NULL; latest version: pillar NULL + ONE secondary row (pillar p6-other)", [
+        sp.status, sp.body.changed, sp.body.version, (await mainRow(g.id))?.pillar_id, lv?.p, vSec,
+      ], [200, ["secondary"], gv + 1, null, null, 1]);
+      obs6("N3 main-table articles_secondary_sections rows after the draft PATCH (draft saves write the latest version only — P-14 branch B)", mSec);
+    }
+
+    // N3b — POST sub-section without a pillar ⇒ 422 subSectionSlug unknown_ref, no new article
+    {
+      const n0 = await artCount();
+      const a = await post({ tenant: "dtw", title: `N3b ${uniq("t")}`, actor, subSectionSlug: "p6-sub" });
+      const b = await post({ tenant: "dtw", title: `N3b ${uniq("t")}`, actor, subSectionSlug: "p6-sub", authorId: fx.authors[0] });
+      expect("N3b: POST subSectionSlug without pillarSlug (without / with authorId) ⇒ 422 subSectionSlug unknown_ref", [[a.status, a.body], [b.status, b.body]], [[422, INVALID({ subSectionSlug: "unknown_ref" })], [422, INVALID({ subSectionSlug: "unknown_ref" })]]);
+      expect("N3b: the refused POSTs create 0 articles", (await artCount()) - n0, 0);
+    }
+
+    // N4 — POST with one of pillar / author, or secondary without a pillar ⇒ 201 (D2: the CMS stays permissive)
+    {
+      const a = await post({ tenant: "dtw", title: `N4 ${uniq("t")}`, actor, pillarSlug: "p6-main" });
+      const b = await post({ tenant: "dtw", title: `N4 ${uniq("t")}`, actor, authorId: fx.authors[0] });
+      const c = await post({ tenant: "dtw", title: `N4 ${uniq("t")}`, actor, secondary: [{ pillarSlug: "p6-other" }] });
+      expect("N4: POST pillar without author / author without pillar / secondary without pillar ⇒ 201 ×3", [a.status, b.status, c.status], [201, 201, 201]);
+      const cSec = await num(sql`SELECT count(*)::int AS n FROM articles_secondary_sections WHERE _parent_id = ${idOf(c)} AND pillar_id = ${pOther}`);
+      expect("N4: DB shapes: (a) pillar p6-main + author NULL; (b) pillar NULL + author set; (c) pillar NULL, ONE secondary row (p6-other)", [
+        [(await mainRow(idOf(a)))?.pillar_id, (await mainRow(idOf(a)))?.author_id], [(await mainRow(idOf(b)))?.pillar_id, (await mainRow(idOf(b)))?.author_id], [(await mainRow(idOf(c)))?.pillar_id, cSec],
+      ], [[pMain, null], [null, fx.authors[0]], [null, 1]]);
+    }
+
+    // N5 — merge rule D4 (subSectionSlug only required when the latest already had a pillar or a sub-section)
+    {
+      const f = await mkNull();
+      const v = await vOf(f.id);
+      const first = await patch(f.id, { tenant: "dtw", actor, expectedVersion: v, pillarSlug: "p6-main" });
+      expect("N5: null/null draft: PATCH first pillarSlug WITHOUT subSectionSlug ⇒ 200 [pillarSlug]", [first.status, first.body.changed], [200, ["pillarSlug"]]);
+      const second = await patch(f.id, { tenant: "dtw", actor, expectedVersion: await vOf(f.id), pillarSlug: "p6-other" });
+      expect("N5: change an existing pillar WITHOUT subSectionSlug ⇒ 422 subSectionSlug required", [second.status, second.body], [422, INVALID({ subSectionSlug: "required" })]);
+      const s = await mkNull({ subSection: subMain });
+      const sp = await patch(s.id, { tenant: "dtw", actor, expectedVersion: await vOf(s.id), pillarSlug: "p6-main" });
+      expect("N5: draft with a sub-section but no pillar: set pillar WITHOUT subSectionSlug ⇒ 422 subSectionSlug required (guard latest.subSection)", [sp.status, sp.body], [422, INVALID({ subSectionSlug: "required" })]);
+      const a = await mkNull();
+      const ap = await patch(a.id, { tenant: "dtw", actor, expectedVersion: await vOf(a.id), authorId: fx.authors[0] });
+      expect("N5: null/null draft: PATCH authorId ⇒ 200 [authorId]", [ap.status, ap.body.changed], [200, ["authorId"]]);
+      const r = await mkNull({ secondarySections: [{ pillar: pOther }] });
+      const rp = await patch(r.id, { tenant: "dtw", actor, expectedVersion: await vOf(r.id), pillarSlug: "p6-other" });
+      expect("N5: (R5) null/null draft with a secondary row on X: PATCH pillarSlug X ⇒ 422 secondary duplicate", [rp.status, rp.body], [422, INVALID({ secondary: "duplicate" })]);
+    }
+
+    // N6 — set-only (D1): no clearing through PATCH
+    {
+      const f = await mkNull({ pillar: pMain, author: fx.authors[0] });
+      const v = await vOf(f.id);
+      const r = async (b: Doc) => {
+        const x = await patch(f.id, { tenant: "dtw", actor, expectedVersion: v, ...b });
+        return [x.status, x.body.fields];
+      };
+      expect("N6: PATCH pillarSlug null ⇒ type; authorId null ⇒ type; pillarSlug '' ⇒ required; authorId '' ⇒ type", [
+        await r({ pillarSlug: null }), await r({ authorId: null }), await r({ pillarSlug: "" }), await r({ authorId: "" }),
+      ], [[422, { pillarSlug: "type" }], [422, { authorId: "type" }], [422, { pillarSlug: "required" }], [422, { authorId: "type" }]]);
+      const lv = await latestV(f.id);
+      expect("N6: DB unchanged after the refused PATCHes (version, pillar, author of the latest version)", [Number(lv?.v), lv?.p, lv?.a], [v, pMain, fx.authors[0]]);
+    }
+
+    // N7 — publish-blocking is a NON-draft save property (Local API; basis for P5.2)
+    {
+      const tryUp = async (id: number, data: Doc, draft = false) => {
+        try {
+          await payload.update({ collection: "articles", id, overrideAccess: true, locale: "en", ...(draft ? { draft: true } : {}), context: { disableRevalidate: true }, data: data as never });
+          return { name: "ok", paths: [] as (string | undefined)[] };
+        } catch (e) {
+          return errOf(e);
+        }
+      };
+      const a = await mkNull();
+      const both = await tryUp(a.id, { _status: "published", workflowStatus: "published" });
+      const wfOnly = await tryUp(a.id, { workflowStatus: "published" });
+      const am = await mainRow(a.id);
+      expect("N7: non-draft save of a null/null draft (_status+workflowStatus published / workflowStatus only) ⇒ ValidationError [author, pillar] both; main row still draft/draft", [both, wfOnly, am?.s, am?.w], [
+        { name: "ValidationError", paths: ["author", "pillar"] }, { name: "ValidationError", paths: ["author", "pillar"] }, "draft", "draft",
+      ]);
+      obs6("N7 error message (null/null, published save)", await (async () => { try { await payload.update({ collection: "articles", id: a.id, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { _status: "published", workflowStatus: "published" } as never }); return "no error"; } catch (e) { return (e as Error).message; } })());
+      const b = await mkNull({ pillar: pMain });
+      expect("N7: non-draft save, pillar set, author missing ⇒ ValidationError [author]", await tryUp(b.id, { _status: "published", workflowStatus: "published" }), { name: "ValidationError", paths: ["author"] });
+      const gcvId = s6.tenants.gcv!.id;
+      const press = await ensurePillar(payload, gcvId, "pressroom", "Pressroom", 98);
+      const c = await mkNull({ pillar: press }, gcvId);
+      const pr = await tryUp(c.id, { _status: "published", workflowStatus: "published" });
+      expect("N7: Pressroom (gcv single-home) without author: non-draft save ⇒ NO author error", pr.paths.includes("author"), false);
+      obs6("N7 Pressroom non-draft save result", pr);
+      // draft:true + workflowStatus published on a null/null draft: record main row, latest version, public API.
+      const d = await mkNull();
+      const dr = await tryUp(d.id, { workflowStatus: "published" }, true);
+      const dm = await mainRow(d.id);
+      const dv = await latestV(d.id);
+      const pub = await call("GET", `/api/public/articles/${d.slug}`, undefined, pubTok);
+      const pubList = await call("GET", "/api/public/articles?limit=100", undefined, pubTok);
+      obs6("N7 draft:true + workflowStatus published (null/null): update result / main / latest version / public", { update: dr, main: dm, latestVersion: dv, public: pub.status, inList: pubList.text.includes(d.slug!) });
+      expect("N7: draft:true + workflowStatus published: main row stays draft/draft and the public API answers 404 (not listed)", [dm?.s, dm?.w, pub.status, pubList.text.includes(d.slug!)], ["draft", "draft", 404, false]);
+    }
+
+    // N8 — public API never shows a hub title-only draft (positive control: a published article)
+    {
+      const f = await mkNull();
+      const slugs = [f.slug!, ...(typeof n1.body.slug === "string" ? [n1.body.slug as string] : [])];
+      const pubList = await call("GET", "/api/public/articles?limit=100", undefined, pubTok);
+      const det = [];
+      for (const s of slugs) det.push((await call("GET", `/api/public/articles/${s}`, undefined, pubTok)).status);
+      const ctrl = await call("GET", `/api/public/articles/${s6.articles.published.slug}`, undefined, pubTok);
+      expect("N8: public detail of the null/null draft (+ N1 when created) ⇒ 404, absent from the public list", [det, slugs.some((s) => pubList.text.includes(s))], [slugs.map(() => 404), false]);
+      expect("N8: positive control: the published fixture ⇒ public detail 200", ctrl.status, 200);
+    }
+
+    // N9 — regression: intake still needs a pillar; /status unchanged; kill-switch unchanged
+    {
+      const intake = await call("POST", "/api/engine/intake", { publicationId: "dtw", title: `N9 intake ${uniq("i")}`, body_markdown: "x", byline: "Probe" }, process.env.SEED_ENGINE_TOKEN ?? null);
+      expect("N9: /api/engine/intake without pillarSlug ⇒ 400 missing: pillarSlug (unchanged)", [intake.status, intake.body], [400, { ok: false, status: "bad_request", reason: "missing: pillarSlug" }]);
+      const f = await mkNull();
+      const st = async (id: number, to: string, expectedStatus: string) => {
+        const x = await call("POST", `/api/hub/articles/${id}/status`, { tenant: "dtw", to, expectedStatus, reason: "probe n9 reason", actor }, T.writeonly);
+        return [x.status, x.body];
+      };
+      expect("N9: /status Ẩn / Đăng lại on a null/null hub draft ⇒ 422 invalid_transition (unchanged)", [await st(f.id, "archived", "draft"), await st(f.id, "published", "draft")], [
+        [422, { ok: false, status: "invalid_transition", reason: "cannot change draft to archived" }], [422, { ok: false, status: "invalid_transition", reason: "cannot change draft to published" }],
+      ]);
+      const arch = await mkNull({ workflowStatus: "archived" });
+      const re = await call("POST", `/api/hub/articles/${arch.id}/status`, { tenant: "dtw", to: "published", expectedStatus: "archived", reason: "probe n9 reason", actor }, T.writeonly);
+      const am = await mainRow(arch.id);
+      const ap = await call("GET", `/api/public/articles/${arch.slug}`, undefined, pubTok);
+      obs6("N9 /status Đăng lại on an archived null/null draft (gap hub-p5-1b-status-republish-blank-pillar)", { status: re.status, body: re.body, main: am, public: ap.status });
+      expect("N9: /status Đăng lại an archived null/null article ⇒ refused (≥ 400), main row stays archived, public 404", [re.status >= 400, am?.w, ap.status], [true, "archived", 404]);
+      const NOAUTH = { ok: false, status: "forbidden", reason: "hub author not allowed for this engine" };
+      const k1 = await post({ tenant: "dtw", title: `N9 ${uniq("t")}`, actor }, T.noauthor);
+      const k2 = await post({ tenant: "dtw", title: `N9 ${uniq("t")}`, actor }, T.nullauthor);
+      expect("N9: kill-switch: title-only POST with hubAuthor false / NULL ⇒ 403 hub author not allowed", [[k1.status, k1.body], [k2.status, k2.body]], [[403, NOAUTH], [403, NOAUTH]]);
+    }
+  }
+
   // ══ I — intake regression (path in production use) ═══════════════════════
   {
     const tokI = process.env.SEED_ENGINE_TOKEN ?? null;
@@ -5705,6 +5920,406 @@ async function check6Hooks(payload: P, expect: (label: string, actual: unknown, 
   expect("H hubAuthor draft update ⇒ exactly ONE new row: human_edit with field names", [after - before, sortKeys6(u)], [1, sortKeys6({ actorType: "engine", actorEngineSet: engine != null, detail: { via: "hub", actor, action: "update", fields: ["title"] } })]);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// P5.1b (APCGHub, "Lưu nháp chỉ cần Tiêu đề") — two STANDALONE write modes,
+// never part of any `--check*` count:
+//
+//   npx tsx scripts/hub-probe.ts --pb --in <setup6.json>
+//       P-b1 / P-b2: Local API observations (OBS only). P-b1 create({draft:true})
+//       without pillar / author + a draft title update with the route's context;
+//       P-b2 the SAME create WITHOUT draft:true (expected: ValidationError).
+//   npx tsx scripts/hub-probe.ts --n10 --in <setup6.json> --out <json>
+//   npx tsx scripts/hub-probe.ts --n10 --in <setup6.json> --compare <json> [--require-new-code]
+//       N10 equivalence gate (D6b / AC-b16): full-field creates over the route,
+//       whole rows of every `%articles%` table + activity_log + translation_jobs,
+//       normalised (N10_NORMALISE below) and written to / compared with a
+//       baseline JSON kept OUTSIDE the repo. Exit 0 = identical, 1 = an assertion
+//       failed or a table / key differs, 3 = baseline / environment error
+//       (missing argument, unreadable / malformed / foreign-schema baseline,
+//       table set mismatch, preflight not 201). Exit 2 = usage / local guard.
+//
+// Both modes WRITE to the database (they create articles): local-only guard
+// (assertLocalTargets + assertLocalDb) runs FIRST, before any DB / HTTP call.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function refuseLocalDb6(e: unknown): never {
+  if (e instanceof LocalDbGuardError) {
+    console.error(`[explore6] refusing: ${e.message}`);
+    process.exit(2);
+  }
+  throw e;
+}
+
+/** `[a-z0-9]+` only, so slugify never reshapes it. */
+function runId6(): string {
+  let s = "";
+  for (const b of randomBytes(12)) s += "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36];
+  return s.slice(0, 10);
+}
+
+async function pb6() {
+  assertLocalTargets();
+  try { assertLocalDb(process.env.DATABASE_URL); } catch (e) { refuseLocalDb6(e); }
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --pb --in <file from --setup6>");
+    process.exit(2);
+  }
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const dtw = s6.tenants.dtw!.id;
+  const engineId = s6.engines.author.id;
+  const tDoc = (await payload.findByID({ collection: "tenants", id: dtw, depth: 0, overrideAccess: true })) as unknown as Doc;
+  const actor = { email: "pb@example.invalid", role: "editor" };
+  const run = runId6();
+  const data = (tag: string): Doc => ({
+    tenant: dtw, _status: "draft", workflowStatus: "draft", origin: "manual", editedByHuman: true, contentType: "article",
+    sourceLanguage: tDoc.defaultLanguage, lastEngine: engineId, title: `PB ${tag} ${run}`, slug: `pb-${tag}-${run}`, readMin: 1,
+  });
+  const ctx = (action: string, fields?: string[]): Doc => ({ hubAuthor: { actor, action, ...(fields ? { fields } : {}) }, engineId, disableRevalidate: true });
+  const errInfo = (e: unknown) => ({
+    name: (e as Error)?.name,
+    message: (e as Error)?.message,
+    paths: (((e as { data?: { errors?: { path?: string }[] } })?.data?.errors) ?? []).map((x) => x.path),
+  });
+  const mainRow = async (id: number) =>
+    ((await db.execute(sql`SELECT pillar_id, author_id, _status::text AS s, workflow_status::text AS w, version FROM articles WHERE id = ${id}`)) as { rows?: Doc[] }).rows?.[0] ?? null;
+
+  // P-b1
+  let b1ok = false;
+  try {
+    const c = (await payload.create({ collection: "articles", data: data("b1") as never, draft: true, depth: 0, overrideAccess: true, context: ctx("create") })) as unknown as Doc;
+    const id = c.id as number;
+    console.log(`OBS   P-b1 create({draft:true}) without pillar / author  ${JSON.stringify({ ok: true, id, version: c.version, main: await mainRow(id) })}`);
+    const before = (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true })) as unknown as Doc;
+    await payload.update({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, data: { title: `PB b1 retitled ${run}`, workflowStatus: "draft", _status: "draft" } as never, context: ctx("update", ["title"]) });
+    const after = (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true })) as unknown as Doc;
+    b1ok = after.version === (before.version as number) + 1 && after.title === `PB b1 retitled ${run}` && after.pillar == null && after.author == null;
+    console.log(`OBS   P-b1 update({draft:true}) title, route context  ${JSON.stringify({ ok: true, versionBefore: before.version, versionAfter: after.version, title: after.title, pillar: after.pillar ?? null, author: after.author ?? null, _status: after._status })}`);
+  } catch (e) {
+    console.log(`OBS   P-b1 FAILED  ${JSON.stringify(errInfo(e))}`);
+  }
+
+  // P-b2
+  let b2validation = false;
+  try {
+    const c = (await payload.create({ collection: "articles", data: data("b2") as never, depth: 0, overrideAccess: true, context: ctx("create") })) as unknown as Doc;
+    console.log(`OBS   P-b2 create WITHOUT draft:true, no pillar / author  ${JSON.stringify({ ok: true, id: c.id, main: await mainRow(c.id as number) })}`);
+  } catch (e) {
+    const info = errInfo(e);
+    b2validation = info.name === "ValidationError";
+    console.log(`OBS   P-b2 create WITHOUT draft:true, no pillar / author  ${JSON.stringify({ ok: false, ...info })}`);
+  }
+  console.log(`\n[pb] P-b1 draft create + draft update ok = ${b1ok}; P-b2 non-draft create ⇒ ValidationError = ${b2validation} (OBS only; not counted in any --check*)`);
+  process.exit(0);
+}
+
+const N10_SCHEMA = "p5-1b-n10/v1";
+/**
+ * N10 normalisation (printed at the start of every run). Rule: ONLY values the
+ * system generates (auto ids / random strings, timestamps, the run ids) are
+ * normalised; ids of SEED data (pillar / author / sub-section / tag / country /
+ * city / engine / tenant) are compared RAW. Every column not listed is RAW.
+ */
+const N10_NORMALISE = {
+  familyArticle: ["articles.id", "_articles_v.parent_id", "articles_*._parent_id", "articles_*.parent_id", "activity_log.target_id", "translation_jobs.article_id"],
+  familyVersion: ["_articles_v.id", "_articles_v_*._parent_id", "_articles_v_*.parent_id"],
+  familyArrayRow: ["articles_*.id (varchar)", "_articles_v_version_*._uuid"],
+  serialIdConstant: ["<child table>.id (integer) ⇒ <id>", "activity_log.id ⇒ <id>", "translation_jobs.id ⇒ <id>"],
+  timeFlag: ["every timestamp / date column ⇒ null | not-null"],
+  runId: ["every [a-z0-9]+ run id inside ANY string value (deep) ⇒ <RUN>"],
+} as const;
+
+type N10Rows = Record<string, Doc[]>;
+interface N10File {
+  schema: string;
+  normalise: typeof N10_NORMALISE;
+  tables: string[];
+  scenarios: Record<"i" | "ii" | "iii_nodraft" | "iii_draft", N10Rows>;
+}
+
+async function n10() {
+  assertLocalTargets();
+  try { assertLocalDb(process.env.DATABASE_URL); } catch (e) { refuseLocalDb6(e); }
+  const die3 = (msg: string): never => {
+    console.error(`[n10] baseline / environment error: ${msg}`);
+    process.exit(3);
+  };
+  const inFile = arg("in");
+  const outFile = arg("out");
+  const cmpFile = arg("compare");
+  const requireNew = flag("require-new-code");
+  if (!inFile) die3("--in <file from --setup6> required");
+  if ((outFile ? 1 : 0) + (cmpFile ? 1 : 0) !== 1) die3("exactly one of --out <json> / --compare <json> required");
+  if (requireNew && !cmpFile) die3("--require-new-code applies to --compare only");
+  let s6: Setup6 = undefined as never;
+  let authorTok = "";
+  try {
+    s6 = JSON.parse(readFileSync(inFile!, "utf8")) as Setup6;
+    authorTok = readFileSync(s6.engines.author.tokenFile, "utf8").trim();
+  } catch (e) {
+    die3(`cannot read --in / author token: ${(e as Error).message}`);
+  }
+  const fx = s6.fixtures?.dtw;
+  if (!fx || !s6.tenants?.gcv || !s6.fixtures?.gcv) die3("--in has no dtw / gcv fixtures");
+  let baseline: N10File | null = null;
+  if (cmpFile) {
+    try {
+      baseline = JSON.parse(readFileSync(cmpFile, "utf8")) as N10File;
+    } catch (e) {
+      die3(`cannot read / parse baseline ${cmpFile}: ${(e as Error).message}`);
+    }
+    const sc = baseline?.scenarios as Record<string, unknown> | undefined;
+    if (!baseline || baseline.schema !== N10_SCHEMA || !Array.isArray(baseline.tables) || !sc || !["i", "ii", "iii_nodraft", "iii_draft"].every((k) => sc[k] && typeof sc[k] === "object")) {
+      die3(`baseline ${cmpFile} is not a ${N10_SCHEMA} file`);
+    }
+    for (const k of ["i", "ii"] as const) {
+      for (const t of [...baseline!.tables, "activity_log", "translation_jobs"]) {
+        if (!Array.isArray(baseline!.scenarios[k][t])) die3(`baseline scenario (${k}) has no rows array for table ${t}`);
+      }
+    }
+  }
+
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const q = async (text: string): Promise<Doc[]> => (((await db.execute(sql.raw(text))) as { rows?: Doc[] }).rows ?? []);
+  const tables = (await q("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE '%articles%' ORDER BY table_name")).map((r) => String(r.table_name));
+  const colRows = await q(
+    `SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND (table_name LIKE '%articles%' OR table_name IN ('activity_log', 'translation_jobs')) ORDER BY table_name, ordinal_position`,
+  );
+  const cols = new Map<string, Map<string, string>>();
+  for (const r of colRows) {
+    const t = String(r.table_name);
+    if (!cols.has(t)) cols.set(t, new Map());
+    cols.get(t)!.set(String(r.column_name), String(r.data_type));
+  }
+  for (const t of tables) {
+    if (!/^[a-z_]+$/.test(t)) die3(`unexpected table name ${JSON.stringify(t)}`);
+    if (!(t === "articles" || t === "_articles_v" || t.startsWith("articles_") || t.startsWith("_articles_v_"))) die3(`table ${t} matches %articles% but is not an articles / _articles_v table (unknown shape)`);
+  }
+  console.log(`[n10] mode=${cmpFile ? "compare" : "out"}${requireNew ? " --require-new-code" : ""}; tables (${tables.length}): ${tables.join(", ")} (+ activity_log, translation_jobs)`);
+  console.log(`[n10] normalise constant: ${JSON.stringify(N10_NORMALISE)}`);
+  if (baseline) {
+    const missing = baseline.tables.filter((t) => !tables.includes(t));
+    const extra = tables.filter((t) => !baseline!.tables.includes(t));
+    if (missing.length) die3(`table(s) recorded in the baseline are missing from the DB: ${missing.join(", ")}`);
+    if (extra.length) die3(`table(s) in the DB are not in the baseline (schema changed): ${extra.join(", ")}`);
+  }
+
+  const { state, expect } = makeExpect();
+  const actor = { email: "n10@example.invalid", role: "editor" };
+  const runs: string[] = [];
+  const newRun = () => {
+    const r = runId6();
+    runs.push(r);
+    return r;
+  };
+  const post = async (b: Doc) => {
+    const res = await fetch(`${BASE}/api/hub/articles`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${authorTok}` }, body: JSON.stringify(b) });
+    const text = await res.text();
+    let body: Doc = {};
+    try {
+      body = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, body };
+  };
+
+  if (requireNew) {
+    const pre = await post({ tenant: "dtw", title: `n10 preflight ${newRun()}`, actor });
+    if (pre.status !== 201) die3(`preflight title-only POST answered ${pre.status} (${JSON.stringify(pre.body)}) — the dev server is not running the new code`);
+    console.log(`[n10] preflight title-only POST ⇒ 201 (article ${String(pre.body.id)} excluded from the comparison surface)`);
+  }
+
+  // ── dump + normalise ──
+  const timeType = (dt: string) => dt.startsWith("timestamp") || dt === "date";
+  const parentCol = (t: string) => (cols.get(t)?.has("_parent_id") ? "_parent_id" : "parent_id");
+  const orderBy = (t: string): string => {
+    const c = cols.get(t)!;
+    if (t === "articles" || t === "_articles_v") return "id";
+    if (c.has("_order")) return `${parentCol(t)}, _order`;
+    if (c.has("_locale")) return `${parentCol(t)}, _locale`;
+    if (t.endsWith("_rels")) return [`parent_id`, `path`, `"order"`, ...[...c.keys()].filter((k) => k.endsWith("_id") && k !== "parent_id").sort()].join(", ");
+    return "id";
+  };
+  const dump = async (id: number): Promise<N10Rows> => {
+    if (!Number.isInteger(id) || id <= 0) throw new Error(`bad article id ${String(id)}`);
+    const out: N10Rows = {};
+    for (const t of tables) {
+      let where: string;
+      if (t === "articles") where = `id = ${id}`;
+      else if (t === "_articles_v") where = `parent_id = ${id}`;
+      else if (t.startsWith("_articles_v_")) where = `${parentCol(t)} IN (SELECT id FROM _articles_v WHERE parent_id = ${id})`;
+      else where = `${parentCol(t)} = ${id}`;
+      out[t] = (await q(`SELECT to_jsonb(x) AS j FROM "${t}" x WHERE ${where} ORDER BY ${orderBy(t)}`)).map((r) => r.j as Doc);
+    }
+    out.activity_log = (await q(`SELECT to_jsonb(x) AS j FROM activity_log x WHERE target_collection = 'articles' AND target_id = '${id}' ORDER BY created_at, event_type, id`)).map((r) => r.j as Doc);
+    out.translation_jobs = (await q(`SELECT to_jsonb(x) AS j FROM translation_jobs x WHERE article_id = ${id} ORDER BY created_at, target_locale, id`)).map((r) => r.j as Doc);
+    return out;
+  };
+  const family = (t: string, k: string): "A" | "V" | "R" | "ID" | null => {
+    const dt = cols.get(t)?.get(k) ?? "";
+    if ((t === "articles" && k === "id") || (t === "_articles_v" && k === "parent_id") || (t.startsWith("articles_") && (k === "_parent_id" || k === "parent_id")) || (t === "activity_log" && k === "target_id") || (t === "translation_jobs" && k === "article_id")) return "A";
+    if ((t === "_articles_v" && k === "id") || (t.startsWith("_articles_v_") && (k === "_parent_id" || k === "parent_id"))) return "V";
+    if ((t.startsWith("articles_") && k === "id" && dt === "character varying") || k === "_uuid") return "R";
+    if (k === "id") return "ID";
+    return null;
+  };
+  const scrub = (v: unknown): unknown => {
+    if (typeof v === "string") {
+      let s = v;
+      for (const r of runs) s = s.split(r).join("<RUN>");
+      return s;
+    }
+    if (Array.isArray(v)) return v.map(scrub);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Doc).map(([k, x]) => [k, scrub(x)]));
+    return v;
+  };
+  const normalise = (rows: N10Rows): N10Rows => {
+    const maps: Record<"A" | "V" | "R", Map<string, string>> = { A: new Map(), V: new Map(), R: new Map() };
+    const fam = (f: "A" | "V" | "R", v: unknown) => {
+      if (v == null) return null;
+      const key = String(v);
+      if (!maps[f].has(key)) maps[f].set(key, `<${f}${maps[f].size}>`);
+      return maps[f].get(key)!;
+    };
+    const out: N10Rows = {};
+    for (const t of Object.keys(rows).sort()) {
+      out[t] = rows[t]!.map((row) => {
+        const n: Doc = {};
+        for (const k of Object.keys(row).sort()) {
+          const dt = cols.get(t)?.get(k) ?? "";
+          const f = family(t, k);
+          if (timeType(dt)) n[k] = row[k] == null ? "null" : "not-null";
+          else if (f === "ID") n[k] = "<id>";
+          else if (f) n[k] = fam(f, row[k]);
+          else n[k] = scrub(row[k]);
+        }
+        return n;
+      });
+    }
+    return out;
+  };
+  const counts = (label: string, rows: N10Rows, opts: { secondarySent?: number } = {}) => {
+    const n = (t: string) => rows[t]?.length ?? -1;
+    const created = (rows.activity_log ?? []).filter((r) => r.event_type === "article_created").length;
+    const got: Doc = {
+      articles: n("articles"), _articles_v: n("_articles_v"), articles_locales_ge1: n("articles_locales") >= 1, _articles_v_locales_ge1: n("_articles_v_locales") >= 1,
+      articles_rels_ge1: n("articles_rels") >= 1, _articles_v_rels_ge1: n("_articles_v_rels") >= 1, activity_log_article_created: created,
+    };
+    const want: Doc = { articles: 1, _articles_v: 1, articles_locales_ge1: true, _articles_v_locales_ge1: true, articles_rels_ge1: true, _articles_v_rels_ge1: true, activity_log_article_created: 1 };
+    if (opts.secondarySent !== undefined) {
+      got.articles_secondary_sections = n("articles_secondary_sections");
+      got._articles_v_version_secondary_sections_ge1 = n("_articles_v_version_secondary_sections") >= 1;
+      want.articles_secondary_sections = opts.secondarySent;
+      want._articles_v_version_secondary_sections_ge1 = true;
+    }
+    expect(`N10: ${label} row counts of the must-cover tables (> 0, per scenario)`, got, want);
+  };
+  const diffRows = (label: string, now: Doc[], base: Doc[]) => {
+    const len = Math.max(now.length, base.length);
+    for (let i = 0; i < len; i++) {
+      const a = now[i];
+      const b = base[i];
+      if (a === undefined || b === undefined) {
+        console.log(`DIFF  ${label} row ${i}: ${a === undefined ? "missing now" : "missing in baseline"}`);
+        continue;
+      }
+      for (const k of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
+        if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) console.log(`DIFF  ${label} row ${i} key ${k}: baseline=${JSON.stringify(b[k])} now=${JSON.stringify(a[k])}`.slice(0, 600));
+      }
+    }
+  };
+  const same = (label: string, now: Doc[], base: Doc[]) => {
+    const ok = JSON.stringify(now) === JSON.stringify(base);
+    console.log(`${ok ? "PASS" : "FAIL"}  ${label}  rows=${now.length} baselineRows=${base.length}`);
+    if (!ok) {
+      state.failures++;
+      diffRows(label, now, base);
+    }
+  };
+
+  // ── (i) dtw: pillar + author + tag + country, no secondary ──
+  const r1 = newRun();
+  const p1 = await post({
+    tenant: "dtw", title: `N10 i ${r1}`, slug: `n10-i-${r1}`, pillarSlug: "p6-main", authorId: fx!.authors[0], tagSlugs: ["p6-tag-a"], countrySlugs: ["vietnam"],
+    dek: "N10 dek một", bodyMarkdown: "N10 thân bài **đậm** một.", takeaways: ["Ý một"], readMin: 3, actor,
+  });
+  expect("N10: (i) full-field POST ⇒ 201", p1.status, 201);
+  // ── (ii) dtw: + sub-section + one secondary row (with its sub-section) ──
+  const r2 = newRun();
+  const p2 = await post({
+    tenant: "dtw", title: `N10 ii ${r2}`, slug: `n10-ii-${r2}`, pillarSlug: "p6-main", subSectionSlug: "p6-sub", secondary: [{ pillarSlug: "p6-other", subSectionSlug: "p6-sub" }],
+    authorId: fx!.authors[0], coAuthorIds: [fx!.authors[1]], tagSlugs: ["p6-tag-a", "p6-tag-b"], countrySlugs: ["vietnam", "singapore"], dek: "N10 dek hai", bodyMarkdown: "N10 thân bài hai.", readMin: 4,
+    flags: { aiAssisted: true }, actor,
+  });
+  expect("N10: (ii) full-field POST with secondary ⇒ 201", p2.status, 201);
+  if (p1.status !== 201 || p2.status !== 201) {
+    console.log(`[n10] POST failed: (i) ${JSON.stringify(p1.body)} (ii) ${JSON.stringify(p2.body)}`);
+    console.log(`\n[n10] N10: ${state.failures} FAILED (POST did not create)`);
+    process.exit(1);
+  }
+  const d1 = normalise(await dump(p1.body.id as number));
+  const d2 = normalise(await dump(p2.body.id as number));
+  counts("(i)", d1);
+  counts("(ii)", d2, { secondarySent: 1 });
+
+  // ── (iii) gcv Pressroom (single-home, blocked over HTTP): Local API "pseudo-route" create, no draft vs draft:true ──
+  // Rebuilds the handler's `data` + `context` here: proves Payload draft:true ≡ no-draft for this shape, NOT the handler.
+  const gcvId = s6.tenants.gcv!.id;
+  const pressroom = await ensurePillar(payload, gcvId, "pressroom", "Pressroom", 98);
+  const gTag = ((await payload.find({ collection: "tags", where: { and: [{ tenant: { equals: gcvId } }, { slug: { equals: "p6-tag-a" } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined)?.id;
+  const vn = ((await payload.find({ collection: "countries", where: { slug: { equals: "vietnam" } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined)?.id;
+  const gDoc = (await payload.findByID({ collection: "tenants", id: gcvId, depth: 0, overrideAccess: true })) as unknown as Doc;
+  const r3 = newRun();
+  const r3b = newRun();
+  const iiiData = (run: string): Doc => ({
+    tenant: gcvId, _status: "draft", workflowStatus: "draft", origin: "manual", editedByHuman: true, contentType: "article", sourceLanguage: gDoc.defaultLanguage,
+    lastEngine: s6.engines.author.id, title: `N10 iii ${run}`, slug: `n10-iii-${run}`, readMin: 2, pillar: pressroom, author: undefined,
+    dek: "N10 dek ba", tags: gTag != null ? [gTag] : undefined, countries: vn != null ? [vn] : undefined, country: vn ?? null,
+  });
+  const iiiCtx = () => ({ hubAuthor: { actor, action: "create" }, engineId: s6.engines.author.id, disableRevalidate: true });
+  let iiiNo: N10Rows | null = null;
+  let iiiDr: N10Rows | null = null;
+  const iiiErr: Doc = {};
+  try {
+    const a = (await payload.create({ collection: "articles", data: iiiData(r3) as never, depth: 0, overrideAccess: true, context: iiiCtx() })) as unknown as Doc;
+    iiiNo = normalise(await dump(a.id as number));
+  } catch (e) {
+    iiiErr.nodraft = `${(e as Error).name}: ${(e as Error).message}`;
+  }
+  try {
+    const b = (await payload.create({ collection: "articles", data: iiiData(r3b) as never, draft: true, depth: 0, overrideAccess: true, context: iiiCtx() })) as unknown as Doc;
+    iiiDr = normalise(await dump(b.id as number));
+  } catch (e) {
+    iiiErr.draft = `${(e as Error).name}: ${(e as Error).message}`;
+  }
+  expect("N10: (iii) Pressroom Local-API pseudo-route creates (no draft / draft:true) both succeed", iiiErr, {});
+  if (iiiNo && iiiDr) {
+    counts("(iii) no-draft", iiiNo);
+    counts("(iii) draft:true", iiiDr);
+    for (const t of [...tables, "activity_log", "translation_jobs"]) same(`N10: (iii) ${t}: draft:true ≡ no-draft (same run)`, iiiDr[t] ?? [], iiiNo[t] ?? []);
+  }
+
+  const result: N10File = { schema: N10_SCHEMA, normalise: N10_NORMALISE, tables, scenarios: { i: d1, ii: d2, iii_nodraft: iiiNo ?? {}, iii_draft: iiiDr ?? {} } };
+  if (baseline) {
+    for (const k of ["i", "ii"] as const) {
+      for (const t of [...tables, "activity_log", "translation_jobs"]) same(`N10: (${k}) ${t} ≡ baseline`, result.scenarios[k][t] ?? [], baseline.scenarios[k][t] ?? []);
+    }
+    console.log(`\n[n10] N10: ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (compare)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+  if (state.failures !== 0) {
+    console.log(`\n[n10] N10: ${state.failures} CHECK(S) FAILED — baseline NOT written`);
+    process.exit(1);
+  }
+  writeFileSync(outFile!, JSON.stringify(result, null, 2), { mode: 0o600 });
+  console.log(`\n[n10] N10: ALL CHECKS PASSED (out) — baseline written to ${outFile}`);
+  process.exit(0);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -5735,10 +6350,14 @@ const run = flag("setup")
                             ? check6
                             : flag("guard-child")
                               ? guardChild6
-                              : null;
+                              : flag("pb")
+                                ? pb6
+                                : flag("n10")
+                                  ? n10
+                                  : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code])",
   );
   process.exit(2);
 }
