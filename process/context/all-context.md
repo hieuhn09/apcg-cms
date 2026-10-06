@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-10-05 (GCV Pressroom parity: `gcv` joins `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` (`gcv: ["exclusive","pressroom"]`); GCV row already exists in prod, no `audit:add-pressroom`; the `docs/11-operations.md` violator SQL is optional/moot because GCV has no Pressroom articles; PRs apcg-cms#29 + gcv-web#10 MERGED; WAD stays the negative control; test:single-home 181, probe 66/66, 76/76 `--http`)
+Last updated: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT authoring, merged apcg-cms#25 `574ed20` at 2026-10-06T02:18:18Z: new routes `POST /api/hub/articles` (create a draft), `PATCH /api/hub/articles/{id}` (edit a hub-authored draft, `expectedVersion` lock), `GET /api/hub/articles/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` (default off, checked on top of `hubRead` by `authenticateHubAuthorEngine`, `src/lib/hub-author-auth.ts`) + migration `20260930_000000_add_content_engines_hub_author` (applied by the production build; rollback = revert the PR); drafts use Payload `draft:true`, origin `manual`, `lastEngine` = the hub engine, the main row stays frozen until publish; activity rows carry `detail {via:"hub", actor, action[, fields]}`; kill-switch = untick Hub Author; the engine record is created in the Console `/console/engines/new` (the /admin Raw Token field is read-only), then flags ticked in /admin; probes `scripts/hub-probe.ts --setup6/--check6`; live acceptance 06-10-26 passed on production (draft id 10734, public 404), post-merge intake regression check PENDING; follow-up P5.1b (optional pillar/author on create) planned, NOT built; details `integrations/all-integrations.md` §AUTHOR DRAFTS)
+
+Previously: 2026-10-05 (GCV Pressroom parity: `gcv` joins `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` (`gcv: ["exclusive","pressroom"]`); GCV row already exists in prod, no `audit:add-pressroom`; the `docs/11-operations.md` violator SQL is optional/moot because GCV has no Pressroom articles; PRs apcg-cms#29 + gcv-web#10 MERGED; WAD stays the negative control; test:single-home 181, probe 66/66, 76/76 `--http`)
 
 Previously: 2026-10-05 (Pressroom rollout MERGED, PRs #26 and #27; production `pressroom` row created by hand in /admin; Pressroom optional author: `Articles.author` `required: false` + `articleAuthorValidate`, required except for single-home pillars; see `integrations/all-integrations.md` §Single-home pillar rule)
 
@@ -135,6 +137,7 @@ can jump straight to source.
 | Payload collections, schema, migrations, tenant fields | this file, `process/context/database/all-database.md` | `payload.config.ts`, `src/collections/*.ts`, `src/migrations/` |
 | API routes, auth (human/engine/public-read), cross-tenant read design | this file, `process/context/integrations/all-integrations.md` | `src/lib/engine-auth.ts`, `src/lib/public.ts`, `src/access/helpers.ts` |
 | the content-engine intake/translation wire contract specifically | `process/context/integrations/all-integrations.md` | `docs/08-content-engine-integration.md` (field-by-field, authoritative) |
+| hub text-draft authoring (`POST/PATCH /api/hub/articles`, `view=edit`, `hubAuthor` flag, kill-switch, engine record setup) | `process/context/integrations/all-integrations.md` §Cross-tenant reads → AUTHOR DRAFTS | `src/lib/hub-author-*.ts`, `src/app/api/hub/articles/`, `scripts/hub-probe.ts --check6`, `process/context/tests/all-tests.md` |
 | bridging a new caller (hub/console/agent) into this CMS across tenants | `process/context/integrations/all-integrations.md` §Cross-tenant reads | the cited files in that section — the `/api/hub/*` routes (`hubRead` token) are the existing read pattern; the only write is CMS-3's single-article status route (`hubWrite` token, §Cross-tenant reads → WRITE) — general cross-tenant writes remain unsolved |
 | the Console (`/console`) UI or its Drizzle read layer | `process/context/database/all-database.md` §Two data-access lanes | `src/console/`, `docs/07-website-management.md` |
 | editorial roles/permissions (who can do what) | `docs/03-roles-and-permissions.md` | `src/access/helpers.ts` for the code-level enforcement |
@@ -274,7 +277,7 @@ to one tenant; the Console's `tenantScope()` is still human-session-only; cross-
 not exist anywhere — **updated 2026-09-25:** one narrow exception now exists, the CMS-3 route
 `POST /api/hub/articles/{id}/status` (one article, one tenant, `workflowStatus` only: hide =
 `published → archived`, republish = `hidden|archived → published`), gated by a separate
-`ContentEngines.hubWrite` flag checked in `src/lib/hub-write-auth.ts` (`hub-auth.ts` stays read-only). Anyone adding a new cross-tenant read should extend the `/api/hub/*` pattern
+`ContentEngines.hubWrite` flag checked in `src/lib/hub-write-auth.ts` (`hub-auth.ts` stays read-only). **Updated 2026-10-06 (P5.1):** a second narrow write family exists — hub draft authoring (`POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`), gated by `ContentEngines.hubAuthor` on top of `hubRead` (`src/lib/hub-author-auth.ts`); it creates/edits text DRAFTS only and cannot publish or change a status. Anyone adding a new cross-tenant read should extend the `/api/hub/*` pattern
 (allowlist `select` + sanitize + `depth: 0`, empty-param semantics, merge ordering) — full detail:
 `process/context/integrations/all-integrations.md` §Cross-tenant reads.
 
@@ -473,6 +476,8 @@ contract, authoritative), `09-website-integration.md` (frontend/public-API integ
 ---
 
 ## Open Questions / Outstanding Work
+
+- **APCGHub P5.1 hub draft authoring is MERGED (apcg-cms#25, `574ed20`, 2026-10-06T02:18:18Z) and live-accepted on production (draft id 10734; public URL 404; Activity Log rows with Actor Engine `apcghub-author`).** Open: the post-merge intake regression check is PENDING (no publish attempt after the merge when last looked; confirm `cms_publish_logs` after 02:18Z is all `success`/201 before calling it clean); real `marketer`/`editor`/`viewer` roles and the write-path 403 message were not exercised live; the Activity Log `detail` JSON (`via:"hub"`) was not seen in /admin; `isHubAuthoredDoc` checks `lastEngine.hubAuthor` NOW (flag off or engine deleted ⇒ every hub draft uneditable from the hub); the owner-facing note for that case is misleading when the flag is merely off. Planned, NOT built: **P5.1b** makes `pillarSlug`/`authorId` optional on create (title-only draft; the CMS already stores such drafts, non-draft validation still requires them; PATCH stays set/change only). Operating procedure, kill-switch, rollback and probes: `process/context/integrations/all-integrations.md` §AUTHOR DRAFTS.
 
 - **Pressroom rollout is DONE (2026-10-05): CMS PRs hieuhn09/apcg-cms#26 (single-home rule + engine block)
   and #27 (optional author) are MERGED; FE PRs hieuhn09/brief-asia-web#32-#35 are the companion work
