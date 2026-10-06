@@ -489,10 +489,12 @@ credential** (a second `ContentEngines` record with `hubRead` + `hubAuthor`); no
   **Hazard:** Preview shares the DB and does not migrate, so a Preview of this code fails engine/hub
   auth until the column exists (the merge applied it). **Rollback = revert the PR** (the `down`
   drops the column); no data to restore.
-- **What a draft is:** created with Payload `draft: true` (versions), `workflowStatus: "draft"`,
-  `_status: "draft"`, `origin: "manual"`, `editedByHuman: true`, `contentType: "article"`,
-  `lastEngine` = the hub engine (`hub-author-handlers.ts:278-292`). PATCH also writes `draft: true`
-  (`:582`): the main table row stays frozen until a human publishes (plan D20 branch B), so a
+- **What a draft is:** created with `data._status: "draft"`, `workflowStatus: "draft"`,
+  `origin: "manual"`, `editedByHuman: true`, `contentType: "article"`, `lastEngine` = the hub engine
+  (`hub-author-handlers.ts:280-294`). The create call does NOT pass Payload's `draft: true` option
+  (`:312-318`), so Payload validates required fields on create today (`pillar`, `author`). PATCH
+  DOES save with `draft: true` (`:582`), which skips field-level required validation: the main table
+  row stays frozen until a human publishes (plan D20 branch B), so a
   published article can never be taken down by this route. Public API stays gated on
   `workflowStatus === "published"`, so a draft is not visible (404 on the public URL).
 - **Edit gate** (`editableReasonOf` + `isHubAuthoredDoc`): editable only when the MAIN row AND the
@@ -522,8 +524,9 @@ credential** (a second `ContentEngines` record with `hubRead` + `hubAuthor`); no
   the hub author too ⇒ `fields.pillarSlug = blocked_pillar` (e.g. brief-asia/gcv `pressroom`); the
   single-home rule (previous section) still runs in the Articles hooks. Create currently REQUIRES
   `pillarSlug` and `authorId`; **P5.1b (planned, not built)** will make them optional on create
-  (title-only draft). The CMS already stores such drafts (probe P-5 in the content-engine stage-0
-  report) and non-draft validation still requires them; PATCH cannot clear a pillar/author (set/change
+  (title-only draft) by adding `draft: true` to the create call. Payload already accepts such drafts
+  with that flag (probe P-5 in the content-engine stage-0 report) and refuses them without it
+  (ValidationError "Pillar, Author"); PATCH cannot clear a pillar/author (set/change
   only). Do not implement from this note.
 - **Activity log** (`src/hooks/article-workflow.ts:247-306`): exactly one row per call, actor type
   `engine`, `actorEngineId` = the hub engine. Create ⇒ `article_created` with
