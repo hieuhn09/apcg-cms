@@ -240,3 +240,63 @@ export function sanitizeHubAuthor(doc: Doc): HubAuthor {
     bio: str(doc.bio),
   };
 }
+
+// ── APCGHub P5.1: composer lists for `GET /api/hub/taxonomy?kinds=…` ─────────
+// Same two barriers: a `*_SELECT` naming only `true` fields + a sanitizer that
+// builds a FRESH object field by field (never a spread). Relationships are read at
+// depth 0 and emitted as a bare id. `tenant` / timestamps are never emitted.
+
+export const SUBSECTION_SELECT = { slug: true, title: true, pillar: true, order: true } as const;
+export const TAG_SELECT = { slug: true, title: true } as const;
+export const COUNTRY_SELECT = { slug: true, name: true, code: true } as const;
+export const CITY_SELECT = { slug: true, name: true, country: true } as const;
+
+export interface HubSubsection {
+  id: number | string;
+  slug: string | null;
+  title: string | null;
+  pillarId: number | string | null;
+  order: number | null;
+}
+
+export function sanitizeHubSubsection(doc: Doc): HubSubsection {
+  return {
+    id: doc.id as number | string,
+    slug: str(doc.slug),
+    title: str(doc.title),
+    pillarId: mediaId(doc.pillar),
+    order: num(doc.order),
+  };
+}
+
+export interface HubTag {
+  id: number | string;
+  slug: string | null;
+  title: string | null;
+}
+
+export function sanitizeHubTag(doc: Doc): HubTag {
+  return { id: doc.id as number | string, slug: str(doc.slug), title: str(doc.title) };
+}
+
+export interface HubCountry {
+  id: number | string;
+  slug: string | null;
+  name: string | null;
+  code: string | null;
+}
+
+export function sanitizeHubCountry(doc: Doc): HubCountry {
+  return { id: doc.id as number | string, slug: str(doc.slug), name: str(doc.name), code: str(doc.code) };
+}
+
+export interface HubCity {
+  id: number | string;
+  slug: string | null;
+  name: string | null;
+  country: string | null;
+}
+
+export function sanitizeHubCity(doc: Doc): HubCity {
+  return { id: doc.id as number | string, slug: str(doc.slug), name: str(doc.name), country: str(doc.country) };
+}

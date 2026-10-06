@@ -171,6 +171,25 @@ export const ContentEngines: CollectionConfig = {
           "Allow this engine to hide / republish a single article via the hub write route (/api/hub/articles/{id}/status). Requires Hub read as well. Status only — never edits content.",
       },
     },
+    /**
+     * hubAuthor — grants the hub TEXT-DRAFT author routes (APCGHub P5.1):
+     * `POST /api/hub/articles` (create a draft) and
+     * `PATCH /api/hub/articles/{id}` (edit a hub-created draft). Checked ON TOP
+     * OF `hubRead` with strict `=== true` (NULL/false/absent all deny). Separate
+     * boolean for the same reasons as `hubRead` / `hubWrite` above (not an
+     * ENGINE_ACTIONS value, invisible to `/console`). Does NOT grant any status
+     * change (that stays `hubWrite`), and is never read by
+     * `authenticateEngine()` (intake/translation).
+     */
+    {
+      name: "hubAuthor",
+      type: "checkbox",
+      defaultValue: false,
+      admin: {
+        description:
+          "Allow this engine to write text DRAFTS via /api/hub/articles (create a draft; edit drafts the hub created). Requires Hub read as well. Does not grant any status change.",
+      },
+    },
     { name: "rateLimitPerMin", type: "number", admin: { description: "Optional. Empty = unlimited." } },
     { name: "lastSeenAt", type: "date", admin: { readOnly: true } },
     { name: "lastSeenIp", type: "text", admin: { readOnly: true } },

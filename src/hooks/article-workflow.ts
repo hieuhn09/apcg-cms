@@ -36,6 +36,9 @@ interface EngineContext {
   /** Set only by the hub write route (POST /api/hub/articles/{id}/status,
    *  APCGHub P4 / CMS-3): hub-asserted operator + mandatory reason. */
   hubWrite?: { actor: { email: string; role: string; id?: number | string }; reason: string };
+  /** Set only by the hub AUTHOR routes (POST / PATCH /api/hub/articles, APCGHub
+   *  P5.1): hub-asserted operator + action; `fields` = request keys that changed. */
+  hubAuthor?: { actor: { email: string; role: string; id?: number | string }; action: "create" | "update"; fields?: string[] };
 }
 
 function engineCtx(context: unknown): EngineContext {
@@ -241,7 +244,7 @@ export const articleActivity: CollectionAfterChangeHook = async ({
 }) => {
   const ctx = engineCtx(req.context);
   // A hub write has an authenticated engine key behind it → "engine".
-  const actorType = ctx.hubWrite ? "engine" : req.user ? "human" : ctx.engineWrite ? "engine" : "system";
+  const actorType = ctx.hubWrite || ctx.hubAuthor ? "engine" : req.user ? "human" : ctx.engineWrite ? "engine" : "system";
   const tenantId = toId(doc.tenant);
 
   const prev = previousDoc?.workflowStatus as string | undefined;
@@ -258,6 +261,7 @@ export const articleActivity: CollectionAfterChangeHook = async ({
       targetCollection: "articles",
       targetId: doc.id,
       toStatus: next,
+      detail: ctx.hubAuthor ? { via: "hub", actor: ctx.hubAuthor.actor, action: "create" } : undefined,
     });
   } else if (prev !== next) {
     await logActivity({
@@ -283,6 +287,22 @@ export const articleActivity: CollectionAfterChangeHook = async ({
       detail: ctx.hubWrite
         ? { via: "hub", actor: ctx.hubWrite.actor, reason: ctx.hubWrite.reason }
         : undefined,
+    });
+  } else if (ctx.hubAuthor) {
+    // A hub draft edit that does not move workflowStatus (the author routes never
+    // do): exactly one `human_edit` row, carrying field NAMES only, never content.
+    await logActivity({
+      payload: req.payload,
+      eventType: "human_edit",
+      tenantId,
+      actorType,
+      actorUserId: req.user?.id ?? null,
+      actorEngineId: ctx.engineId ?? null,
+      targetCollection: "articles",
+      targetId: doc.id,
+      fromStatus: prev,
+      toStatus: next,
+      detail: { via: "hub", actor: ctx.hubAuthor.actor, action: "update", fields: ctx.hubAuthor.fields ?? [] },
     });
   }
   return doc;

@@ -92,16 +92,19 @@ export function parsePillarSlugs(raw: string | null): HubPillarResult {
   return { ok: true, slugs };
 }
 
+/** DEFAULT kinds — what an absent / blank `kinds` means (unchanged since CMS-2). */
 export const HUB_KINDS = ["pillars", "authors"] as const;
-export type HubKind = (typeof HUB_KINDS)[number];
+/** Every kind a caller may ask for (APCGHub P5.1 adds the four composer lists). */
+export const HUB_KINDS_ALL = [...HUB_KINDS, "subsections", "tags", "countries", "cities"] as const;
+export type HubKind = (typeof HUB_KINDS_ALL)[number];
 
 export type HubKindsResult = { ok: true; kinds: HubKind[] } | { ok: false; reason: string; values: string[] };
 
-/** `kinds`: CSV ⊆ {pillars, authors}; absent/blank ⇒ both. */
+/** `kinds`: CSV ⊆ HUB_KINDS_ALL; absent/blank ⇒ HUB_KINDS (pillars + authors). Result in HUB_KINDS_ALL order. */
 export function parseKinds(raw: string | null): HubKindsResult {
   const wanted = (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   if (wanted.length === 0) return { ok: true, kinds: [...HUB_KINDS] };
-  const bad = wanted.filter((k) => !(HUB_KINDS as readonly string[]).includes(k));
+  const bad = wanted.filter((k) => !(HUB_KINDS_ALL as readonly string[]).includes(k));
   if (bad.length) return { ok: false, reason: "unknown kind", values: bad };
-  return { ok: true, kinds: HUB_KINDS.filter((k) => wanted.includes(k)) };
+  return { ok: true, kinds: HUB_KINDS_ALL.filter((k) => wanted.includes(k)) };
 }

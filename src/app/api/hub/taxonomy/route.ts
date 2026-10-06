@@ -5,7 +5,15 @@
  *   Auth:   Authorization: Bearer <token of a ContentEngines doc with hubRead:true>
  *   Query:  tenants  CSV of tenant slugs, SUBSET of the engine's grant; outside
  *                    it ⇒ 403. Absent ⇒ every allowed tenant.
- *           kinds    CSV ⊆ {pillars, authors}; absent ⇒ both. Unknown ⇒ 400.
+ *           kinds    CSV ⊆ {pillars, authors, subsections, tags, countries, cities};
+ *                    absent ⇒ pillars + authors (unchanged). Unknown ⇒ 400.
+ *
+ * APCGHub P5.1 composer kinds (each block `{items, count, totalDocs, truncated}`,
+ * locale `en`, order ends in `id`): subsections `{id, slug, title, pillarId, order}`
+ * (cap 500), tags `{id, slug, title}` (cap 3000), countries `{id, slug, name, code}`
+ * (GLOBAL reference data — not tenant-filtered; cap 300), cities `{id, slug, name,
+ * country}` (cap 1000; a tenant without `citiesMap` gets an empty block with
+ * `disabled: true`).
  *
  * Empty/absent tenants|pillar|kinds means ALL allowed — callers must never send
  * an empty scope by accident (Hub-1 lesson D0).
@@ -37,9 +45,29 @@ import {
 } from "@/lib/hub-sanitize";
 import { json } from "@/lib/http";
 import { logActivity } from "@/lib/activity";
+import { featureEnabled, findTenantById } from "@/lib/tenant";
+import { disabledBlock, hubBlock, type HubBlock } from "@/lib/hub-taxonomy-blocks";
+import {
+  CITY_SELECT,
+  COUNTRY_SELECT,
+  SUBSECTION_SELECT,
+  TAG_SELECT,
+  sanitizeHubCity,
+  sanitizeHubCountry,
+  sanitizeHubSubsection,
+  sanitizeHubTag,
+  type HubCity,
+  type HubCountry,
+  type HubSubsection,
+  type HubTag,
+} from "@/lib/hub-sanitize";
 
 const PILLARS_CAP = 200;
 const AUTHORS_CAP = 1000;
+const SUBSECTIONS_CAP = 500;
+const TAGS_CAP = 3000;
+const COUNTRIES_CAP = 300;
+const CITIES_CAP = 1000;
 
 interface Block<T> {
   items: T[];
@@ -82,8 +110,28 @@ export async function GET(request: Request): Promise<Response> {
   }
   const wantPillars = kinds.kinds.includes("pillars");
   const wantAuthors = kinds.kinds.includes("authors");
+  const wantSubsections = kinds.kinds.includes("subsections");
+  const wantTags = kinds.kinds.includes("tags");
+  const wantCountries = kinds.kinds.includes("countries");
+  const wantCities = kinds.kinds.includes("cities");
 
   try {
+    // Countries are global: read once, the same block for every tenant.
+    const countries = wantCountries
+      ? await payload.find({
+          collection: "countries",
+          select: COUNTRY_SELECT,
+          depth: 0,
+          locale: "en",
+          limit: COUNTRIES_CAP + 1,
+          page: 1,
+          sort: ["slug", "id"],
+          overrideAccess: true,
+        })
+      : null;
+    const countriesBlock = countries
+      ? hubBlock(countries.docs as unknown as Record<string, unknown>[], countries.totalDocs, COUNTRIES_CAP, sanitizeHubCountry)
+      : null;
     const out = await Promise.all(
       tenants.map(async (t) => {
         const [pillars, authors] = await Promise.all([
@@ -114,12 +162,42 @@ export async function GET(request: Request): Promise<Response> {
               })
             : null,
         ]);
-        const entry: { tenant: string; pillars?: Block<HubPillar>; authors?: Block<HubAuthor> } = { tenant: t.slug };
+        const entry: {
+          tenant: string;
+          pillars?: Block<HubPillar>;
+          authors?: Block<HubAuthor>;
+          subsections?: HubBlock<HubSubsection>;
+          tags?: HubBlock<HubTag>;
+          countries?: HubBlock<HubCountry>;
+          cities?: HubBlock<HubCity>;
+        } = { tenant: t.slug };
         if (pillars) {
           entry.pillars = block(pillars.docs as unknown as Record<string, unknown>[], pillars.totalDocs, PILLARS_CAP, sanitizeHubPillar);
         }
         if (authors) {
           entry.authors = block(authors.docs as unknown as Record<string, unknown>[], authors.totalDocs, AUTHORS_CAP, sanitizeHubAuthor);
+        }
+        const citiesOn = wantCities ? featureEnabled(await findTenantById(payload, t.id), "citiesMap") : false;
+        const [subsections, tags, cities] = await Promise.all([
+          wantSubsections
+            ? scopedFind({ payload, collection: "subsections", tenantId: t.id, select: SUBSECTION_SELECT, depth: 0, locale: "en", limit: SUBSECTIONS_CAP + 1, page: 1, sort: ["order", "slug", "id"] })
+            : null,
+          wantTags
+            ? scopedFind({ payload, collection: "tags", tenantId: t.id, select: TAG_SELECT, depth: 0, locale: "en", limit: TAGS_CAP + 1, page: 1, sort: ["slug", "id"] })
+            : null,
+          citiesOn
+            ? scopedFind({ payload, collection: "cities", tenantId: t.id, select: CITY_SELECT, depth: 0, locale: "en", limit: CITIES_CAP + 1, page: 1, sort: ["slug", "id"] })
+            : null,
+        ]);
+        if (subsections) {
+          entry.subsections = hubBlock(subsections.docs as unknown as Record<string, unknown>[], subsections.totalDocs, SUBSECTIONS_CAP, sanitizeHubSubsection);
+        }
+        if (tags) entry.tags = hubBlock(tags.docs as unknown as Record<string, unknown>[], tags.totalDocs, TAGS_CAP, sanitizeHubTag);
+        if (countriesBlock) entry.countries = countriesBlock;
+        if (wantCities) {
+          entry.cities = cities
+            ? hubBlock(cities.docs as unknown as Record<string, unknown>[], cities.totalDocs, CITIES_CAP, sanitizeHubCity)
+            : disabledBlock<HubCity>();
         }
         return entry;
       }),
