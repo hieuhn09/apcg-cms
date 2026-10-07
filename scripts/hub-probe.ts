@@ -6320,6 +6320,1283 @@ async function n10() {
   process.exit(0);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// --pb7 — APCGHub P5.2 Stage 0 PROBE (content-engine plan
+// process/features/apcg-hub/active/apcg-hub-p5-2-publish-schedule-unpublish_PLAN_30-09-26.md §5).
+//
+//   npx tsx scripts/hub-probe.ts --pb7 --in <setup6.json> [--only PB-1,PB-3,…]
+//   npx tsx scripts/hub-probe.ts --pb7 --only GATE      (local guards only, then exit 0)
+//
+// Measures, BEFORE any P5.2 product code exists, what Payload / Postgres do for
+// the P5.2 write shapes (plan K3) through a PROTOTYPE of the CMS-A lock helper
+// (plan K6): one Payload transaction, SET LOCAL lock_timeout +
+// idle_in_transaction_session_timeout, pg_advisory_xact_lock(int4,int4) on the
+// transaction's own connection, a Local-API `req` carrying the transaction id.
+// The prototype lives in this probe only; it is NOT product code.
+//
+// Output: `PB7 <id> <ĐẠT|ĐỎ|GHI|KXN|LỖI> <label>  <json>` (GHI = record only,
+// KXN = could not be confirmed, LỖI = the probe itself failed). Exit 0 = ran;
+// 1 = crash; 2 = usage / local guard.
+//
+// WRITES to the database, spawns short-lived local `node` children that hold
+// Postgres locks, and listens on 127.0.0.1 — LOCAL ONLY: assertLocalTargets +
+// assertLocalDb run FIRST, before any DB / HTTP call.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Id7 = string | number;
+interface Exec7 {
+  execute: (q: unknown) => Promise<unknown>;
+}
+interface Db7 {
+  beginTransaction: () => Promise<Id7 | null>;
+  commitTransaction: (id: Id7) => Promise<void>;
+  rollbackTransaction: (id: Id7) => Promise<void>;
+  sessions: Record<string, { db: Exec7 } | undefined>;
+  drizzle: Exec7;
+  pool?: { options?: { max?: number }; totalCount?: number; idleCount?: number; waitingCount?: number };
+}
+type Req7 = Doc & { transactionID?: unknown };
+interface PgSide7 {
+  on: (ev: "error", f: (e: unknown) => void) => void;
+  connect: () => Promise<void>;
+  query: (q: string, p?: unknown[]) => Promise<{ rows: Doc[] }>;
+  end: () => Promise<void>;
+}
+interface Ctx7 {
+  req: Req7;
+  tx: Exec7;
+  txId: Id7;
+  pid: number;
+  lockSlug: (tenantId: Id7, slug: string) => Promise<void>;
+}
+type FnRes7 = { ok: boolean; value: unknown };
+interface Lock7Out {
+  kind: "ok" | "fail" | "busy" | "thrown" | "lost";
+  value?: unknown;
+  code?: string;
+  err?: Doc;
+  commitThrew?: Doc;
+  killThrew?: Doc;
+  pid?: number;
+  acquiredMs?: number;
+  ms: number;
+  enteredAt?: number;
+  endedAt?: number;
+  txIdAfterFn?: boolean;
+  sessionAfterFn?: boolean;
+}
+
+const PB7_NS_ARTICLE = "apcghub.p52.article";
+const PB7_NS_SLUG = "apcghub.p52.slug";
+const PB7_BUSY = new Set(["55P03", "40P01", "40001"]);
+const PB7_ACTOR = { email: "pb7@example.invalid", role: "editor", id: "hub-user-7" };
+
+/** FNV-1a 32-bit over the UTF-8 bytes, as a signed int32 (`|0`) — plan K6. */
+function fnv1a32x7(s: string): number {
+  let h = 0x811c9dc5;
+  for (const b of Buffer.from(s, "utf8")) {
+    h ^= b;
+    h = Math.imul(h, 0x01000193);
+  }
+  return h | 0;
+}
+/** Same rule as hub-author-handlers `errCode`: `err.code`, then ONE level of `cause`. */
+function pgCode7(err: unknown): string | undefined {
+  const o = (typeof err === "object" && err !== null ? err : {}) as { code?: unknown; cause?: unknown };
+  if (typeof o.code === "string") return o.code;
+  const c = (typeof o.cause === "object" && o.cause !== null ? o.cause : {}) as { code?: unknown };
+  return typeof c.code === "string" ? c.code : undefined;
+}
+/** Error shape for the report: name, code, short message, nested `cause` (max 3 levels). Never a token. */
+function errShape7(err: unknown, depth = 0): Doc {
+  const e = (typeof err === "object" && err !== null ? err : { message: String(err) }) as Doc;
+  const out: Doc = {
+    name: typeof e.name === "string" ? e.name : typeof err,
+    code: typeof e.code === "string" ? e.code : undefined,
+    message: typeof e.message === "string" ? (e.message as string).slice(0, 220) : undefined,
+  };
+  const paths = ((e.data as { errors?: { path?: string }[] } | undefined)?.errors ?? []).map((x) => x.path);
+  if (paths.length) out.paths = paths;
+  if (depth < 3 && e.cause !== undefined) out.cause = errShape7(e.cause, depth + 1);
+  return out;
+}
+const sleep7 = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** The CMS-A helper PROTOTYPE (plan K6), probe-only. */
+async function protoLock7(
+  payload: P,
+  args: { tenantId: Id7; articleId?: number },
+  fn: (c: Ctx7) => Promise<FnRes7>,
+  opt: { outsideTx?: boolean; lockTimeout?: string; idleTimeout?: string } = {},
+): Promise<Lock7Out> {
+  const D = payload.db as unknown as Db7;
+  const { createLocalReq } = await import("payload");
+  const t0 = performance.now();
+  const out: Lock7Out = { kind: "fail", ms: 0 };
+  let txId: Id7 | null = null;
+  const kill = async () => {
+    if (txId == null) return;
+    try {
+      await D.rollbackTransaction(txId);
+    } catch (e) {
+      out.killThrew = errShape7(e);
+    }
+  };
+  try {
+    txId = await D.beginTransaction();
+    if (txId == null) throw new Error("beginTransaction returned no id");
+    const tx = D.sessions[String(txId)]?.db;
+    if (!tx) throw new Error("no session for the new transaction");
+    await tx.execute(sql.raw(`SET LOCAL lock_timeout = '${opt.lockTimeout ?? "3s"}'`));
+    await tx.execute(sql.raw(`SET LOCAL idle_in_transaction_session_timeout = '${opt.idleTimeout ?? "30s"}'`));
+    out.pid = Number(((await tx.execute(sql`SELECT pg_backend_pid() AS pid`)) as { rows?: { pid: number }[] }).rows?.[0]?.pid);
+    const lockOn: Exec7 = opt.outsideTx ? D.drizzle : tx;
+    if (args.articleId != null) {
+      await lockOn.execute(sql`SELECT pg_advisory_xact_lock(${fnv1a32x7(`${PB7_NS_ARTICLE}\u0000${args.tenantId}`)}::int4, ${args.articleId}::int4)`);
+    }
+    out.acquiredMs = Math.round(performance.now() - t0);
+    const req = (await createLocalReq({ context: {} } as never, payload)) as unknown as Req7;
+    req.transactionID = txId;
+    let slugTaken = false;
+    const ctx: Ctx7 = {
+      req,
+      tx,
+      txId,
+      pid: out.pid ?? -1,
+      lockSlug: async (tenantId, slug) => {
+        if (slugTaken) throw new Error("lockSlug called twice");
+        slugTaken = true;
+        await lockOn.execute(sql`SELECT pg_advisory_xact_lock(${fnv1a32x7(PB7_NS_SLUG)}::int4, ${fnv1a32x7(`${tenantId}\u0000${slug}`)}::int4)`);
+      },
+    };
+    out.enteredAt = Date.now();
+    const r = await fn(ctx);
+    out.value = r.value;
+    out.txIdAfterFn = Boolean(req.transactionID);
+    out.sessionAfterFn = Boolean(D.sessions[String(txId)]);
+    if (!r.ok) {
+      await kill();
+      out.kind = "fail";
+    } else if (!out.txIdAfterFn || !out.sessionAfterFn) {
+      await kill();
+      out.kind = "lost"; // the product helper would throw HubLockTransactionLost ⇒ 500
+    } else {
+      try {
+        await D.commitTransaction(txId);
+        out.kind = "ok";
+      } catch (e) {
+        out.commitThrew = errShape7(e);
+        out.kind = "thrown";
+      }
+    }
+  } catch (e) {
+    out.code = pgCode7(e);
+    out.err = errShape7(e);
+    await kill();
+    out.kind = out.code && PB7_BUSY.has(out.code) ? "busy" : "thrown";
+  }
+  out.endedAt = Date.now();
+  out.ms = Math.round(performance.now() - t0);
+  return out;
+}
+
+async function pb7() {
+  assertLocalTargets();
+  try { assertLocalDb(process.env.DATABASE_URL); } catch (e) { refuseLocalDb6(e); }
+  const only = (arg("only") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (only.includes("GATE")) {
+    console.log("[pb7] local guards passed (GATE only, no DB / HTTP call made)");
+    process.exit(0);
+  }
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --pb7 --in <file from --setup6> [--only PB-1,PB-3,…] | --pb7 --only GATE");
+    process.exit(2);
+  }
+  const want = (id: string) => only.length === 0 || only.includes(id);
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const tok = (k: A6Key) => readFileSync(s6.engines[k].tokenFile, "utf8").trim();
+  const T = { author: tok("author"), writeonly: tok("writeonly"), noauthor: tok("noauthor") };
+  const pubTokDtw = readFileSync(s6.publicReadTokenFile.dtw!, "utf8").trim();
+  const payload = await getPayload({ config });
+  const { mapWriteError } = await import("../src/lib/hub-author-handlers");
+  const db = rawDb(payload);
+  const D = payload.db as unknown as Db7;
+  const tid = { dtw: s6.tenants.dtw!.id, gcv: s6.tenants.gcv!.id, "world-travel-brief": s6.tenants["world-travel-brief"]!.id } as const;
+  type T7 = keyof typeof tid;
+  const authorEngine = s6.engines.author.id;
+  const writeEngine = s6.engines.writeonly.id;
+  const run = runId6();
+  let seq = 0;
+
+  const uncaught: Doc[] = [];
+  process.on("uncaughtException", (e) => {
+    uncaught.push(errShape7(e));
+    console.log(`PB7 UNCAUGHT uncaughtException  ${JSON.stringify(errShape7(e))}`);
+  });
+  process.on("unhandledRejection", (e) => {
+    uncaught.push(errShape7(e));
+    console.log(`PB7 UNCAUGHT unhandledRejection  ${JSON.stringify(errShape7(e))}`);
+  });
+
+  const results: { id: string; verdict: string; label: string }[] = [];
+  const rec = (id: string, verdict: string, label: string, v: unknown) => {
+    console.log(`PB7 ${id} ${verdict} ${label}  ${JSON.stringify(v)}`);
+    results.push({ id, verdict, label });
+  };
+  const section = async (id: string, f: () => Promise<void>) => {
+    if (!want(id)) return;
+    console.log(`\n══ ${id} ══`);
+    try {
+      await f();
+    } catch (e) {
+      rec(id, "LỖI", "probe section threw", errShape7(e));
+    }
+  };
+
+  type Reply = { status: number; text: string; body: Doc; ms: number; headers: Record<string, string> };
+  const call = async (method: string, path: string, body?: unknown, token: string | null = T.author): Promise<Reply> => {
+    const t0 = performance.now();
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let parsed: Doc = {};
+    try {
+      parsed = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    const headers: Record<string, string> = {};
+    res.headers.forEach((v, k) => (headers[k] = v));
+    return { status: res.status, text, body: parsed, ms: Math.round(performance.now() - t0), headers };
+  };
+  const rows7 = async (q: unknown): Promise<Doc[]> => ((await db.execute(q)) as { rows?: Doc[] }).rows ?? [];
+  const nowIso = () => new Date().toISOString();
+  const fx = (t: T7) => s6.fixtures[t]!;
+  const mkDraft = async (t: T7, extra: Doc = {}) => {
+    const slug = `pb7-${run}-${seq++}`;
+    const body: Doc = { tenant: t, title: `PB7 ${slug}`, slug, pillarSlug: "p6-main", authorId: fx(t).authors[0], bodyMarkdown: "Đoạn thân bài thử P5.2.", actor: PB7_ACTOR, ...extra };
+    for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
+    const r = await call("POST", "/api/hub/articles", body);
+    if (r.status !== 201) throw new Error(`mkDraft ${t} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return { id: r.body.id as number, slug: (r.body.slug as string) ?? slug, version: r.body.version as number, tenant: t };
+  };
+  const patchDraft = (t: T7, id: number, expectedVersion: number, fields: Doc) =>
+    call("PATCH", `/api/hub/articles/${id}`, { tenant: t, actor: PB7_ACTOR, expectedVersion, ...fields });
+  const latest7 = async (id: number) => (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const main7 = async (id: number) => (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const mainRaw = async (id: number) =>
+    (await rows7(sql`SELECT _status::text AS s, workflow_status::text AS w, version::int AS v, published_at AS "publishedAt", scheduled_for AS "scheduledFor", xmin::text AS xmin FROM articles WHERE id = ${id}`))[0] ?? null;
+  const verRows = async (id: number) => rows7(sql`SELECT id, latest, xmin::text AS xmin, version__status::text AS s, version_workflow_status::text AS w FROM _articles_v WHERE parent_id = ${id} ORDER BY id`);
+  const maxLogId = async () => Number((await rows7(sql`SELECT coalesce(max(id), 0)::int AS m FROM activity_log`))[0]?.m ?? 0);
+  const logsFor = async (id: number, since: number) =>
+    rows7(sql`SELECT event_type::text AS e, from_status AS f, to_status AS t, detail FROM activity_log WHERE target_id = ${String(id)} AND id > ${since} ORDER BY id`);
+  const advisory = async () => rows7(sql`SELECT pid, granted FROM pg_locks WHERE locktype = 'advisory' ORDER BY pid`);
+  const tjobs = async (id: number) => Number((await rows7(sql`SELECT count(*)::int AS n FROM translation_jobs WHERE article_id = ${id}`))[0]?.n ?? 0);
+  const tstatus = async (id: number) => rows7(sql`SELECT locale::text AS l, state::text AS s FROM articles_translation_status WHERE _parent_id = ${id} ORDER BY locale`);
+  const ctxW = (reason: string, extra: Doc = {}): Doc => ({ hubWrite: { actor: PB7_ACTOR, reason }, engineId: writeEngine, ...extra });
+  const opPublish = (req: Req7, id: number, at: string) =>
+    payload.update({ collection: "articles", id, req: req as never, depth: 0, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: at } as never, context: ctxW("hub composer publish") });
+  const opSchedule = (req: Req7, id: number, at: string) =>
+    payload.update({ collection: "articles", id, req: req as never, draft: true, depth: 0, overrideAccess: true, data: { workflowStatus: "scheduled", scheduledFor: at, publishedAt: at, _status: "draft" } as never, context: ctxW("hub composer schedule", { disableRevalidate: true }) });
+  const opUnschedule = (req: Req7, id: number, at: string) =>
+    payload.update({ collection: "articles", id, req: req as never, draft: true, depth: 0, overrideAccess: true, data: { workflowStatus: "draft", scheduledFor: null, publishedAt: at, _status: "draft" } as never, context: ctxW("hub composer unschedule", { disableRevalidate: true }) });
+  const viaLock = (t: T7, id: number, op: (req: Req7) => Promise<unknown>) =>
+    protoLock7(payload, { tenantId: tid[t], articleId: id }, async (c) => ({ ok: true, value: await op(c.req) }));
+  const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
+  const brief = (o: Lock7Out) => ({ kind: o.kind, code: o.code, err: o.err, ms: o.ms, acquiredMs: o.acquiredMs, killThrew: o.killThrew, commitThrew: o.commitThrew });
+  const snap = async (id: number) => {
+    const l = await latest7(id);
+    return {
+      version: l.version,
+      lastEngine: l.lastEngine ?? null,
+      editedByHuman: l.editedByHuman ?? null,
+      lastEditedBy: l.lastEditedBy ?? null,
+      workflowStatus: l.workflowStatus,
+      translationStatus: ((l.translationStatus as Doc[] | undefined) ?? []).map((r) => `${r.locale}:${r.state}`).length,
+      pending: ((l.translationStatus as Doc[] | undefined) ?? []).filter((r) => r.state === "pending").length,
+    };
+  };
+  const cron = async () => {
+    const r = await call("GET", "/api/cron/publish-scheduled", undefined, null);
+    return { status: r.status, ms: r.ms, published: (r.body.published as Doc[] | undefined)?.map((p) => p.id) ?? null, failed: r.body.failed ?? null };
+  };
+  const pubGet = async (slug: string) => call("GET", `/api/public/articles/${encodeURIComponent(slug)}`, undefined, pubTokDtw);
+
+  console.log(`[pb7] run=${run} base=${BASE} tenants=${JSON.stringify(tid)} pool.max=${D.pool?.options?.max ?? "?"} (pg Pool default when the adapter sets none)`);
+
+  // ══ PB-3 (FIRST): the prototype itself ═════════════════════════════════════
+  await section("PB-3", async () => {
+    const g = await mkDraft("gcv");
+    // (a) `req` carries the transaction + the advisory lock lives on the transaction's backend.
+    const vBefore = (await verRows(g.id)).length;
+    let seenInside = -1;
+    let lockSeen: Doc[] = [];
+    const a = await protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, async (c) => {
+      await payload.update({ collection: "articles", id: g.id, req: c.req as never, draft: true, depth: 0, overrideAccess: true, data: { title: `PB7 3a ${run}`, workflowStatus: "draft", _status: "draft" } as never, context: ctxW("pb7 3a", { disableRevalidate: true }) });
+      seenInside = (await verRows(g.id)).length;
+      lockSeen = (await advisory()).filter((r) => Number(r.pid) === c.pid);
+      return { ok: true, value: null };
+    });
+    const vAfter = (await verRows(g.id)).length;
+    const okA = a.kind === "ok" && seenInside === vBefore && vAfter === vBefore + 1 && lockSeen.length === 1 && lockSeen[0]?.granted === true && (await advisory()).length === 0;
+    rec("PB-3", okA ? "ĐẠT" : "ĐỎ", "(a) req carries the tx: a version row written through req is invisible to another connection until commit; advisory lock granted on the tx backend; released after commit", { lock: brief(a), versionsBefore: vBefore, seenFromOtherConnInsideFn: seenInside, versionsAfterCommit: vAfter, lockOnTxPid: lockSeen, advisoryAfter: (await advisory()).length });
+
+    // (b) serialization, A commits / A kills.
+    for (const endA of ["commit", "kill"] as const) {
+      const marks: Doc = {};
+      const pA = protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, async () => {
+        marks.aIn = Date.now();
+        await sleep7(1500);
+        return { ok: endA === "commit", value: null };
+      });
+      await sleep7(250);
+      const pB = protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, async () => {
+        marks.bIn = Date.now();
+        return { ok: false, value: null };
+      });
+      await sleep7(500);
+      const during = await advisory();
+      const [ra, rb] = await Promise.all([pA, pB]);
+      const after = await advisory();
+      const waited = Number(marks.bIn) >= Number(ra.endedAt) - 20;
+      const ok = waited && during.length === 2 && during.filter((r) => r.granted === true).length === 1 && after.length === 0 && ra.kind === (endA === "commit" ? "ok" : "fail") && rb.kind === "fail";
+      rec("PB-3", ok ? "ĐẠT" : "ĐỎ", `(b) two concurrent tx on the same article key: B waits until A ${endA}s`, { A: brief(ra), B: brief(rb), bEnteredAfterAEndedMs: Number(marks.bIn) - Number(ra.endedAt), pgLocksDuring: during, pgLocksAfter: after.length, deadlockCodes: [ra.code, rb.code].filter((c) => c === "40P01") });
+    }
+
+    // (c) NEGATIVE: the same lock taken OUTSIDE the transaction (autocommit) must NOT serialize.
+    {
+      const marks: Doc = {};
+      const pA = protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, async () => {
+        marks.aIn = Date.now();
+        await sleep7(1500);
+        marks.aOut = Date.now();
+        return { ok: false, value: null };
+      }, { outsideTx: true });
+      await sleep7(250);
+      const pB = protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, async () => {
+        marks.bIn = Date.now();
+        return { ok: false, value: null };
+      }, { outsideTx: true });
+      const [ra, rb] = await Promise.all([pA, pB]);
+      const overlap = Number(marks.bIn) < Number(marks.aOut);
+      rec("PB-3", overlap ? "ĐẠT" : "ĐỎ", "(c) NEGATIVE control: lock outside the tx ⇒ B enters while A still holds ⇒ the probe SEES the race (expected red of the negative case)", { overlapDetected: overlap, bEnteredBeforeAEndedMs: Number(marks.aOut) - Number(marks.bIn), A: brief(ra), B: brief(rb) });
+    }
+  });
+
+  // ══ PB-3v: a plain JS throw after a real write in the helper ═══════════════
+  await section("PB-3v", async () => {
+    const st = async (id: number) => ({ main: await mainRaw(id), versions: (await verRows(id)).length, tjobs: await tjobs(id), tstatus: (await tstatus(id)).length, latestVersion: (await latest7(id)).version });
+    for (const t of ["world-travel-brief", "gcv"] as const) {
+      const d = await mkDraft(t);
+      const before = await st(d.id);
+      const log0 = await maxLogId();
+      let inner: Doc = {};
+      const r = await protoLock7(payload, { tenantId: tid[t], articleId: d.id }, async (c) => {
+        await opPublish(c.req, d.id, nowIso());
+        inner = { tjobsInsideTx: Number((((await c.tx.execute(sql`SELECT count(*)::int AS n FROM translation_jobs WHERE article_id = ${d.id}`)) as { rows?: Doc[] }).rows?.[0]?.n) ?? 0), txIdAfterWrite: Boolean(c.req.transactionID) };
+        throw new Error("probe");
+      });
+      const after = await st(d.id);
+      const orphanLogs = await logsFor(d.id, log0);
+      const same = JSON.stringify({ ...before, main: { ...before.main, xmin: null } }) === JSON.stringify({ ...after, main: { ...after.main, xmin: null } });
+      rec("PB-3v", same && (await advisory()).length === 0 ? "ĐẠT" : "ĐỎ", `(${t}) real publish through req, then throw ⇒ kill ⇒ DB unchanged`, { lock: brief(r), inner, before, after, orphanActivityRows: orphanLogs.map((l) => `${l.e}:${l.f ?? ""}->${l.t ?? ""}`), advisoryAfter: (await advisory()).length });
+    }
+    // Variant: the translation hook itself throws (tenant with translations ON), injected in-process.
+    {
+      const d = await mkDraft("world-travel-brief");
+      const before = await st(d.id);
+      const log0 = await maxLogId();
+      const realCreate = payload.create.bind(payload);
+      (payload as unknown as { create: unknown }).create = async (a: { collection: string }) => {
+        if (a.collection === "translationJobs") throw new Error("pb7 injected translation hook failure");
+        return realCreate(a as never);
+      };
+      let r: Lock7Out;
+      let inner: Doc = {};
+      try {
+        r = await protoLock7(payload, { tenantId: tid["world-travel-brief"], articleId: d.id }, async (c) => {
+          try {
+            await opPublish(c.req, d.id, nowIso());
+          } catch (e) {
+            inner = { thrown: errShape7(e), txIdAfter: Boolean(c.req.transactionID), sessionAfter: Boolean(D.sessions[String(c.txId)]) };
+            throw e;
+          }
+          return { ok: true, value: null };
+        });
+      } finally {
+        (payload as unknown as { create: unknown }).create = realCreate;
+      }
+      const after = await st(d.id);
+      const same = JSON.stringify({ ...before, main: { ...before.main, xmin: null } }) === JSON.stringify({ ...after, main: { ...after.main, xmin: null } });
+      rec("PB-3v", same && (await advisory()).length === 0 ? "ĐẠT" : "ĐỎ", "(variant) translation hook throws after the row write (injected) ⇒ DB unchanged", { lock: brief(r), inner, before, after, orphanActivityRows: (await logsFor(d.id, log0)).map((l) => `${l.e}:${l.f ?? ""}->${l.t ?? ""}`) });
+    }
+  });
+
+  // ══ PB-3vi: nested Payload error inside the helper's transaction ═══════════
+  await section("PB-3vi", async () => {
+    for (const ending of ["ok:false (422)", "ok:true after the nested error"] as const) {
+      const r0 = await call("POST", "/api/hub/articles", { tenant: "gcv", title: `PB7 3vi ${run} ${seq}`, slug: `pb7-${run}-${seq++}`, actor: PB7_ACTOR });
+      if (r0.status !== 201) throw new Error(`title-only draft ⇒ ${r0.status} ${r0.text.slice(0, 200)}`);
+      const id = r0.body.id as number;
+      const before = { main: await mainRaw(id), versions: (await verRows(id)).length };
+      let inner: Doc = {};
+      const r = await protoLock7(payload, { tenantId: tid.gcv, articleId: id }, async (c) => {
+        try {
+          await opPublish(c.req, id, nowIso());
+          inner = { nested: "NO ERROR (unexpected)" };
+        } catch (e) {
+          const locks = (await advisory()).filter((x) => Number(x.pid) === c.pid);
+          inner = { nested: errShape7(e), mapped: mapWriteError(e), txIdAfterNested: Boolean(c.req.transactionID), sessionAfterNested: Boolean(D.sessions[String(c.txId)]), advisoryStillHeldByTxPid: locks.length };
+        }
+        return ending === "ok:false (422)" ? { ok: false, value: 422 } : { ok: true, value: 200 };
+      });
+      const after = { main: await mainRaw(id), versions: (await verRows(id)).length };
+      const unchanged = JSON.stringify({ ...before, main: { ...before.main, xmin: null } }) === JSON.stringify({ ...after, main: { ...after.main, xmin: null } });
+      const noThrow = !r.killThrew && !r.commitThrew;
+      const txKept = inner.txIdAfterNested === true && inner.sessionAfterNested === true;
+      const verdict = !noThrow || !unchanged ? "ĐỎ" : ending === "ok:true after the nested error" && r.kind === "ok" && !txKept ? "ĐỎ" : txKept ? "ĐẠT" : "GHI";
+      rec("PB-3vi", verdict, `nested ValidationError (non-draft publish without pillar/author), fn ⇒ ${ending}`, { lock: brief(r), txIdAfterFn: r.txIdAfterFn, sessionAfterFn: r.sessionAfterFn, inner, unchanged, before, after, advisoryAfter: (await advisory()).length });
+    }
+  });
+
+  // ══ PB-1: base of a non-draft update on a hub draft ════════════════════════
+  await section("PB-1", async () => {
+    const f = fx("gcv");
+    const d = await mkDraft("gcv", { dek: "Dek một", takeaways: ["Ý một"], readMin: 3, tagSlugs: ["p6-tag-a"], countrySlugs: ["vietnam"] });
+    const p = await patchDraft("gcv", d.id, d.version, {
+      title: `PB7 1 retitled ${run}`, bodyMarkdown: "Thân bài MỚI sau PATCH.\n\nĐoạn hai.", dek: "Dek hai", takeaways: ["Ý hai", "Ý ba"], readMin: 4,
+      pillarSlug: "p6-other", subSectionSlug: "p6-sub", authorId: f.authors[1], coAuthorIds: [f.authors[0]],
+      secondary: [{ pillarSlug: "p6-main", subSectionSlug: "p6-sub2" }], tagSlugs: ["p6-tag-a", "p6-tag-b"], countrySlugs: ["vietnam", "singapore"], flags: { aiAssisted: true },
+    });
+    if (p.status !== 200) throw new Error(`PATCH ⇒ ${p.status} ${p.text.slice(0, 300)}`);
+    const KEYS = ["title", "slug", "dek", "takeaways", "readMin", "pillar", "subSection", "author", "coAuthors", "tags", "countries", "country", "aiAssisted", "body"];
+    const pick = (doc: Doc) => {
+      const o: Doc = {};
+      for (const k of KEYS) o[k] = doc[k] ?? null;
+      o.secondary = ((doc.secondarySections as Doc[] | undefined) ?? []).map((r) => [r.pillar, r.subSection ?? null]);
+      return sortKeys6(o) as Doc;
+    };
+    const lat = pick(await latest7(d.id));
+    const mainBefore = pick(await main7(d.id));
+    const differBefore = KEYS.concat("secondary").filter((k) => JSON.stringify(lat[k]) !== JSON.stringify(mainBefore[k]));
+    const r = await viaLock("gcv", d.id, (req) => opPublish(req, d.id, nowIso()));
+    const mainAfter = pick(await main7(d.id));
+    const diffAfter = KEYS.concat("secondary").filter((k) => JSON.stringify(lat[k]) !== JSON.stringify(mainAfter[k]));
+    const childRows = {
+      secondaryMain: (await rows7(sql`SELECT count(*)::int AS n FROM articles_secondary_sections WHERE _parent_id = ${d.id}`))[0]?.n,
+      relsMain: (await rows7(sql`SELECT path, count(*)::int AS n FROM articles_rels WHERE parent_id = ${d.id} GROUP BY path ORDER BY path`)).map((x) => `${x.path}:${x.n}`),
+    };
+    const ok = r.kind === "ok" && differBefore.length > 0 && diffAfter.length === 0 && (await mainRaw(d.id))?.s === "published";
+    rec("PB-1", ok ? "ĐẠT" : "ĐỎ", "non-draft publish (3 fields) through req takes its base from the LATEST version, child rows included", { lock: brief(r), fieldsThatDifferedBefore: differBefore, fieldsDifferingAfter: diffAfter, main: await mainRaw(d.id), childRows });
+  });
+
+  // ══ PB-4 (+PB-11b): activity rows per operation (tenant gcv, translations OFF) ══
+  await section("PB-4", async () => {
+    const a = await mkDraft("gcv");
+    let l0 = await maxLogId();
+    const rp = await viaLock("gcv", a.id, (req) => opPublish(req, a.id, nowIso()));
+    const lp = await logsFor(a.id, l0);
+    rec("PB-4", rp.kind === "ok" && lp.length === 1 && lp[0]?.e === "article_published" && (lp[0]?.detail as Doc | undefined)?.via === "hub" ? "ĐẠT" : "ĐỎ", "publish ⇒ exactly ONE article_published row with detail.via/actor/reason", { lock: brief(rp), rows: lp });
+
+    const b = await mkDraft("gcv");
+    l0 = await maxLogId();
+    const at = inMinutes(30);
+    const rs = await viaLock("gcv", b.id, (req) => opSchedule(req, b.id, at));
+    const ls = await logsFor(b.id, l0);
+    rec("PB-4", rs.kind === "ok" && ls.length === 1 && ls[0]?.e === "status_changed" && ls[0]?.f === "draft" && ls[0]?.t === "scheduled" ? "ĐẠT" : "ĐỎ", "schedule (draft:true) ⇒ exactly ONE status_changed draft→scheduled (previousDoc = latest)", { lock: brief(rs), rows: ls });
+    l0 = await maxLogId();
+    const tU = Date.now();
+    const unAt = nowIso();
+    const ru = await viaLock("gcv", b.id, (req) => opUnschedule(req, b.id, unAt));
+    const lu = await logsFor(b.id, l0);
+    rec("PB-4", ru.kind === "ok" && lu.length === 1 && lu[0]?.e === "status_changed" && lu[0]?.f === "scheduled" && lu[0]?.t === "draft" ? "ĐẠT" : "ĐỎ", "unschedule (draft:true) ⇒ exactly ONE status_changed scheduled→draft", { lock: brief(ru), rows: lu });
+    const lb = await latest7(b.id);
+    const pubDelta = Math.abs(Date.parse(String(lb.publishedAt)) - tU);
+    rec("PB-11", lb.scheduledFor == null && pubDelta <= 5000 ? "ĐẠT" : "ĐỎ", "after unschedule: scheduledFor null and publishedAt = unschedule time ±5 s (not the old scheduledFor)", { scheduledFor: lb.scheduledFor ?? null, publishedAt: lb.publishedAt, oldScheduledFor: at, deltaMs: pubDelta });
+
+    const c = await mkDraft("gcv");
+    l0 = await maxLogId();
+    const rk = await protoLock7(payload, { tenantId: tid.gcv, articleId: c.id }, async (x) => {
+      await opSchedule(x.req, c.id, inMinutes(40));
+      return { ok: false, value: null };
+    });
+    rec("PB-4", "GHI", "forced rollback: schedule written through req, then kill ⇒ orphan activity rows (logActivity runs on its own connection)", { lock: brief(rk), orphanRows: (await logsFor(c.id, l0)).map((l) => `${l.e}:${l.f}->${l.t}`), latestStatusAfterKill: (await latest7(c.id)).workflowStatus });
+  });
+
+  // ══ PB-5 + PB-8: hubWrite context on both tenant kinds; translation fan-out ══
+  await section("PB-5", async () => {
+    for (const t of ["gcv", "world-travel-brief"] as const) {
+      const d = await mkDraft(t);
+      const s0 = await snap(d.id);
+      const rs = await viaLock(t, d.id, (req) => opSchedule(req, d.id, inMinutes(30)));
+      const s1 = await snap(d.id);
+      const ru = await viaLock(t, d.id, (req) => opUnschedule(req, d.id, nowIso()));
+      const s2 = await snap(d.id);
+      const l0 = await maxLogId();
+      const j0 = await tjobs(d.id);
+      const rp = await viaLock(t, d.id, (req) => opPublish(req, d.id, nowIso()));
+      const s3 = await snap(d.id);
+      const logs = await logsFor(d.id, l0);
+      const tq = logs.filter((l) => l.e === "translation_queued").length;
+      const stable = (a: Doc, b: Doc) => a.version === b.version && JSON.stringify(a.lastEngine) === JSON.stringify(b.lastEngine) && a.editedByHuman === b.editedByHuman && JSON.stringify(a.lastEditedBy) === JSON.stringify(b.lastEditedBy);
+      const trOk = t === "gcv" ? s3.translationStatus === s0.translationStatus : s3.pending > 0;
+      const ok5 = [rs, ru, rp].every((r) => r.kind === "ok") && stable(s0, s1) && stable(s1, s2) && stable(s2, s3) && s1.translationStatus === s0.translationStatus && s2.translationStatus === s0.translationStatus && trOk;
+      rec("PB-5", ok5 ? "ĐẠT" : "ĐỎ", `(${t}) version / lastEngine / editedByHuman / lastEditedBy stable over schedule → unschedule → publish`, { s0, s1, s2, s3, kinds: [rs.kind, ru.kind, rp.kind] });
+      const jobs = (await tjobs(d.id)) - j0;
+      const expectN = t === "gcv" ? 0 : 19;
+      const ok8 = rp.kind === "ok" && jobs === expectN && tq === expectN && logs.filter((l) => l.e === "article_published").length === 1 && s3.version === s2.version && (t === "gcv" ? s3.pending === 0 : s3.pending === expectN);
+      rec("PB-8", ok8 ? "ĐẠT" : "ĐỎ", `(${t}) publish: translationJobs = targets, rows = 1 article_published + N translation_queued, version unchanged`, { newJobs: jobs, translationQueuedRows: tq, articlePublishedRows: logs.filter((l) => l.e === "article_published").length, otherRows: logs.filter((l) => l.e !== "translation_queued" && l.e !== "article_published").map((l) => l.e), pending: s3.pending, versionBefore: s2.version, versionAfter: s3.version, lockMs: rp.ms });
+    }
+    // PB-8 third tenant: dtw (translations on, seed: 3 languages ⇒ 2 targets).
+    const d = await mkDraft("dtw");
+    const v0 = (await latest7(d.id)).version;
+    const l0 = await maxLogId();
+    const rp = await viaLock("dtw", d.id, (req) => opPublish(req, d.id, nowIso()));
+    const logs = await logsFor(d.id, l0);
+    const jobs = await tjobs(d.id);
+    rec("PB-8", rp.kind === "ok" && jobs === 2 && logs.filter((l) => l.e === "translation_queued").length === 2 && (await latest7(d.id)).version === v0 ? "ĐẠT" : "ĐỎ", "(dtw) publish: 2 targets ⇒ 2 jobs + 2 translation_queued, version unchanged", { lock: brief(rp), jobs, rows: logs.map((l) => l.e), versionBefore: v0, versionAfter: (await latest7(d.id)).version });
+  });
+
+  // ══ PB-6 (part before K10) + PB-2 + PB-11a: schedule does not expose; the existing cron ══
+  await section("PB-2", async () => {
+    const d = await mkDraft("dtw");
+    const p = await patchDraft("dtw", d.id, d.version, { title: `PB7 2 retitled ${run}`, bodyMarkdown: "Thân bài sau PATCH cho PB-2." });
+    if (p.status !== 200) throw new Error(`PATCH ⇒ ${p.status}`);
+    const at = new Date(Math.ceil((Date.now() + 10 * 60_000) / 1000) * 1000 + 250).toISOString();
+    const rs = await viaLock("dtw", d.id, (req) => opSchedule(req, d.id, at));
+    const lat = await latest7(d.id);
+    rec("PB-11", rs.kind === "ok" && lat.scheduledFor === at && lat.publishedAt === at ? "ĐẠT" : "ĐỎ", "(a) scheduledFor / publishedAt read back equal to the input UTC instant (ms precision)", { input: at, scheduledFor: lat.scheduledFor, publishedAt: lat.publishedAt });
+    // PB-6 (before K10)
+    const pub = await pubGet(d.slug);
+    const list = await call("GET", "/api/public/articles?limit=100", undefined, pubTokDtw);
+    const inList = JSON.stringify(list.body).includes(d.slug);
+    const mr = await mainRaw(d.id);
+    const ve = await call("GET", `/api/hub/articles/${d.id}?tenant=dtw&view=edit`);
+    const ed = (ve.body.edit ?? {}) as Doc;
+    rec("PB-6", pub.status === 404 && !inList && mr?.s === "draft" && mr?.w === "draft" && ve.status === 200 && ed.editable === false && ed.editableReason === "status" && !("scheduledFor" in ed) ? "ĐẠT" : "ĐỎ", "(before K10) scheduled article: public 404 + not listed; main row draft/draft; view=edit editable:false reason status, no scheduledFor", { publicStatus: pub.status, inPublicList: inList, main: mr && { s: mr.s, w: mr.w }, viewEdit: { status: ve.status, editable: ed.editable, editableReason: ed.editableReason, keys: Object.keys(ed).sort() } });
+    // Move the schedule into the past (Local API, hubWrite, no lock needed), then run the cron.
+    const past = new Date(Math.floor((Date.now() - 60_000) / 1000) * 1000 + 125).toISOString();
+    await payload.update({ collection: "articles", id: d.id, draft: true, depth: 0, overrideAccess: true, data: { scheduledFor: past, publishedAt: past, workflowStatus: "scheduled", _status: "draft" } as never, context: ctxW("pb7 move schedule into the past", { disableRevalidate: true }) });
+    const latBefore = await latest7(d.id);
+    const l0 = await maxLogId();
+    const err0 = Number((await rows7(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'integration_error' AND target_id = ${String(d.id)}`))[0]?.n);
+    const c = await cron();
+    const m = await main7(d.id);
+    const err1 = Number((await rows7(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'integration_error' AND target_id = ${String(d.id)}`))[0]?.n);
+    const pub2 = await pubGet(d.slug);
+    const pubArt = ((pub2.body.doc ?? {}) as Doc);
+    const contentSame = m.title === latBefore.title && JSON.stringify(m.body) === JSON.stringify(latBefore.body) && JSON.stringify(m.pillar) === JSON.stringify(latBefore.pillar);
+    const ok = c.status === 200 && (c.published ?? []).map(String).includes(String(d.id)) && m.workflowStatus === "published" && m._status === "published" && m.publishedAt === past && contentSame && err1 === err0 && pub2.status === 200;
+    rec("PB-2", ok ? "ĐẠT" : "ĐỎ", "existing cron publishes the hub-scheduled draft: published, publishedAt = scheduledFor, content = latest, 0 integration_error, public 200", { cron: c, main: { w: m.workflowStatus, s: m._status, publishedAt: m.publishedAt, title: m.title }, expectedPublishedAt: past, contentSame, integrationErrors: err1 - err0, publicStatus: pub2.status, publicPublishedAt: pubArt.publishedAt ?? null, activityRows: (await logsFor(d.id, l0)).map((l) => `${l.e}:${l.f ?? ""}->${l.t ?? ""}:${JSON.stringify((l.detail as Doc | null)?.via ?? null)}`) });
+    rec("PB-11", pubArt.publishedAt === past ? "ĐẠT" : "ĐỎ", "(b) public API publishedAt = scheduledFor after the cron", { publicPublishedAt: pubArt.publishedAt ?? null, scheduledFor: past });
+  });
+
+  // ══ PB-18: CMS-admin fallback for a scheduled hub article ══════════════════
+  await section("PB-18", async () => {
+    const d = await mkDraft("dtw");
+    const rs = await viaLock("dtw", d.id, (req) => opSchedule(req, d.id, inMinutes(30)));
+    const users = (await payload.find({ collection: "users", where: { email: { equals: process.env.SEED_ADMIN_EMAIL ?? "" } }, limit: 1, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+    const user = users[0];
+    if (!user) {
+      rec("PB-18", "KXN", "no seed system-admin user found ⇒ the CMS-admin step of S6 stays MANDATORY", { scheduled: rs.kind });
+      return;
+    }
+    const at = nowIso();
+    let res: Doc;
+    try {
+      await payload.update({ collection: "articles", id: d.id, draft: true, depth: 0, overrideAccess: true, user: user as never, data: { workflowStatus: "draft", scheduledFor: null, publishedAt: at } as never });
+      res = { ok: true };
+    } catch (e) {
+      res = { ok: false, err: errShape7(e) };
+    }
+    // Move nothing into the past: the article is no longer scheduled. Run the cron anyway.
+    const lat = await latest7(d.id);
+    const c = await cron();
+    const m = await mainRaw(d.id);
+    const ok = res.ok === true && lat.workflowStatus === "draft" && lat.scheduledFor == null && lat.publishedAt === at && !(c.published ?? []).map(String).includes(String(d.id)) && m?.w === "draft";
+    rec("PB-18", ok ? "ĐẠT" : "ĐỎ", "Local API Save Draft as the seed system admin (workflowStatus draft, scheduledFor null, publishedAt reset) on a hub-scheduled article; cron does not publish it", { scheduled: rs.kind, update: res, latest: { w: lat.workflowStatus, scheduledFor: lat.scheduledFor ?? null, publishedAt: lat.publishedAt, version: lat.version, editedByHuman: lat.editedByHuman }, cron: c, main: m && { s: m.s, w: m.w } });
+  });
+
+  // ══ PB-10: slug lock ═══════════════════════════════════════════════════════
+  await section("PB-10", async () => {
+    const f = fx("gcv");
+    const slugOfLatest = async (id: number) => (await latest7(id)).slug;
+    // (i) the plan's case: two existing drafts carrying the same slug, published concurrently.
+    for (const withLock of [true, false]) {
+      const a = await mkDraft("gcv");
+      const b = await mkDraft("gcv");
+      await db.execute(sql`UPDATE articles_locales SET slug = ${a.slug} WHERE _parent_id = ${b.id}`);
+      await db.execute(sql`UPDATE _articles_v_locales SET version_slug = ${a.slug} WHERE _parent_id IN (SELECT id FROM _articles_v WHERE parent_id = ${b.id})`);
+      const pubOne = (id: number) =>
+        protoLock7(payload, { tenantId: tid.gcv, articleId: id }, async (c) => {
+          if (withLock) await c.lockSlug(tid.gcv, a.slug);
+          const conflict = await findSlugConflict7(payload, tid.gcv, a.slug, id);
+          if (conflict) return { ok: false, value: { status: 409, existing: conflict } };
+          await sleep7(400);
+          await opPublish(c.req, id, nowIso());
+          return { ok: true, value: 200 };
+        });
+      const [ra, rb] = await Promise.all([pubOne(a.id), pubOne(b.id)]);
+      const wins = [ra, rb].filter((r) => r.kind === "ok").length;
+      rec("PB-10", wins >= 2 && withLock ? "ĐỎ" : "GHI", `(i) two drafts that ALREADY share a slug, publish concurrently, slug lock ${withLock ? "ON" : "OFF (negative)"}`, { winners: wins, A: { kind: ra.kind, value: ra.value }, B: { kind: rb.kind, value: rb.value }, note: "findSlugConflict also reads LATEST drafts, so each draft already sees the other one" });
+    }
+    // (ii) two concurrent creates of the SAME new slug, through the prototype.
+    for (const withLock of [true, false]) {
+      const s = `pb7-${run}-dup-${seq++}`;
+      const createOne = (n: number) =>
+        protoLock7(payload, { tenantId: tid.gcv }, async (c) => {
+          if (withLock) await c.lockSlug(tid.gcv, s);
+          const conflict = await findSlugConflict7(payload, tid.gcv, s);
+          if (conflict) return { ok: false, value: { status: 409, existing: conflict } };
+          await sleep7(400);
+          try {
+            const created = (await payload.create({
+              collection: "articles", req: c.req as never, draft: true, depth: 0, overrideAccess: true,
+              data: { tenant: tid.gcv, title: `PB7 dup ${n}`, slug: s, pillar: undefined, author: f.authors[0], origin: "manual", workflowStatus: "draft", _status: "draft", editedByHuman: true, contentType: "article", lastEngine: authorEngine, readMin: 1 } as never,
+              context: { hubAuthor: { actor: PB7_ACTOR, action: "create" }, engineId: authorEngine, disableRevalidate: true },
+            })) as unknown as Doc;
+            return { ok: true, value: created.id };
+          } catch (e) {
+            return { ok: false, value: { mapped: mapWriteError(e), err: errShape7(e) } };
+          }
+        });
+      const [r1, r2] = await Promise.all([createOne(1), createOne(2)]);
+      const n = Number((await rows7(sql`SELECT count(*)::int AS n FROM articles a JOIN articles_locales l ON l._parent_id = a.id WHERE a.tenant_id = ${tid.gcv} AND l.slug = ${s}`))[0]?.n);
+      const wins = [r1, r2].filter((r) => r.kind === "ok").length;
+      rec("PB-10", withLock ? (wins === 1 && n === 1 ? "ĐẠT" : "ĐỎ") : wins === 2 && n === 2 ? "ĐẠT" : "ĐỎ", `(ii) two concurrent creates of one NEW slug, slug lock ${withLock ? "ON ⇒ exactly one winner" : "OFF ⇒ NEGATIVE control must show two winners"}`, { winners: wins, rowsWithSlug: n, r1: { kind: r1.kind, value: r1.value }, r2: { kind: r2.kind, value: r2.value } });
+    }
+    // (iii) two drafts change their slug to the SAME new value concurrently (PATCH shape, draft:true).
+    for (const withLock of [true, false]) {
+      const a = await mkDraft("gcv");
+      const b = await mkDraft("gcv");
+      const s = `pb7-${run}-to-${seq++}`;
+      const reslug = (id: number) =>
+        protoLock7(payload, { tenantId: tid.gcv, articleId: id }, async (c) => {
+          if (withLock) await c.lockSlug(tid.gcv, s);
+          const conflict = await findSlugConflict7(payload, tid.gcv, s, id);
+          if (conflict) return { ok: false, value: { status: 409, existing: conflict } };
+          await sleep7(400);
+          await payload.update({ collection: "articles", id, req: c.req as never, draft: true, depth: 0, overrideAccess: true, data: { slug: s, workflowStatus: "draft", _status: "draft" } as never, context: { hubAuthor: { actor: PB7_ACTOR, action: "update", fields: ["slug"] }, engineId: authorEngine, disableRevalidate: true } });
+          return { ok: true, value: 200 };
+        });
+      const [ra, rb] = await Promise.all([reslug(a.id), reslug(b.id)]);
+      const holders = [await slugOfLatest(a.id), await slugOfLatest(b.id)].filter((x) => x === s).length;
+      const wins = [ra, rb].filter((r) => r.kind === "ok").length;
+      rec("PB-10", withLock ? (wins === 1 && holders === 1 ? "ĐẠT" : "ĐỎ") : wins === 2 && holders === 2 ? "ĐẠT" : "ĐỎ", `(iii) two drafts re-slug to one value concurrently, slug lock ${withLock ? "ON ⇒ exactly one winner" : "OFF ⇒ NEGATIVE control must show two winners"}`, { winners: wins, latestDraftsHoldingSlug: holders, A: { kind: ra.kind, value: ra.value }, B: { kind: rb.kind, value: rb.value } });
+    }
+  });
+
+  // ══ PB-12: tenant / id isolation on the CMS-3 write auth model (/status) ═══
+  await section("PB-12", async () => {
+    const name = "apcghub-cms7-writenoread";
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", hubRead: false, hubAuthor: false, hubWrite: true, allowedTenants: [tid.dtw, tid.gcv, tid["world-travel-brief"]] };
+    let eid = await engineIdByName(payload, name);
+    if (eid != null) await payload.update({ collection: "content-engines", id: eid, overrideAccess: true, data: data as never });
+    else eid = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", allowedActions: ["import"], ...data } as never })) as unknown as { id: number }).id;
+    writeFileSync(`${inFile}.pb7-writenoread.token`, token, { mode: 0o600 });
+    const g = await mkDraft("gcv");
+    const body = (tenant: string) => ({ tenant, to: "archived", expectedStatus: "published", reason: "pb7 probe twelve", actor: PB7_ACTOR });
+    const cases: [string, Reply][] = [
+      ["id of another tenant (gcv id, tenant dtw)", await call("POST", `/api/hub/articles/${g.id}/status`, body("dtw"), T.writeonly)],
+      ["id > int4 (2147483648)", await call("POST", "/api/hub/articles/2147483648/status", body("dtw"), T.writeonly)],
+      ["tenant outside the key (wad)", await call("POST", `/api/hub/articles/${g.id}/status`, body("wad"), T.writeonly)],
+      ["hubRead key without hubWrite (noauthor engine)", await call("POST", `/api/hub/articles/${g.id}/status`, body("gcv"), T.noauthor)],
+      ["hubWrite key without hubRead (pb7 engine)", await call("POST", `/api/hub/articles/${g.id}/status`, body("gcv"), token)],
+      ["author key (hubAuthor) without hubWrite", await call("POST", `/api/hub/articles/${g.id}/status`, body("gcv"), T.author)],
+    ];
+    const want12 = [404, 404, 403, 403, 403, 403];
+    const got = cases.map(([, r]) => r.status);
+    rec("PB-12", JSON.stringify(got) === JSON.stringify(want12) ? "ĐẠT" : "ĐỎ", "CMS-3 /status model: 404/404/403/403/403/403, bodies recorded", Object.fromEntries(cases.map(([k, r]) => [k, { status: r.status, body: r.body }])));
+  });
+
+  // ══ PB-13: raw HTML in the body after publish ══════════════════════════════
+  await section("PB-13", async () => {
+    const d = await mkDraft("dtw", { bodyMarkdown: "Dòng có <b>thử</b> và a < b.\n\nMột [liên kết lành tính](https://example.com/)." });
+    const r = await viaLock("dtw", d.id, (req) => opPublish(req, d.id, nowIso()));
+    const pub = await pubGet(d.slug);
+    const art = ((pub.body.doc ?? {}) as Doc);
+    const nodes: Doc[] = [];
+    const walk = (n: unknown) => {
+      if (!n || typeof n !== "object") return;
+      const o = n as Doc;
+      if (typeof o.type === "string") nodes.push({ type: o.type, ...(typeof o.text === "string" ? { text: o.text } : {}), ...(o.fields ? { url: (o.fields as Doc).url ?? null } : {}) });
+      for (const v of Object.values(o)) if (v && typeof v === "object") walk(v);
+    };
+    walk(art.body);
+    rec("PB-13", "GHI", "public JSON of a published body with `<b>thử</b>` text and one https link", { lock: r.kind, publicStatus: pub.status, bodyType: typeof art.body, nodes: nodes.slice(0, 20), bodyKeys: art.body && typeof art.body === "object" ? Object.keys(art.body as Doc) : null });
+  });
+
+  // ══ PB-14: lock_timeout, killed / abandoned holders, row locks inside the block ══
+  await section("PB-14", async () => {
+    const { spawn } = await import("node:child_process");
+    const child = (mode: "advisory" | "row" | "verrow", k1: number, k2: number, extra: { id?: number; idle?: string; sleepStmt?: number } = {}) => {
+      const src = `
+        const { Client } = require("pg");
+        (async () => {
+          const c = new Client({ connectionString: process.env.DATABASE_URL });
+          c.on("error", (e) => process.stdout.write("CHILD-ERR " + (e && e.code) + "\\n"));
+          await c.connect();
+          await c.query("BEGIN");
+          await c.query("SET LOCAL idle_in_transaction_session_timeout = '${extra.idle ?? "0"}'");
+          if (${JSON.stringify(mode)} === "advisory") await c.query("SELECT pg_advisory_xact_lock($1::int4, $2::int4)", [${k1}, ${k2}]);
+          if (${JSON.stringify(mode)} === "row") await c.query("SELECT id FROM articles WHERE id = $1 FOR UPDATE", [${extra.id ?? 0}]);
+          if (${JSON.stringify(mode)} === "verrow") await c.query("SELECT id FROM _articles_v WHERE id = $1 FOR UPDATE", [${extra.id ?? 0}]);
+          const pid = (await c.query("SELECT pg_backend_pid() AS p")).rows[0].p;
+          process.stdout.write("HELD " + pid + "\\n");
+          ${extra.sleepStmt ? `await c.query("SELECT pg_sleep(${extra.sleepStmt})").catch((e) => process.stdout.write("SLEEP-ERR " + e.code + "\\n"));` : ""}
+          setInterval(() => {}, 1000);
+        })().catch((e) => { process.stdout.write("CHILD-FAIL " + (e && e.code) + " " + (e && e.message) + "\\n"); process.exit(3); });
+      `;
+      const cp = spawn(process.execPath, ["-e", src], { cwd: process.cwd(), env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+      let outBuf = "";
+      cp.stdout.on("data", (b: Buffer) => (outBuf += b.toString()));
+      const held = new Promise<number>((res, rej) => {
+        const t = setInterval(() => {
+          const m = /HELD (\d+)/.exec(outBuf);
+          if (m) {
+            clearInterval(t);
+            res(Number(m[1]));
+          } else if (/CHILD-FAIL/.test(outBuf)) {
+            clearInterval(t);
+            rej(new Error(outBuf.trim()));
+          }
+        }, 25);
+      });
+      return { cp, held, out: () => outBuf };
+    };
+    const kA = (t: Id7) => fnv1a32x7(`${PB7_NS_ARTICLE}\u0000${t}`);
+    const noop = async (): Promise<FnRes7> => ({ ok: false, value: null });
+
+    // (i)+(iii) live holder of the advisory key ⇒ lock_timeout (3 s) fires ⇒ busy, no hang.
+    const g = await mkDraft("gcv");
+    const h1 = child("advisory", kA(tid.gcv), g.id);
+    await h1.held;
+    const r1 = await protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, noop);
+    rec("PB-14", r1.kind === "busy" && r1.ms >= 2800 && r1.ms <= 6000 ? "ĐẠT" : "ĐỎ", "(i)+(iii) advisory key held by another session ⇒ lock_timeout applies to the advisory wait ⇒ 55P03 ⇒ busy after ~3 s", { lock: brief(r1), errShape: r1.err });
+    // (ii-a) holder process SIGKILLed while idle in transaction ⇒ next caller acquires at once.
+    h1.cp.kill("SIGKILL");
+    await sleep7(300);
+    const r2 = await protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, noop);
+    rec("PB-14", r2.kind === "fail" && (r2.acquiredMs ?? 99999) < 2000 ? "ĐẠT" : "ĐỎ", "(ii-a) holder process killed (idle in transaction) ⇒ lock released, next caller acquires quickly", { lock: brief(r2) });
+    // (ii-b) holder alive but abandoned (idle in transaction, 30 s idle timeout) ⇒ busy inside the window, then OK.
+    const h2 = child("advisory", kA(tid.gcv), g.id, { idle: "30s" });
+    const t2 = Date.now();
+    await h2.held;
+    const tries: Doc[] = [];
+    let firstOkAfter: number | null = null;
+    while (Date.now() - t2 < 60_000) {
+      const r = await protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, noop);
+      tries.push({ atMs: Date.now() - t2, kind: r.kind, code: r.code });
+      if (r.kind === "fail") {
+        firstOkAfter = Date.now() - t2;
+        break;
+      }
+      await sleep7(2000);
+    }
+    h2.cp.kill("SIGKILL");
+    rec("PB-14", firstOkAfter != null && firstOkAfter <= 40_000 && tries.slice(0, -1).every((x) => x.kind === "busy") ? "ĐẠT" : "ĐỎ", "(ii-b) abandoned holder (alive, idle in tx) ⇒ busy inside the ~30 s window, released by idle_in_transaction_session_timeout", { firstAcquiredAfterMs: firstOkAfter, tries: tries.length, kinds: [...new Set(tries.map((x) => `${x.kind}:${x.code ?? ""}`))], childSaw: h2.out().trim().split("\n").slice(-2) });
+    // (ii-c) holder killed WHILE a statement runs ⇒ backend keeps running until the statement ends.
+    const h3 = child("advisory", kA(tid.gcv), g.id, { sleepStmt: 20 });
+    const t3 = Date.now();
+    await h3.held;
+    await sleep7(500);
+    h3.cp.kill("SIGKILL");
+    let freedAfter: number | null = null;
+    const kinds3: string[] = [];
+    while (Date.now() - t3 < 45_000) {
+      const r = await protoLock7(payload, { tenantId: tid.gcv, articleId: g.id }, noop);
+      kinds3.push(r.kind);
+      if (r.kind === "fail") {
+        freedAfter = Date.now() - t3;
+        break;
+      }
+      await sleep7(1000);
+    }
+    rec("PB-14", freedAfter != null ? "GHI" : "ĐỎ", "(ii-c) holder killed while running a statement (pg_sleep 20 s) ⇒ how long the lock outlives the client", { freedAfterMs: freedAfter, attempts: kinds3.length, kinds: [...new Set(kinds3)] });
+
+    // (iv-0) which rows each write kind touches.
+    const touch: Doc = {};
+    const touchOf = async (label: string, id: number, op: () => Promise<Lock7Out>) => {
+      const m0 = await mainRaw(id);
+      const v0 = await verRows(id);
+      const r = await op();
+      const m1 = await mainRaw(id);
+      const v1 = await verRows(id);
+      const oldLatest = v0.find((v) => v.latest === true);
+      const oldLatestAfter = v1.find((v) => v.id === oldLatest?.id);
+      touch[label] = { ok: r.kind, articlesRowTouched: m0?.xmin !== m1?.xmin, versionRowsAdded: v1.length - v0.length, oldLatestRowTouched: oldLatest ? oldLatest.xmin !== oldLatestAfter?.xmin : null, oldLatestId: oldLatest?.id ?? null };
+    };
+    const w = await mkDraft("gcv");
+    await touchOf("PATCH draft:true (hubAuthor context)", w.id, () =>
+      protoLock7(payload, { tenantId: tid.gcv, articleId: w.id }, async (c) => {
+        await payload.update({ collection: "articles", id: w.id, req: c.req as never, draft: true, depth: 0, overrideAccess: true, data: { title: `PB7 iv0 ${run}`, workflowStatus: "draft", _status: "draft" } as never, context: { hubAuthor: { actor: PB7_ACTOR, action: "update", fields: ["title"] }, engineId: authorEngine, disableRevalidate: true } });
+        return { ok: true, value: null };
+      }));
+    await touchOf("schedule (draft:true)", w.id, () => viaLock("gcv", w.id, (req) => opSchedule(req, w.id, inMinutes(30))));
+    await touchOf("unschedule (draft:true)", w.id, () => viaLock("gcv", w.id, (req) => opUnschedule(req, w.id, nowIso())));
+    await touchOf("publish (non-draft)", w.id, () => viaLock("gcv", w.id, (req) => opPublish(req, w.id, nowIso())));
+    rec("PB-14", "GHI", "(iv-0) write kind → rows touched (articles row xmin, new version rows, previous latest version row xmin)", touch);
+
+    // (iv) hold a ROW lock on what each kind touches, then run that kind through the prototype ⇒ 55P03 inside the block ⇒ busy.
+    const ivRes: Doc = {};
+    const kinds: [string, (id: number) => (req: Req7) => Promise<unknown>][] = [
+      ["PATCH draft:true", (id) => (req) => payload.update({ collection: "articles", id, req: req as never, draft: true, depth: 0, overrideAccess: true, data: { title: `PB7 iv ${run}`, workflowStatus: "draft", _status: "draft" } as never, context: { hubAuthor: { actor: PB7_ACTOR, action: "update", fields: ["title"] }, engineId: authorEngine, disableRevalidate: true } })],
+      ["schedule", (id) => (req) => opSchedule(req, id, inMinutes(30))],
+      ["publish", (id) => (req) => opPublish(req, id, nowIso())],
+    ];
+    for (const [label, mk] of kinds) {
+      for (const target of ["articles row", "previous latest version row"] as const) {
+        const x = await mkDraft("gcv");
+        if (label === "publish" && target === "previous latest version row") {
+          /* covered below the same way */
+        }
+        const v = (await verRows(x.id)).find((r) => r.latest === true);
+        const h = child(target === "articles row" ? "row" : "verrow", 0, 0, { id: target === "articles row" ? x.id : Number(v?.id ?? 0) });
+        await h.held;
+        const r = await viaLock("gcv", x.id, mk(x.id));
+        h.cp.kill("SIGKILL");
+        await sleep7(200);
+        ivRes[`${label} | ${target}`] = { kind: r.kind, code: r.code, ms: r.ms, errShape: r.err };
+      }
+    }
+    const iv0 = touch as Record<string, Doc>;
+    const expectBusy = (label: string, target: string) => {
+      const key = label === "PATCH draft:true" ? "PATCH draft:true (hubAuthor context)" : label === "schedule" ? "schedule (draft:true)" : "publish (non-draft)";
+      const t = iv0[key] ?? {};
+      return target === "articles row" ? t.articlesRowTouched === true : t.oldLatestRowTouched === true;
+    };
+    const bad = Object.entries(ivRes).filter(([k, v]) => {
+      const [label, target] = k.split(" | ") as [string, string];
+      return expectBusy(label, target) ? (v as Doc).kind !== "busy" : false;
+    });
+    rec("PB-14", bad.length === 0 ? "ĐẠT" : "ĐỎ", "(iv) row lock held on a touched row ⇒ 55P03 inside the block ⇒ busy (not 500); rows NOT touched per iv-0 are 'không áp dụng'", { results: ivRes, applicable: Object.keys(ivRes).filter((k) => expectBusy(...(k.split(" | ") as [string, string]))) });
+    rec("PB-14", uncaught.length === 0 ? "ĐẠT" : "ĐỎ", "probe process alive, no uncaught error / unhandled rejection through PB-14", { uncaught });
+  });
+
+  // ══ PB-9: revalidate webhook per operation × tenant kind × webhook speed ══
+  await section("PB-9", async () => {
+    const http = await import("node:http");
+    let hits = 0;
+    let hang = false;
+    const srv = http.createServer((rq, rs) => {
+      if (rq.method === "POST" && (rq.url ?? "").startsWith("/api/revalidate")) hits++;
+      rq.resume();
+      const done = () => {
+        rs.writeHead(200, { "content-type": "application/json" });
+        rs.end("{}");
+      };
+      if (hang) setTimeout(done, 7000);
+      else done();
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as { port: number }).port;
+    const setFront = (t: T7, url: string | null) => payload.update({ collection: "tenants", id: tid[t], overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: url } as never });
+    if (!process.env.CENTRAL_SIGNING_SECRET) rec("PB-9", "KXN", "CENTRAL_SIGNING_SECRET not set in the probe env ⇒ webhook skipped ⇒ '0 POST' would be meaningless", {});
+    try {
+      for (const t of ["gcv", "world-travel-brief"] as const) await setFront(t, `http://127.0.0.1:${port}`);
+      for (const mode of ["fast", "hang"] as const) {
+        hang = mode === "hang";
+        for (const t of ["gcv", "world-travel-brief"] as const) {
+          const x = await mkDraft(t);
+          const y = await mkDraft(t);
+          const m: Doc = {};
+          hits = 0;
+          const rs = await viaLock(t, x.id, (req) => opSchedule(req, x.id, inMinutes(30)));
+          m.schedule = { posts: hits, ms: rs.ms, kind: rs.kind };
+          hits = 0;
+          const ru = await viaLock(t, x.id, (req) => opUnschedule(req, x.id, nowIso()));
+          m.unschedule = { posts: hits, ms: ru.ms, kind: ru.kind };
+          hits = 0;
+          const rp = await viaLock(t, y.id, (req) => opPublish(req, y.id, nowIso()));
+          await sleep7(hang ? 300 : 100);
+          m.publish = { posts: hits, ms: rp.ms, kind: rp.kind, lockHeldMs: rp.ms - (rp.acquiredMs ?? 0) };
+          m.advisoryAfter = (await advisory()).length;
+          const sOk = (m.schedule as Doc).posts === 0 && (m.unschedule as Doc).posts === 0;
+          const pPosts = (m.publish as Doc).posts as number;
+          const pOk = t === "gcv" ? pPosts === 1 : pPosts >= 1 && pPosts <= 2;
+          const kOk = [rs, ru, rp].every((r) => r.kind === "ok");
+          const tooSlow = t === "world-travel-brief" && rp.ms >= 15_000;
+          const verdict = !sOk || tooSlow || !kOk ? "ĐỎ" : pOk ? "ĐẠT" : "ĐỎ";
+          rec("PB-9", verdict, `(${t}, webhook ${mode}) POSTs per op: schedule 0, unschedule 0, publish ${t === "gcv" ? "1" : "1–2"}; publish total time; lock released`, m);
+          if (t === "world-travel-brief" && rp.ms > 10_000 && rp.ms < 15_000) rec("PB-9", "GHI", `(${t}, webhook ${mode}) publish took > 10 s — báo orchestrator`, { ms: rp.ms });
+        }
+      }
+    } finally {
+      for (const t of ["gcv", "world-travel-brief"] as const) await setFront(t, null);
+      srv.close();
+    }
+  });
+
+  // ══ PB-15: locale of the PATCH-style read vs view=edit ═════════════════════
+  await section("PB-15", async () => {
+    const out: Doc = {};
+    for (const t of ["dtw", "world-travel-brief", "gcv"] as const) {
+      const d = await mkDraft(t);
+      const a = await latest7(d.id); // PATCH's read: draft:true, no locale
+      const ve = await call("GET", `/api/hub/articles/${d.id}?tenant=${t}&view=edit`);
+      const art = (ve.body.article ?? {}) as Doc;
+      out[t] = { patchRead: [a.title, a.slug], viewEdit: [art.title, art.slug], same: a.title === art.title && a.slug === art.slug };
+    }
+    const ba = (await tenantsBySlug(payload)).get("brief-asia");
+    if (ba != null) {
+      const c = (await payload.create({ collection: "articles", draft: true, depth: 0, overrideAccess: true, data: { tenant: ba, title: `PB7 15 ba ${run}`, slug: `pb7-${run}-ba`, origin: "manual", workflowStatus: "draft", _status: "draft", lastEngine: authorEngine, readMin: 1 } as never, context: { hubAuthor: { actor: PB7_ACTOR, action: "create" }, engineId: authorEngine, disableRevalidate: true } })) as unknown as Doc;
+      const a = await latest7(c.id as number);
+      const e = (await payload.findByID({ collection: "articles", id: c.id as number, draft: true, depth: 0, locale: "en", overrideAccess: true })) as unknown as Doc;
+      out["brief-asia"] = { patchRead: [a.title, a.slug], localeEn: [e.title, e.slug], same: a.title === e.title && a.slug === e.slug, note: "brief-asia is not in the author key grant ⇒ Local API locale:'en' read, not HTTP view=edit" };
+    }
+    const langs = await rows7(sql`SELECT slug, default_language::text AS d FROM tenants ORDER BY id`);
+    const allSame = Object.values(out).every((v) => (v as Doc).same === true);
+    rec("PB-15", allSame ? "ĐẠT" : "GHI", "title/slug: PATCH-style read (no locale) vs view=edit (locale en), per seed tenant", { out, tenantDefaultLanguage: langs, payloadDefaultLocale: (payload.config as unknown as { localization?: { defaultLocale?: string } }).localization?.defaultLocale ?? null });
+  });
+
+  // ══ PB-16: isHubAuthoredDoc on an infrastructure error ═════════════════════
+  await section("PB-16", async () => {
+    const { isHubAuthoredDoc } = await import("../src/lib/hub-author-auth");
+    const fake = { findByID: async () => { throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), { code: "ECONNREFUSED" }); } };
+    const r = await isHubAuthoredDoc(fake as never, { lastEngine: authorEngine });
+    const real = await isHubAuthoredDoc(payload as never, { lastEngine: authorEngine });
+    rec("PB-16", "GHI", "isHubAuthoredDoc when the content-engines lookup throws (infra error) ⇒ value returned (route would map false ⇒ 422 not_editable not_hub_authored)", { onInfraError: r, controlRealLookup: real });
+  });
+
+  // ══ PB-19: updatedAt across schedule / unschedule / PATCH; view=edit exposure ══
+  await section("PB-19", async () => {
+    const d = await mkDraft("gcv");
+    const u = async () => (await latest7(d.id)).updatedAt;
+    const v0 = await u();
+    await sleep7(20);
+    await viaLock("gcv", d.id, (req) => opSchedule(req, d.id, inMinutes(30)));
+    const v1 = await u();
+    await sleep7(20);
+    await viaLock("gcv", d.id, (req) => opUnschedule(req, d.id, nowIso()));
+    const v2 = await u();
+    await sleep7(20);
+    const ver = (await latest7(d.id)).version as number;
+    const p = await patchDraft("gcv", d.id, ver, { title: `PB7 19 ${run}` });
+    const v3 = await u();
+    const ve = await call("GET", `/api/hub/articles/${d.id}?tenant=gcv&view=edit`);
+    rec("PB-19", "GHI", "updatedAt v0 (create) → v1 (schedule) → v2 (unschedule) → v3 (PATCH); view=edit exposure", { v0, v1, v2, v3, changedOnSchedule: v0 !== v1, changedOnUnschedule: v1 !== v2, changedOnPatch: v2 !== v3, patchStatus: p.status, viewEditArticleUpdatedAt: (ve.body.article as Doc | undefined)?.updatedAt ?? "(absent)", viewEditEditHasUpdatedAt: "updatedAt" in ((ve.body.edit ?? {}) as Doc) });
+  });
+
+  // ══ PB-7a: validators the cron's non-draft update runs, vs K4 (a…l) / K13 ══
+  await section("PB-7a", async () => {
+    // Step 1 (a): the MANUAL list — Articles.ts read 07-10-26 (grep required|validate:|min|max|maxRows|minRows|minLength|maxLength|hooks).
+    const manual = [
+      { item: "title required (Articles.ts:135)", k4: "a" },
+      { item: "slug required (:139) + uniqueWithinTenant field hook (:142)", k4: "g" },
+      { item: "readMin required, min 1 (:171)", k4: "h" },
+      { item: "briefs maxRows 4 (:187); briefs[].label/value/source required (:190-192)", k4: "l" },
+      { item: "workflowStatus required select (:201-206)", k4: "(system — route always writes it)" },
+      { item: "publishedAt required date (:210-213)", k4: "(system — cron/route always write it)" },
+      { item: "pillar required (:245)", k4: "c" },
+      { item: "subSection validate: belongs to pillar (:261-279)", k4: "d" },
+      { item: "secondarySections[].pillar required + secondaryRowPillarValidate (:300,:304)", k4: "i" },
+      { item: "secondarySections[].subSection validate: belongs to the row pillar (:318-336)", k4: "i" },
+      { item: "author articleAuthorValidate (:352; single-home-pillar.ts:152-176)", k4: "e" },
+      { item: "sponsor required when sponsored (:374-375)", k4: "f" },
+      { item: "contentType required select (:420-424)", k4: "(not in K4)" },
+      { item: "origin required select (:432-436)", k4: "(gate: origin !== manual ⇒ not_editable)" },
+      { item: "version required number (:450)", k4: "(system)" },
+      { item: "translationStatus[].locale/state required selects (:475-476)", k4: "(system)" },
+      { item: "heroImage validate: required when video (:500-505)", k4: "j" },
+      { item: "videoDescription validate: required when video (:548-553)", k4: "j" },
+      { item: "beforeChange singleHomePillar (Articles.ts:124; single-home-pillar.ts:60-93)", k4: "K13 (single-home pillars ⊂ ENGINE_BLOCKED_PILLARS)" },
+      { item: "beforeValidate syncNativePublish / syncNativeUnpublish / enforceStatusAuthority (:121) — req.user only; cron has none", k4: "(not reached by cron)" },
+      { item: "select options (tone, sourceLanguage, contentType, origin, workflowStatus) + relationship / upload existence (Payload defaults)", k4: "(see step 2 rows sys-*)" },
+      { item: "body richText (Lexical default validator)", k4: "corpus (step 3)" },
+    ];
+    // Step 1 (b): automatic list from the sanitized config — for cross-check only.
+    const flat: Doc[] = [];
+    const walkF = (fields: unknown[], prefix: string) => {
+      for (const f of fields as Doc[]) {
+        const name = typeof f.name === "string" ? `${prefix}${f.name}` : prefix;
+        const flags = ["required", "min", "max", "maxRows", "minRows", "minLength", "maxLength"].filter((k) => f[k] !== undefined && f[k] !== false).map((k) => `${k}=${String(f[k])}`);
+        if (typeof f.name === "string" && (flags.length || typeof f.validate === "function" || ["select", "radio", "relationship", "upload", "richText"].includes(String(f.type)))) flat.push({ field: name, type: f.type, flags, validate: typeof f.validate === "function" });
+        if (Array.isArray(f.fields)) walkF(f.fields as unknown[], typeof f.name === "string" ? `${name}.` : prefix);
+        if (Array.isArray(f.tabs)) for (const tab of f.tabs as Doc[]) walkF((tab.fields as unknown[]) ?? [], typeof tab.name === "string" ? `${prefix}${tab.name}.` : prefix);
+      }
+    };
+    walkF((payload.collections as unknown as Record<string, { config: { fields: unknown[] } }>).articles!.config.fields, "");
+    rec("PB-7a", "GHI", "step 1: manual validator list (authoritative) — K4 mapping", manual);
+    rec("PB-7a", "GHI", `step 1: automatic list from payload.collections.articles.config (${flat.length} fields; 'validate' is a function on every field after sanitize ⇒ custom vs default NOT distinguishable this way)`, flat);
+
+    // Step 2: one draft per defect (Local API draft:true, hub-shaped), then the CRON's exact update.
+    const f = fx("gcv");
+    const gcv = tid.gcv;
+    const pMain = (await payload.find({ collection: "pillars", where: { and: [{ tenant: { equals: gcv } }, { slug: { equals: "p6-main" } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc;
+    const pOther = (await payload.find({ collection: "pillars", where: { and: [{ tenant: { equals: gcv } }, { slug: { equals: "p6-other" } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc;
+    const subOther = (await payload.find({ collection: "subsections", where: { and: [{ tenant: { equals: gcv } }, { pillar: { equals: pOther.id } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc;
+    const exclusive = await ensurePillar(payload, gcv, "exclusive", "Exclusive", 99);
+    const press = await ensurePillar(payload, gcv, "pressroom", "Pressroom", 98);
+    const wtbId = tid["world-travel-brief"];
+    const wtbMain = (await payload.find({ collection: "pillars", where: { and: [{ tenant: { equals: wtbId } }, { slug: { equals: "p6-main" } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc;
+    let videoId: number | null = null;
+    let videoNote: Doc = {};
+    try {
+      const vm = (await payload.create({ collection: "videoMedia", overrideAccess: true, data: { tenant: gcv, alt: "pb7" } as never, file: { data: Buffer.from("0000001866747970", "hex"), mimetype: "video/mp4", name: `pb7-${run}.mp4`, size: 8 } as never })) as unknown as Doc;
+      videoId = vm.id as number;
+      videoNote = { via: "Local API create", id: videoId };
+    } catch (e) {
+      videoNote = { localApi: errShape7(e) };
+      // Fallback allowed by the plan (PB-7b note): a raw row in video_media of the disposable DB.
+      try {
+        videoId = Number((await rows7(sql`INSERT INTO video_media (tenant_id, filename, mime_type, filesize, url) VALUES (${gcv}, ${`pb7-${run}.mp4`}, 'video/mp4', 8, ${`/pb7-${run}.mp4`}) RETURNING id`))[0]?.id);
+        videoNote = { ...videoNote, via: "raw INSERT into video_media", id: videoId };
+      } catch (e2) {
+        videoNote = { ...videoNote, rawInsert: errShape7(e2) };
+      }
+    }
+    const base = (tenant: number, pillar: unknown, author: unknown, extra: Doc = {}): Doc => ({
+      tenant, title: `PB7 7a ${run} ${seq}`, slug: `pb7-${run}-7a-${seq++}`, origin: "manual", workflowStatus: "draft", _status: "draft", editedByHuman: true,
+      contentType: "article", lastEngine: authorEngine, readMin: 2, pillar, author, ...extra,
+    });
+    const otherMainSlug = (await rows7(sql`SELECT l.slug FROM articles a JOIN articles_locales l ON l._parent_id = a.id WHERE a.tenant_id = ${gcv} AND l.slug IS NOT NULL ORDER BY a.id LIMIT 1`))[0]?.slug as string;
+    const cases: { k: string; k4: string; data: Doc; post?: (id: number) => Promise<void> }[] = [
+      { k: "a title ''", k4: "a", data: base(gcv, pMain.id, f.authors[0], { title: "" }) },
+      { k: "b body absent", k4: "b (route-only)", data: base(gcv, pMain.id, f.authors[0]) },
+      { k: "c pillar null", k4: "c", data: base(gcv, null, f.authors[0]) },
+      { k: "d1 subSection of another pillar", k4: "d", data: base(gcv, pMain.id, f.authors[0], { subSection: subOther.id }) },
+      { k: "d2 subSection null while the pillar has sub-sections", k4: "d (D-SUB, route stricter)", data: base(gcv, pMain.id, f.authors[0], { subSection: null }) },
+      { k: "e author null (non single-home)", k4: "e", data: base(gcv, pMain.id, null) },
+      { k: "f sponsored without sponsor", k4: "f", data: base(gcv, pMain.id, f.authors[0], { sponsored: true, sponsor: "" }) },
+      { k: "g1 slug ''", k4: "g", data: base(gcv, pMain.id, f.authors[0], { slug: "" }) },
+      { k: "g2 slug duplicates another article's MAIN slug (set on the version via SQL)", k4: "g", data: base(gcv, pMain.id, f.authors[0]), post: async (id) => { await db.execute(sql`UPDATE _articles_v_locales SET version_slug = ${otherMainSlug} WHERE _parent_id IN (SELECT id FROM _articles_v WHERE parent_id = ${id})`); } },
+      { k: "h1 readMin 0", k4: "h", data: base(gcv, pMain.id, f.authors[0], { readMin: 0 }) },
+      { k: "h2 readMin null", k4: "h", data: base(gcv, pMain.id, f.authors[0], { readMin: null }) },
+      { k: "i1 secondary row pillar null", k4: "i", data: base(gcv, pMain.id, f.authors[0], { secondarySections: [{ pillar: null }] }) },
+      { k: "i2 secondary row = single-home pillar (gcv pressroom)", k4: "i / K13", data: base(gcv, pMain.id, f.authors[0], { secondarySections: [{ pillar: press }] }) },
+      { k: "i3 secondary row sub of another pillar", k4: "i", data: base(gcv, pMain.id, f.authors[0], { secondarySections: [{ pillar: pMain.id, subSection: subOther.id }] }) },
+      { k: "j1 video without heroImage", k4: "j", data: base(gcv, pMain.id, f.authors[0], { video: videoId, videoDescription: "mô tả" }) },
+      { k: "j2 video without heroImage and without videoDescription", k4: "j", data: base(gcv, pMain.id, f.authors[0], { video: videoId }) },
+      { k: "k1 primary pillar engine-blocked (gcv exclusive)", k4: "k / K13 (route-only)", data: base(gcv, exclusive, f.authors[0]) },
+      { k: "k2 primary pillar single-home (gcv pressroom), author null", k4: "K13 (route-only)", data: base(gcv, press, null) },
+      { k: "l1 briefs row without source (wtb)", k4: "l", data: base(wtbId, wtbMain.id, fx("world-travel-brief").authors[0], { briefs: [{ label: "a", value: "1" }] }) },
+      { k: "l2 briefs 5 rows (wtb)", k4: "l", data: base(wtbId, wtbMain.id, fx("world-travel-brief").authors[0], { briefs: [1, 2, 3, 4, 5].map((i) => ({ label: `l${i}`, value: `${i}`, source: "s" })) }) },
+      { k: "sys1 contentType null", k4: "(not in K4)", data: base(gcv, pMain.id, f.authors[0], { contentType: null }) },
+      { k: "sys2 tone outside options", k4: "(not in K4)", data: base(gcv, pMain.id, f.authors[0], { tone: "zz" }) },
+      { k: "sys3 sourceLanguage outside options", k4: "(not in K4)", data: base(gcv, pMain.id, f.authors[0], { sourceLanguage: "xx" }) },
+      { k: "sys4 publishedAt null on the draft", k4: "(cron writes publishedAt)", data: base(gcv, pMain.id, f.authors[0], { publishedAt: null }) },
+      { k: "sys5 translationStatus row without state", k4: "(system)", data: base(gcv, pMain.id, f.authors[0], { translationStatus: [{ locale: "vi" }] }) },
+      { k: "sys6 tag id that does not exist", k4: "(route resolves slugs)", data: base(gcv, pMain.id, f.authors[0], { tags: [99999999] }) },
+      { k: "sys7 workflowStatus scheduled with no scheduledFor (cron skips it)", k4: "(none)", data: base(gcv, pMain.id, f.authors[0], { workflowStatus: "scheduled" }) },
+      { k: "control: fully valid hub draft", k4: "—", data: base(gcv, pMain.id, f.authors[0]) },
+    ];
+    const step2: Doc[] = [];
+    for (const c of cases) {
+      if ((c.k.startsWith("j1") || c.k.startsWith("j2")) && videoId == null) {
+        step2.push({ case: c.k, k4: c.k4, draftSave: "KXN (no videoMedia row)", video: videoNote });
+        continue;
+      }
+      let id: number | null = null;
+      let draftSave: unknown;
+      try {
+        id = ((await payload.create({ collection: "articles", draft: true, depth: 0, overrideAccess: true, data: c.data as never, context: { hubAuthor: { actor: PB7_ACTOR, action: "create" }, engineId: authorEngine, disableRevalidate: true } })) as unknown as Doc).id as number;
+        if (c.post) await c.post(id);
+        draftSave = "ok";
+      } catch (e) {
+        draftSave = errShape7(e);
+      }
+      let cronUpdate: unknown = "n/a";
+      if (id != null) {
+        try {
+          const raw = await latest7(id);
+          await payload.update({ collection: "articles", id, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: raw.publishedAt ?? raw.scheduledFor ?? nowIso() } as never });
+          cronUpdate = "ok (Payload accepted)";
+        } catch (e) {
+          cronUpdate = errShape7(e);
+        }
+      }
+      step2.push({ case: c.k, k4: c.k4, draftSave, cronUpdate });
+      console.log(`OBS   PB-7a step2 ${c.k}  ${JSON.stringify({ draftSave, cronUpdate })}`);
+    }
+    rec("PB-7a", "GHI", "step 2: per-defect draft (draft:true) then the cron's exact non-draft update", { video: videoNote, rows: step2 });
+
+    // Step 3: body corpus generated from HUB_BODY_NODE_TYPES and isAllowedLinkUrl.
+    const conv = await import("../src/lib/hub-author-convert-core");
+    const urlCandidates = ["https://example.com/a", "HTTPS://EXAMPLE.COM/B", "http://example.com/", "mailto:a@example.com", "tel:+6512345678", "/duong-dan/noi-bo", "#neo", "?q=1", "//example.com/x", "javascript:alert(1)", "duong-dan-tuong-doi"];
+    const urls = urlCandidates.filter((u) => conv.isAllowedLinkUrl(u));
+    const mdFor: Record<string, string> = {
+      root: "Đoạn văn thường.",
+      paragraph: "Đoạn một.\n\nĐoạn hai.",
+      text: "Chữ **đậm** và *nghiêng* và `mã`.",
+      heading: "## Tiêu đề phụ\n\nĐoạn.",
+      quote: "> Trích dẫn.\n\nĐoạn.",
+      list: "- mục một\n- mục hai\n\n1. số một\n2. số hai",
+      listitem: "- mục\n  - mục con",
+      link: `Một [liên kết](${urls[0] ?? "https://example.com/"}).`,
+      horizontalrule: "Đoạn một.\n\n---\n\nĐoạn hai.",
+      linebreak: "Dòng một\\\nDòng hai.",
+    };
+    const extraVariants: { name: string; md: string; wantType: string }[] = [{ name: "node:linebreak (two trailing spaces)", md: "Dòng một  \nDòng hai.", wantType: "linebreak" }];
+    const corpus: { name: string; md: string; wantType: string }[] = [];
+    for (const t of conv.HUB_BODY_NODE_TYPES) corpus.push({ name: `node:${t}`, md: mdFor[t] ?? `Đoạn ${t}.`, wantType: t });
+    for (const u of urls) corpus.push({ name: `url:${u}`, md: `Liên kết [đây](${u}) trong câu.`, wantType: "link" });
+    corpus.push(...extraVariants);
+    const step3: Doc[] = [];
+    let rejectedByCron = 0;
+    for (const c of corpus) {
+      const slug = `pb7-${run}-c-${seq++}`;
+      const r = await call("POST", "/api/hub/articles", { tenant: "gcv", title: `PB7 corpus ${slug}`, slug, pillarSlug: "p6-main", authorId: f.authors[0], bodyMarkdown: c.md, actor: PB7_ACTOR });
+      if (r.status !== 201) {
+        step3.push({ case: c.name, post: r.status, body: r.body });
+        continue;
+      }
+      const id = r.body.id as number;
+      const types = new Set<string>();
+      const walk = (n: unknown) => {
+        if (!n || typeof n !== "object") return;
+        const o = n as Doc;
+        if (typeof o.type === "string") types.add(o.type);
+        for (const v of Object.values(o)) if (v && typeof v === "object") walk(v);
+      };
+      const raw = await latest7(id);
+      walk(raw.body);
+      let cronUpdate: unknown = "ok";
+      try {
+        await payload.update({ collection: "articles", id, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: raw.publishedAt ?? nowIso() } as never });
+      } catch (e) {
+        cronUpdate = errShape7(e);
+        rejectedByCron++;
+      }
+      step3.push({ case: c.name, post: 201, containsWantedType: types.has(c.wantType), types: [...types].sort(), cronUpdate });
+    }
+    // A `linebreak` node written directly (Local API, draft:true), in case the hub converter never emits one.
+    {
+      const lexLb = { root: { type: "root", format: "", indent: 0, version: 1, direction: null, children: [{ type: "paragraph", format: "", indent: 0, version: 1, direction: null, textFormat: 0, textStyle: "", children: [{ type: "text", text: "Dòng một", format: 0, detail: 0, mode: "normal", style: "", version: 1 }, { type: "linebreak", version: 1 }, { type: "text", text: "Dòng hai", format: 0, detail: 0, mode: "normal", style: "", version: 1 }] }] } };
+      let cronUpdate: unknown = "ok";
+      try {
+        const c = (await payload.create({ collection: "articles", draft: true, depth: 0, overrideAccess: true, data: base(gcv, pMain.id, f.authors[0], { body: lexLb }) as never, context: { hubAuthor: { actor: PB7_ACTOR, action: "create" }, engineId: authorEngine, disableRevalidate: true } })) as unknown as Doc;
+        const raw = await latest7(c.id as number);
+        try {
+          await payload.update({ collection: "articles", id: c.id as number, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: raw.publishedAt ?? nowIso() } as never });
+        } catch (e) {
+          cronUpdate = errShape7(e);
+          rejectedByCron++;
+        }
+      } catch (e) {
+        cronUpdate = { draftSave: errShape7(e) };
+      }
+      step3.push({ case: "node:linebreak (Lexical node written directly, Local API draft:true)", post: "n/a", containsWantedType: true, cronUpdate });
+    }
+    rec("PB-7a", rejectedByCron === 0 ? "ĐẠT" : "ĐỎ", `step 3: body corpus (${corpus.length} bodies: every HUB_BODY_NODE_TYPES entry + every URL form isAllowedLinkUrl accepts) saved via the real POST, then the cron's non-draft update`, { urlsAccepted: urls, urlsRejectedByFilter: urlCandidates.filter((u) => !urls.includes(u)), rejectedByCron, rows: step3 });
+  });
+
+  // ══ PB-3 ca N (LAST: it may starve the pool for good) ══════════════════════
+  // Post-run checks use a SIDE `pg` Client, never the Payload pool (which may be wedged).
+  const uncaughtAt: number[] = [];
+  process.on("uncaughtException", () => uncaughtAt.push(Date.now()));
+  await section("PB-3N", async () => {
+    const poolMax = D.pool?.options?.max ?? 10;
+    const low = poolMax - 2;
+    const high = poolMax + 2;
+    const pg = (await import("pg")) as unknown as { default?: { Client: new (o: Doc) => PgSide7 }; Client?: new (o: Doc) => PgSide7 };
+    const ClientC = (pg.Client ?? pg.default?.Client)!;
+    const side = async (q: string, params: unknown[] = []): Promise<Doc[]> => {
+      const c = new ClientC({ connectionString: process.env.DATABASE_URL });
+      c.on("error", () => {});
+      await c.connect();
+      try {
+        return (await c.query(q, params)).rows;
+      } finally {
+        await c.end().catch(() => {});
+      }
+    };
+    const drafts: number[] = [];
+    for (let i = 0; i < high; i++) drafts.push((await mkDraft("gcv")).id);
+    const only3n = arg("n-case"); // optional: "low-distinct" | "low-same" | "high-same" | "high-distinct"
+    const order: [number, "distinct articles" | "same article", string][] = [
+      [low, "distinct articles", "low-distinct"],
+      [low, "same article", "low-same"],
+      [high, "same article", "high-same"],
+      [high, "distinct articles", "high-distinct"],
+    ];
+    // CONTROL (only with --n-case high-distinct-baseline): today's write shape with NO explicit
+    // transaction — Payload opens its own per-operation transaction and the hub_author activity
+    // row is written on a 2nd connection from inside it. Measures whether the wedge pre-exists.
+    if (only3n === "high-distinct-baseline") order.push([high, "distinct articles", "high-distinct-baseline"]);
+    for (const [n, shape, key] of order) {
+      if (only3n && only3n !== key) continue;
+      const tStart = Date.now();
+      const done: (Doc | null)[] = Array.from({ length: n }, () => null);
+      const markers: string[] = [];
+      const uncaught0 = uncaughtAt.length;
+      for (let i = 0; i < n; i++) {
+        const id = shape === "same article" ? drafts[0]! : drafts[i]!;
+        const marker = `PB7N ${run} ${key} ${i}`;
+        markers.push(marker);
+        const work: Promise<Lock7Out> =
+          key === "high-distinct-baseline"
+            ? (async (): Promise<Lock7Out> => {
+                const t0 = Date.now();
+                await payload.update({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, data: { title: marker, workflowStatus: "draft", _status: "draft" } as never, context: { hubAuthor: { actor: PB7_ACTOR, action: "update", fields: ["title"] }, engineId: authorEngine, disableRevalidate: true } });
+                return { kind: "ok", ms: Date.now() - t0 };
+              })()
+            : protoLock7(payload, { tenantId: tid.gcv, articleId: id }, async (c) => {
+          await payload.find({ collection: "content-engines", limit: 1, depth: 0, overrideAccess: true }); // 2nd connection (no req)
+          await payload.update({ collection: "articles", id, req: c.req as never, draft: true, depth: 0, overrideAccess: true, data: { title: marker, workflowStatus: "draft", _status: "draft" } as never, context: ctxW("pb7 N", { disableRevalidate: true }) });
+          await payload.count({ collection: "activityLog", overrideAccess: true }); // 2nd connection again
+          await sleep7(100);
+          return { ok: true, value: marker };
+        });
+        void work.then(
+          (r) => (done[i] = { kind: r.kind, code: r.code, ms: r.ms, at: Date.now() - tStart, err: r.kind === "thrown" ? r.err : undefined }),
+          (e) => (done[i] = { kind: "rejected", at: Date.now() - tStart, err: errShape7(e) }),
+        );
+      }
+      const marks: Doc = {};
+      for (const at of [10_000, 45_000, 75_000, 120_000]) {
+        while (Date.now() - tStart < at && done.some((x) => x === null)) await sleep7(250);
+        marks[`unfinishedAt${at / 1000}s`] = done.filter((x) => x === null).length;
+        if (done.every((x) => x !== null)) break;
+      }
+      const unfinished = done.filter((x) => x === null).length;
+      const lost: string[] = [];
+      for (let i = 0; i < n; i++) {
+        if ((done[i] as Doc | null)?.kind !== "ok") continue;
+        const id = shape === "same article" ? drafts[0]! : drafts[i]!;
+        const hit = Number((await side("SELECT count(*)::int AS n FROM _articles_v_locales l JOIN _articles_v v ON v.id = l._parent_id WHERE v.parent_id = $1 AND l.version_title = $2", [id, markers[i]]))[0]?.n);
+        if (hit !== 1) lost.push(markers[i]!);
+      }
+      const kinds = done.reduce<Record<string, number>>((acc, x) => {
+        const k = x ? `${(x as Doc).kind}${(x as Doc).code ? `:${(x as Doc).code}` : ""}` : "unfinished";
+        acc[k] = (acc[k] ?? 0) + 1;
+        return acc;
+      }, {});
+      const backends = await side("SELECT state, count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() GROUP BY state ORDER BY state");
+      const adv = await side("SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory'");
+      const isLow = n === low;
+      const verdict = unfinished > 0 || lost.length > 0 ? "ĐỎ" : isLow ? (Object.keys(kinds).every((k) => k === "ok") ? "ĐẠT" : "ĐỎ") : "GHI";
+      rec("PB-3", verdict, `(N) ${n} concurrent requests, ${shape}, each holding the tx + a 2nd connection (pool.max ${poolMax}, ${isLow ? "N ≤ pool − 2 ⇒ must all finish" : "N ≥ pool + 2 ⇒ record only, DỪNG if still unfinished after the 30 s idle timeout"})`, {
+        ...marks, totalMs: Date.now() - tStart, kinds, finishedAtMs: done.map((x) => (x as Doc | null)?.at ?? null),
+        reportedOkButNotPersisted: lost, uncaughtDuringCase: uncaughtAt.length - uncaught0, uncaughtAtMs: uncaughtAt.slice(uncaught0).map((t) => t - tStart),
+        dbBackendsByState: backends, advisoryLocks: adv[0]?.n, pool: { total: D.pool?.totalCount, idle: D.pool?.idleCount, waiting: D.pool?.waitingCount },
+        thrownSamples: done.filter((x) => ["thrown", "rejected"].includes(String((x as Doc | null)?.kind))).slice(0, 2),
+      });
+      if (unfinished > 0) {
+        rec("PB-3", "ĐỎ", `(N) ${unfinished}/${n} requests still unfinished after 120 s (idle_in_transaction timeout 30 s long passed) ⇒ DỪNG; the Payload pool is not usable any more, stopping the probe`, {});
+        break;
+      }
+      await sleep7(1500);
+    }
+    rec("PB-3", uncaught.length === 0 ? "ĐẠT" : "ĐỎ", "(N) no uncaught error / unhandled rejection in the probe process during PB-3N", { uncaughtCount: uncaught.length, sample: uncaught.slice(0, 3) });
+  });
+
+  const tally = results.reduce<Record<string, number>>((a, r) => ((a[r.verdict] = (a[r.verdict] ?? 0) + 1), a), {});
+  console.log(`\n[pb7] summary ${JSON.stringify(tally)}`);
+  for (const r of results) if (r.verdict !== "ĐẠT") console.log(`[pb7]   ${r.verdict} ${r.id} ${r.label}`);
+  process.exit(0);
+}
+
+/** findSlugConflict (hub-author-refs.ts), imported lazily so older trees still load the probe. */
+async function findSlugConflict7(payload: P, tenantId: Id7, slug: string, excludeId?: Id7): Promise<{ id: Id7 } | null> {
+  const { findSlugConflict } = await import("../src/lib/hub-author-refs");
+  return findSlugConflict({ payload: payload as never, tenantId: tenantId as never, slug, excludeId: excludeId as never }) as Promise<{ id: Id7 } | null>;
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -6354,10 +7631,12 @@ const run = flag("setup")
                                 ? pb6
                                 : flag("n10")
                                   ? n10
-                                  : null;
+                                  : flag("pb7")
+                                    ? pb7
+                                    : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code])",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE",
   );
   process.exit(2);
 }
