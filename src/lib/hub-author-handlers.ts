@@ -23,6 +23,11 @@
  * main row right before the write (422 if no longer a manual draft) → update with
  * `draft: true` (D20 branch B: a published main row can never be taken down).
  *
+ * CMS-A (APCGHub P5.2): the write step of both handlers runs inside `withHubArticleLock`
+ * (src/lib/hub-article-lock.ts) — ONE transaction + advisory lock; POST: slug lock →
+ * slug check → create; PATCH: article lock → re-read + re-check (same bodies) → (slug
+ * changed) slug lock + check → update. 55P03 / 40P01 / 40001 ⇒ 503 `busy` + Retry-After.
+ *
  * Server-forced (the hub never sends them): `workflowStatus: "draft"`,
  * `_status: "draft"` (POST and PATCH); POST also `origin: "manual"`,
  * `editedByHuman: true`, `contentType: "article"`, `sourceLanguage`,
@@ -61,6 +66,14 @@ import {
 } from "@/lib/hub-author-input";
 import { convertBody, isRoundTripSafeBody, lexicalTreesEqual, type ConvertResult, type HubEditorConfig } from "@/lib/hub-author-body";
 import { findSlugConflict, resolveDraftRefs, type ResolvedRefs } from "@/lib/hub-author-refs";
+import {
+  busyResponse,
+  isBusyCode,
+  pgErrorCode,
+  withHubArticleLock,
+  type HubLockCtx,
+  type HubLockResult,
+} from "@/lib/hub-article-lock";
 
 const SCOPE = "hub/articles/author";
 
@@ -75,6 +88,8 @@ export interface HubDraftDeps {
   /** Read the MAIN table row (no `draft`) — also the re-read right before the update (E7). */
   findMain?: (payload: Payload, id: Id) => Promise<Doc | null>;
   getPayload?: () => Promise<Payload>;
+  /** The CMS-A lock + transaction (default: `withHubArticleLock`); `--check6 --unit-only` passes a disabled one. */
+  lock?: typeof withHubArticleLock;
 }
 
 // ── Frozen response bodies ───────────────────────────────────────────────────
@@ -100,14 +115,8 @@ const internalError = () => json({ ok: false, status: "internal_error" }, 500);
 export type MappedWriteError =
   | { kind: "invalid"; status: 422; fields: HubFieldErrors }
   | { kind: "slug_conflict"; status: 409 }
+  | { kind: "busy"; status: 503 }
   | { kind: "internal"; status: 500; name: string; code?: string };
-
-function errCode(err: unknown): string | undefined {
-  const o = (typeof err === "object" && err !== null ? err : {}) as { code?: unknown; cause?: unknown };
-  if (typeof o.code === "string") return o.code;
-  const c = (typeof o.cause === "object" && o.cause !== null ? o.cause : {}) as { code?: unknown };
-  return typeof c.code === "string" ? c.code : undefined;
-}
 
 function errName(err: unknown): string {
   const n = (err as { name?: unknown } | null)?.name;
@@ -120,6 +129,7 @@ function errName(err: unknown): string {
  *     (the Payload message is NEVER copied);
  *   the per-tenant slug hook ("… already exists for this tenant") ⇒ 409 slug_conflict;
  *   Postgres class 22 (data exception) ⇒ 422 `invalid`; class 23 (integrity) ⇒ 409;
+ *   Postgres 55P03 / 40P01 / 40001 (code read by `pgErrorCode`, one `cause` level) ⇒ 503 busy;
  *   anything else ⇒ 500 (logged by NAME + CODE only).
  */
 export function mapWriteError(err: unknown): MappedWriteError {
@@ -136,7 +146,8 @@ export function mapWriteError(err: unknown): MappedWriteError {
   if (typeof message === "string" && message.includes("already exists for this tenant")) {
     return { kind: "slug_conflict", status: 409 };
   }
-  const code = errCode(err);
+  const code = pgErrorCode(err);
+  if (isBusyCode(code)) return { kind: "busy", status: 503 };
   if (code && /^22[0-9A-Z]{3}$/.test(code)) return { kind: "invalid", status: 422, fields: {} };
   if (code && /^23[0-9A-Z]{3}$/.test(code)) return { kind: "slug_conflict", status: 409 };
   return code ? { kind: "internal", status: 500, name, code } : { kind: "internal", status: 500, name };
@@ -188,7 +199,7 @@ async function resolveTenant(
 
 async function logInternal(payload: Payload, engineId: Id, err: unknown): Promise<Response> {
   const name = errName(err);
-  const code = errCode(err);
+  const code = pgErrorCode(err);
   payload.logger.error(`[${SCOPE}] write failed: name=${name}${code ? ` code=${code}` : ""}`);
   await logActivity({
     payload,
@@ -226,9 +237,10 @@ async function slugConflictResponse(payload: Payload, tenantId: Id, slug: string
   return slugConflict(id);
 }
 
-/** The write failed: map it (422 / 409 / 500). */
+/** The write failed: map it (422 / 409 / 503 busy / 500). */
 async function writeFailed(payload: Payload, engineId: Id, tenantId: Id, slug: string | undefined, err: unknown, excludeId?: Id) {
   const m = mapWriteError(err);
+  if (m.kind === "busy") return busyResponse();
   if (m.kind === "invalid") return invalid(m.fields);
   if (m.kind === "slug_conflict") return slugConflictResponse(payload, tenantId, slug, excludeId);
   return logInternal(payload, engineId, err);
@@ -307,10 +319,26 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     for (const [k, b] of Object.entries(v.flags ?? {})) data[k] = b;
     if (v.sponsor != null) data.sponsor = v.sponsor;
 
+    // CMS-A (M5): the slug lock, the slug check again and the create run in ONE transaction.
+    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data }));
+  } catch (err) {
+    return logInternal(payload, engine.id, err);
+  }
+
+  /** In the lock: slug lock → `findSlugConflict` again (409 body unchanged) → `create` on `lk.req`. */
+  async function createInLock(lk: HubLockCtx, s: { v: HubDraftInput; tenant: TenantDoc; data: Doc }): Promise<HubLockResult> {
+    const { v, tenant, data } = s;
+    if (v.slug) {
+      await lk.lockSlug(v.slug);
+      if (await findSlugConflict({ payload, tenantId: tenant.id, slug: v.slug })) {
+        return { ok: false, value: await slugConflictResponse(payload, tenant.id, v.slug) };
+      }
+    }
     let created: Doc;
     try {
       created = (await payload.create({
         collection: "articles",
+        req: lk.req,
         // D6 (P5.1b): save in Payload draft mode, like the PATCH below — a draft needs only a
         // title; Payload's field validators (pillar required, author) run again at publish.
         draft: true,
@@ -320,10 +348,10 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
         context: { hubAuthor: { actor: v.actor, action: "create" }, engineId: engine.id, disableRevalidate: true },
       })) as unknown as Doc;
     } catch (err) {
-      return writeFailed(payload, engine.id, tenant.id, v.slug, err);
+      return { ok: false, value: await writeFailed(payload, engine.id, tenant.id, v.slug, err) };
     }
 
-    return json(
+    return { ok: true, value: json(
       {
         ok: true,
         id: created.id,
@@ -333,9 +361,7 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
         version: typeof created.version === "number" ? created.version : 1,
       },
       201,
-    );
-  } catch (err) {
-    return logInternal(payload, engine.id, err);
+    ) };
   }
 }
 
@@ -573,16 +599,55 @@ export async function handleHubDraftUpdateWith(
       return json({ ok: true, id: latest.id, tenant: tenant.slug, workflowStatus: "draft", version: currentVersion, changed: [] }, 200);
     }
 
-    // Right before the write: the main row must STILL be a manual draft (narrows,
-    // does not close, the check-then-write gap — `hub-p5-1-patch-check-then-write-not-atomic`).
-    const still = assertStillEditable(await findMain(payload, articleId));
-    if (!still.ok) return notEditable(still.reason);
+    // CMS-A (M1): re-read, re-check and update in ONE transaction under the article lock.
+    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id, articleId }, (lk) =>
+      updateInLock(lk, { v, tenant, articleId, data, changed, latest, currentVersion }),
+    );
+  } catch (err) {
+    return logInternal(payload, engine.id, err);
+  }
+
+  /**
+   * In the lock: re-read the latest version + the main row (this re-read REPLACES the former E7
+   * re-read, so the main row is still read exactly twice) → the gate, `expectedVersion` and the
+   * slug again with the SAME frozen bodies (version changed since the first read ⇒ 409, not
+   * recomputed) → `update` on `lk.req`.
+   */
+  async function updateInLock(
+    lk: HubLockCtx,
+    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubDraftFieldKey[]; latest: Doc; currentVersion: number },
+  ): Promise<HubLockResult> {
+    const { v, tenant, articleId, data, changed, latest, currentVersion } = s;
+    const relatest = (await payload.findByID({
+      collection: "articles",
+      id: articleId,
+      draft: true,
+      depth: 0,
+      overrideAccess: true,
+      disableErrors: true,
+      req: lk.req,
+    })) as unknown as Doc | null;
+    const remain = await findMain(payload, articleId);
+    if (!relatest || String(toId(relatest.tenant)) !== String(tenant.id)) return { ok: false, value: notFound() };
+    if (!remain || String(toId(remain.tenant)) !== String(tenant.id)) return { ok: false, value: notFound() };
+    const reason = gateReason(remain) ?? gateReason(relatest);
+    if (reason) return { ok: false, value: notEditable(reason) };
+    if (!(await isHubAuthoredDoc(payload, relatest))) return { ok: false, value: notEditable("not_hub_authored") };
+    const lockedVersion = typeof relatest.version === "number" ? relatest.version : 0;
+    if (lockedVersion !== currentVersion) return { ok: false, value: versionConflict(lockedVersion) };
+    if (data.slug !== undefined) {
+      await lk.lockSlug(v.slug as string);
+      if (await findSlugConflict({ payload, tenantId: tenant.id, slug: v.slug as string, excludeId: articleId })) {
+        return { ok: false, value: await slugConflictResponse(payload, tenant.id, v.slug, articleId) };
+      }
+    }
 
     let updated: Doc;
     try {
       updated = (await payload.update({
         collection: "articles",
         id: articleId,
+        req: lk.req,
         draft: true,
         data: { ...data, workflowStatus: "draft", _status: "draft" } as never,
         depth: 0,
@@ -590,10 +655,10 @@ export async function handleHubDraftUpdateWith(
         context: { hubAuthor: { actor: v.actor, action: "update", fields: changed }, engineId: engine.id, disableRevalidate: true },
       })) as unknown as Doc;
     } catch (err) {
-      return writeFailed(payload, engine.id, tenant.id, v.slug, err, articleId);
+      return { ok: false, value: await writeFailed(payload, engine.id, tenant.id, v.slug, err, articleId) };
     }
 
-    return json(
+    return { ok: true, value: json(
       {
         ok: true,
         id: updated.id ?? latest.id,
@@ -603,8 +668,27 @@ export async function handleHubDraftUpdateWith(
         changed,
       },
       200,
-    );
-  } catch (err) {
-    return logInternal(payload, engine.id, err);
+    ) };
   }
 }
+
+// ── K14 (P5.2 CMS-B reuses these unchanged; CMS-B only IMPORTS them) ─────────
+export {
+  readBody,
+  parsedResponse,
+  resolveTenant,
+  logInternal,
+  writeFailed,
+  slugConflictResponse,
+  gateReason,
+  defaultFindMain,
+  notFound,
+  featureDisabled,
+  tooLarge,
+  badJson,
+  invalid,
+  notEditable,
+  slugConflict,
+  versionConflict,
+  internalError,
+};
