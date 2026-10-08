@@ -523,3 +523,155 @@ export function parseCreateBody(raw: unknown): HubParseResult {
 export function parseUpdateBody(raw: unknown): HubParseResult {
   return parseCommon(raw, "update");
 }
+
+// ── APCGHub P5.2 (CMS-B): the publish / schedule bodies ─────────────────────
+//
+//   POST /api/hub/articles/{id}/publish   → `parsePublishBody`  — EXACTLY {tenant, expectedVersion, actor}
+//   POST /api/hub/articles/{id}/schedule  → `parseScheduleBody` — {tenant, expectedVersion, actor, scheduledFor}
+//        (schedule) or {tenant, expectedVersion, actor, scheduledFor: null, expectedScheduledFor} (unschedule)
+//
+// Same tiers as above: 400 = not an object / tenant missing / unknown key (incl. `actor.*`);
+// 422 = field level, closed codes. `scheduledFor` must be PRESENT (null allowed = unschedule);
+// only its FORMAT (and impossible dates / times) is checked here — the window needs `now`
+// and is checked by the core (plan K7, R4C-7). `expectedScheduledFor`: required with
+// `scheduledFor: null` (a K7 string, or null when the article is stored without an hour),
+// forbidden next to a `scheduledFor` value (422 invalid). The `actor` block is a COPY of
+// `parseCommon`'s (which is not changed); a drift between the two is caught by the probe
+// case E-actor (`scripts/hub-probe.ts --check7 --unit-only`).
+
+export const HUB_PUBLISH_KEYS: readonly string[] = ["tenant", "expectedVersion", "actor"];
+export const HUB_SCHEDULE_KEYS: readonly string[] = [...HUB_PUBLISH_KEYS, "scheduledFor", "expectedScheduledFor"];
+
+export interface HubPublishInput {
+  tenant: string;
+  expectedVersion: number;
+  actor: HubActor;
+  op: "publish" | "schedule" | "unschedule";
+  /** Normalised `YYYY-MM-DDTHH:mm:ss.fffZ` (op "schedule"); null otherwise. */
+  scheduledFor: string | null;
+  /** Normalised, or null (op "unschedule" only). */
+  expectedScheduledFor: string | null;
+}
+
+export type HubPublishParseResult = { ok: true; value: HubPublishInput } | Extract<HubParseResult, { ok: false }>;
+
+const HUB_UTC_SHAPE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?Z$/;
+
+/**
+ * K7: a UTC instant `YYYY-MM-DDTHH:mm[:ss[.fff]]Z` → its full form `YYYY-MM-DDTHH:mm:ss.fffZ`
+ * (`:00` / `.000` added, 1–2 ms digits padded), or null = `format`. The full form must equal
+ * `new Date(input).toISOString()`, so a date that `Date` silently rolls over (2026-02-30,
+ * 04-31, T24:00) is refused; `Number.isNaN` runs BEFORE `toISOString()` (which throws a
+ * RangeError on month 13, hour 25, minute / second 60, month / day 00). Never throws.
+ */
+export function normalizeHubUtc(s: string): string | null {
+  const m = HUB_UTC_SHAPE.exec(s);
+  if (!m) return null;
+  const full = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] ?? "00"}.${(m[7] ?? "").padEnd(3, "0")}Z`;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString() === full ? full : null;
+}
+
+function parsePublishCommon(raw: unknown, route: "publish" | "schedule"): HubPublishParseResult {
+  if (!isPlainObject(raw)) return badRequest("body must be a JSON object") as Extract<HubParseResult, { ok: false }>;
+  if (typeof raw.tenant !== "string" || raw.tenant.trim() === "") return badRequest("tenant is required") as Extract<HubParseResult, { ok: false }>;
+
+  const unknown = collectUnknownKeys(raw, route === "publish" ? HUB_PUBLISH_KEYS : HUB_SCHEDULE_KEYS);
+  if (unknown.length) return badRequest(unknownFieldsReason(unknown)) as Extract<HubParseResult, { ok: false }>;
+
+  const errors: HubFieldErrors = {};
+  const fail = (name: string, code: HubFieldCode) => {
+    if (!(name in errors)) errors[name] = code;
+  };
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(raw, k);
+  const value: HubPublishInput = {
+    tenant: raw.tenant.trim(),
+    expectedVersion: 0,
+    actor: { email: "", role: "editor" },
+    op: "publish",
+    scheduledFor: null,
+    expectedScheduledFor: null,
+  };
+
+  // actor (required; the CMS only RECORDS it, never uses it for permission) — copy of parseCommon's block
+  if (!has("actor")) fail("actor", "required");
+  else if (!isPlainObject(raw.actor)) fail("actor", "type");
+  else {
+    const a = raw.actor;
+    let email = "";
+    if (!Object.prototype.hasOwnProperty.call(a, "email")) fail("actor.email", "required");
+    else if (typeof a.email !== "string") fail("actor.email", "type");
+    else {
+      const r = checkStr(a.email, { nonEmpty: true });
+      if (!r.ok) fail("actor.email", r.code);
+      else if (a.email.length > ACTOR_EMAIL_MAX) fail("actor.email", "too_long");
+      else if (!isActorEmailShape(a.email)) fail("actor.email", "format");
+      else email = a.email;
+    }
+    let role: HubActor["role"] = "editor";
+    if (!Object.prototype.hasOwnProperty.call(a, "role")) fail("actor.role", "required");
+    else if (typeof a.role !== "string") fail("actor.role", "type");
+    else {
+      const r = checkStr(a.role, {});
+      if (!r.ok) fail("actor.role", r.code);
+      else if (!(ACTOR_ROLES as readonly string[]).includes(a.role)) fail("actor.role", "format");
+      else role = a.role as HubActor["role"];
+    }
+    let id: string | number | undefined;
+    if (Object.prototype.hasOwnProperty.call(a, "id")) {
+      if (typeof a.id === "number" && Number.isFinite(a.id)) {
+        if (String(a.id).length > ACTOR_ID_MAX) fail("actor.id", "too_long");
+        else id = a.id;
+      } else if (typeof a.id === "string") {
+        const r = checkStr(a.id, { max: ACTOR_ID_MAX });
+        if (r.ok) id = a.id;
+        else fail("actor.id", r.code);
+      } else fail("actor.id", "type");
+    }
+    value.actor = id === undefined ? { email, role } : { email, role, id };
+  }
+
+  // expectedVersion (required, int4 — same rule as PATCH)
+  if (!has("expectedVersion")) fail("expectedVersion", "required");
+  else {
+    const r = checkInt4(raw.expectedVersion);
+    if (r.ok) value.expectedVersion = r.value;
+    else fail("expectedVersion", r.code);
+  }
+
+  if (route === "schedule") {
+    if (!has("scheduledFor")) fail("scheduledFor", "required");
+    else if (raw.scheduledFor === null) {
+      value.op = "unschedule";
+      if (!has("expectedScheduledFor")) fail("expectedScheduledFor", "required");
+      else if (raw.expectedScheduledFor === null) value.expectedScheduledFor = null;
+      else if (typeof raw.expectedScheduledFor !== "string") fail("expectedScheduledFor", "type");
+      else {
+        const n = normalizeHubUtc(raw.expectedScheduledFor);
+        if (n) value.expectedScheduledFor = n;
+        else fail("expectedScheduledFor", "format");
+      }
+    } else if (typeof raw.scheduledFor !== "string") fail("scheduledFor", "type");
+    else {
+      value.op = "schedule";
+      const n = normalizeHubUtc(raw.scheduledFor);
+      if (n) value.scheduledFor = n;
+      else fail("scheduledFor", "format");
+      if (has("expectedScheduledFor")) fail("expectedScheduledFor", "invalid");
+    }
+  }
+
+  if (Object.keys(errors).length) return { ok: false, status: 422, body: invalidBody(errors) };
+  return { ok: true, value };
+}
+
+/** `POST …/publish` body (already JSON-parsed). */
+export function parsePublishBody(raw: unknown): HubPublishParseResult {
+  return parsePublishCommon(raw, "publish");
+}
+
+/** `POST …/schedule` body (already JSON-parsed): schedule, or unschedule with `scheduledFor: null`. */
+export function parseScheduleBody(raw: unknown): HubPublishParseResult {
+  return parsePublishCommon(raw, "schedule");
+}
