@@ -1,0 +1,7 @@
+{
+  "source": { "siteFilter": "00000000-0000-0000-0000-00000000f001" },
+  "media": {
+    "hostAllowlist": ["images.fixture.invalid"],
+    "hostRewrite": { "images.fixture.invalid": "127.0.0.1:54328" }
+  }
+}
