@@ -152,7 +152,7 @@ function collectUnknownKeys(raw: Obj, allowed: readonly string[]): string[] {
 
 const isSafeInt = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v);
 
-interface StrOpts {
+export interface StrOpts {
   max?: number;
   bidi?: boolean;
   /** Empty (after trim for trimmed fields) ⇒ `required`. */
@@ -161,7 +161,7 @@ interface StrOpts {
 }
 
 /** One string field: c0 → surrogate → bidi → empty → too_long. Returns the (trimmed) value or a code. */
-function checkStr(v: string, o: StrOpts): { ok: true; value: string } | { ok: false; code: HubFieldCode } {
+export function checkStr(v: string, o: StrOpts): { ok: true; value: string } | { ok: false; code: HubFieldCode } {
   if (hasForbiddenC0(v)) return { ok: false, code: "c0" };
   if (hasLoneSurrogate(v)) return { ok: false, code: "surrogate" };
   if (o.bidi && hasBidi(v)) return { ok: false, code: "bidi" };

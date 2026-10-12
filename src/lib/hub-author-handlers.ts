@@ -169,7 +169,7 @@ function parsedResponse(r: Extract<HubParseResult, { ok: false }>): Response {
   return json(r.body, r.status);
 }
 
-/** Tenant ∈ grant (403 + log, `requested` cut to 64 chars — E15) and `features.articles` (403). */
+/** Tenant ∈ grant (403 + log, `requested` cut to 64 chars — E15) and `features.articles` (403). Also used by `POST /api/hub/media` (P5.3). */
 async function resolveTenant(
   payload: Payload,
   auth: { engine: { id: Id }; tenants: { id: Id; slug: string }[] },
@@ -413,6 +413,39 @@ function mergeRules(v: HubDraftInput, refs: ResolvedRefs, latest: Doc): HubField
   return fields;
 }
 
+/**
+ * The editable-article gate shared by PATCH and `POST /api/hub/media` (P5.3, T2):
+ * id shape + int4 (404) → latest draft AND main row in THAT tenant (404) → both a
+ * manual draft (422 not_editable origin|status) → latest hub-authored (422
+ * not_editable not_hub_authored). `findMain` is injectable so PATCH keeps its own
+ * seam (`--check6 --unit-only` M22 / `--check7 --unit-only` LA-U5 count main reads).
+ */
+export async function loadHubEditableArticle(
+  payload: Payload,
+  tenant: { id: Id },
+  id: string,
+  findMain: (payload: Payload, id: Id) => Promise<Doc | null> = defaultFindMain,
+): Promise<{ ok: true; articleId: number; latest: Doc; main: Doc } | { ok: false; response: Response }> {
+  if (!isHubArticleId(id)) return { ok: false, response: notFound() };
+  const articleId = Number(id);
+  const latest = (await payload.findByID({
+    collection: "articles",
+    id: articleId,
+    draft: true,
+    depth: 0,
+    overrideAccess: true,
+    disableErrors: true,
+  })) as unknown as Doc | null;
+  if (!latest || String(toId(latest.tenant)) !== String(tenant.id)) return { ok: false, response: notFound() };
+  const main = await findMain(payload, articleId);
+  if (!main || String(toId(main.tenant)) !== String(tenant.id)) return { ok: false, response: notFound() };
+
+  const reason = gateReason(main) ?? gateReason(latest);
+  if (reason) return { ok: false, response: notEditable(reason) };
+  if (!(await isHubAuthoredDoc(payload, latest))) return { ok: false, response: notEditable("not_hub_authored") };
+  return { ok: true, articleId, latest, main };
+}
+
 export async function handleHubDraftUpdateWith(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -436,23 +469,9 @@ export async function handleHubDraftUpdateWith(
     if (!t.ok) return t.response;
     const tenant = t.tenant;
 
-    if (!isHubArticleId(id)) return notFound();
-    const articleId = Number(id);
-    const latest = (await payload.findByID({
-      collection: "articles",
-      id: articleId,
-      draft: true,
-      depth: 0,
-      overrideAccess: true,
-      disableErrors: true,
-    })) as unknown as Doc | null;
-    if (!latest || String(toId(latest.tenant)) !== String(tenant.id)) return notFound();
-    const main = await findMain(payload, articleId);
-    if (!main || String(toId(main.tenant)) !== String(tenant.id)) return notFound();
-
-    const reason = gateReason(main) ?? gateReason(latest);
-    if (reason) return notEditable(reason);
-    if (!(await isHubAuthoredDoc(payload, latest))) return notEditable("not_hub_authored");
+    const loaded = await loadHubEditableArticle(payload, tenant, id, findMain);
+    if (!loaded.ok) return loaded.response;
+    const { articleId, latest } = loaded;
 
     const currentVersion = typeof latest.version === "number" ? latest.version : 0;
     if (v.expectedVersion !== currentVersion) return versionConflict(currentVersion);
