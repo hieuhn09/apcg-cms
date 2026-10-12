@@ -19,6 +19,11 @@
  * filter shows up as a number mismatch rather than a plausible-looking list.
  *
  * NEVER point this at a deployed database. It writes fixtures.
+ *
+ * Flags by phase: --setup/--check/--paging = CMS-1; --setup2/--check2 = CMS-2;
+ * --setup3/--check3 = CMS-3; --setup4/--check4 = CMS-4; --check5 = CMS-4b;
+ * --setup6/--check6 = P5.1; --setup7/--check7 = P5.2; --setup8/--check8 = P5.3
+ * (images: POST /api/hub/media; see the --check8 section near the end).
  */
 
 import "./lib/env";
@@ -9673,6 +9678,476 @@ async function check7Hooks(e: { expect: Expect7; payload: P; s6: Setup6; f7: Set
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// APCGHub P5.3 (--setup8 / --check8) — images: `POST /api/hub/media?tenant=`
+// (+ later: hero / view=edit / body tokens). LOCAL DISPOSABLE POSTGRES + LOCAL
+// SERVER ONLY: `guard8` (assertLocalTargets + assertLocalDb) runs FIRST in every
+// mode, `--unit-only` included, before any DB / HTTP call (exit 2, "refusing").
+//
+//   npx tsx scripts/hub-probe.ts --setup8 --in <f6> --out <f8>
+//       reuses the --setup6 engines; adds a public read token per granted tenant
+//       (label probe8, sha256 stored, raw only in <f8>.public-<slug>.token, 0600).
+//   npx tsx scripts/hub-probe.ts --check8 --unit-only
+//   npx tsx scripts/hub-probe.ts --check8 --in <f8> [--only U,C,P3,…]
+//       C  = the media route over real HTTP (HUB_PROBE_BASE, default :3000 —
+//            export HUB_PROBE_BASE=http://localhost:3508)
+//       P3 = createTenantMedia through the route: sizes, prefix, re-encode (EXIF
+//            gone, alpha kept, mime kept), progressive 10-scan JPEG passes,
+//            JPEG with 65 SOS markers refused fast
+// Groups are added step by step (plan E11): only the groups that exist run.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface Setup8 {
+  version: 1;
+  setup6: string;
+  publicReadTokenFile: Record<string, string>;
+}
+
+const P8_ACTOR = { role: "editor", id: "hub-user-8" } as const;
+const P8_HUMAN = { email: "p8@example.invalid", role: "editor", id: "hub-user-8" } as const;
+
+function guard8(): void {
+  assertLocalTargets();
+  try {
+    assertLocalDb(process.env.DATABASE_URL);
+  } catch (e) {
+    refuseLocalDb6(e);
+  }
+}
+
+async function setup8() {
+  guard8();
+  const inFile = arg("in");
+  const out = arg("out");
+  if (!inFile || !out) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup8 --in <file from --setup6> --out <f8>");
+    process.exit(2);
+  }
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const payload = await getPayload({ config });
+  const files: Record<string, string> = {};
+  for (const slug of SETUP6_TENANTS) {
+    const id = s6.tenants[slug]!.id;
+    const tok = randomBytes(24).toString("hex");
+    const tDoc = (await payload.findByID({ collection: "tenants", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const prev = ((tDoc.readTokens as Doc[] | undefined) ?? []).filter((r) => r.label !== "probe8");
+    await payload.update({
+      collection: "tenants",
+      id,
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { readTokens: [...prev, { label: "probe8", tokenHash: sha256Hex6(tok), tokenPrefix: tok.slice(0, 6), status: "active" }] } as never,
+    });
+    const f = `${out}.public-${slug}.token`;
+    writeFileSync(f, tok, { mode: 0o600 });
+    files[slug] = f;
+  }
+  const f8: Setup8 = { version: 1, setup6: inFile, publicReadTokenFile: files };
+  writeFileSync(out, JSON.stringify(f8, null, 2), { mode: 0o600 });
+  console.log(`[setup8] wrote ${out} (reuses the --setup6 engines; one public read token per tenant in 0600 files, not printed)`);
+  process.exit(0);
+}
+
+// ── image fixtures (built at run time; nothing written to the repo) ──────────
+
+const u16be8 = (n: number) => Buffer.from([(n >> 8) & 0xff, n & 0xff]);
+const u32be8 = (n: number) => {
+  const b = Buffer.alloc(4);
+  b.writeUInt32BE(n >>> 0);
+  return b;
+};
+const pngChunk8 = (type: string, data: Buffer) => Buffer.concat([u32be8(data.length), Buffer.from(type, "latin1"), data, Buffer.alloc(4)]);
+const PNG_SIG8 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+function pngHeader8(w: number, h: number, cgbi = false): Buffer {
+  return Buffer.concat([
+    PNG_SIG8,
+    ...(cgbi ? [pngChunk8("CgBI", Buffer.from([0x50, 0, 0x20, 6]))] : []),
+    pngChunk8("IHDR", Buffer.concat([u32be8(w), u32be8(h), Buffer.from([8, 6, 0, 0, 0])])),
+    pngChunk8("IEND", Buffer.alloc(0)),
+  ]);
+}
+const jseg8 = (m: number, p: Buffer) => Buffer.concat([Buffer.from([0xff, m]), u16be8(p.length + 2), p]);
+const jsof8 = (w: number, h: number) => jseg8(0xc0, Buffer.concat([Buffer.from([8]), u16be8(h), u16be8(w), Buffer.from([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1])]));
+function jpegThumbBig8(): Buffer {
+  const thumb = Buffer.concat([Buffer.from([0xff, 0xd8]), jsof8(160, 120), Buffer.from([0xff, 0xd9])]);
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    jseg8(0xe1, Buffer.concat([Buffer.from("Exif\0\0", "latin1"), thumb])),
+    jsof8(5000, 5000),
+    jseg8(0xda, Buffer.from([3, 1, 0, 2, 0x11, 3, 0x11, 0, 0x3f, 0])),
+    Buffer.from([0x12, 0x34, 0xff, 0xd9]),
+  ]);
+}
+const jpegBadLen8 = (len: number) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), u16be8(len), Buffer.alloc(256, 0x41)]);
+
+type Sharp8 = typeof import("sharp");
+async function loadSharp8(): Promise<Sharp8> {
+  return ((await import("sharp")) as unknown as { default: Sharp8 }).default;
+}
+
+/** A multipart body exactly as the hub sends it (standard FormData, runtime boundary). */
+async function multipart8(parts: [string, string | { data: Buffer; type: string; name?: string }][]): Promise<{ body: Buffer; type: string }> {
+  const fd = new FormData();
+  for (const [k, v] of parts) {
+    if (typeof v === "string") fd.append(k, v);
+    else fd.append(k, new Blob([new Uint8Array(v.data)], { type: v.type }), v.name ?? "upload.bin");
+  }
+  const r = new Response(fd);
+  return { body: Buffer.from(await r.arrayBuffer()), type: r.headers.get("content-type") ?? "" };
+}
+
+// ── --check8 unit group (no DB, no server) ───────────────────────────────────
+
+async function check8Unit(expect: (label: string, actual: unknown, wanted: unknown) => void): Promise<void> {
+  const v = await import("../src/lib/hub-media-validate");
+  expect("U-1: the frozen media error table has 12 rows (401/403 auth = one row)", v.HUB_MEDIA_ERROR_TABLE.length, 12);
+  expect("U-2: byte limits", [v.HUB_MEDIA_LIMITS.fileBytes, v.HUB_MEDIA_LIMITS.requestBytes, v.HUB_MEDIA_LIMITS.maxEdge, v.HUB_MEDIA_LIMITS.maxPixels, v.HUB_MEDIA_LIMITS.maxJpegScans], [4_000_000, 4_065_536, 4096, 16_800_000, 64]);
+  expect("U-3: closed multipart field set", [...v.HUB_MEDIA_FORM_FIELDS], ["file", "alt", "credit", "articleId", "actorRole", "actorId"]);
+  expect("U-4: header readers on hand-built headers (PNG 4096×4096 ok, CgBI unreadable, JPEG thumb 160×120 + SOF 5000×5000)", [
+    v.readImageSize(pngHeader8(4096, 4096), "image/png"),
+    v.readImageSize(pngHeader8(10, 10, true), "image/png"),
+    v.readImageSize(jpegThumbBig8(), "image/jpeg"),
+    v.readImageSize(jpegBadLen8(0), "image/jpeg"),
+    v.readImageSize(jpegBadLen8(1), "image/jpeg"),
+  ], [{ ok: true, width: 4096, height: 4096 }, { ok: false }, { ok: true, width: 5000, height: 5000 }, { ok: false }, { ok: false }]);
+  const h = await import("../src/lib/hub-author-handlers");
+  expect("U-5: the editable-article helper is exported (shared by PATCH and the media route)", typeof h.loadHubEditableArticle, "function");
+}
+
+// ── --check8 ─────────────────────────────────────────────────────────────────
+
+async function check8() {
+  guard8();
+  const { state, expect } = makeExpect();
+  const only = (arg("only") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const want = (g: string) => only.length === 0 || only.includes(g);
+  if (flag("unit-only")) {
+    await check8Unit(expect);
+    console.log(`\n[check8] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup8 --in <f6> --out <f8> | --check8 --in <f8> [--only U,C,P3] | --check8 --unit-only");
+    process.exit(2);
+  }
+  if (want("U")) await check8Unit(expect);
+  const f8 = JSON.parse(readFileSync(inFile, "utf8")) as Setup8;
+  const s6 = JSON.parse(readFileSync(f8.setup6, "utf8")) as Setup6;
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const author = tok(s6.engines.author.tokenFile);
+  const noauthor = tok(s6.engines.noauthor.tokenFile);
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const rows = async (q: unknown) => ((await db.execute(q)) as { rows?: Doc[] }).rows ?? [];
+  const sharp = await loadSharp8();
+  const run = runId6();
+  let seq = 0;
+
+  type Reply = { status: number; body: Doc; text: string; ms: number };
+  const send = async (path: string, init: { method: string; headers?: Record<string, string>; body?: BodyInit; duplex?: "half" }, token: string | null = author): Promise<Reply> => {
+    const t0 = performance.now();
+    const res = await fetch(`${BASE}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      signal: AbortSignal.timeout(60_000),
+    } as RequestInit);
+    const text = await res.text();
+    let body: Doc = {};
+    try {
+      body = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, body, text, ms: Math.round(performance.now() - t0) };
+  };
+  const upload = async (
+    tenant: string | null,
+    parts: [string, string | { data: Buffer; type: string; name?: string }][],
+    o: { token?: string | null } = {},
+  ): Promise<Reply> => {
+    const mp = await multipart8(parts);
+    const q = tenant === null ? "" : `?tenant=${encodeURIComponent(tenant)}`;
+    return send(`/api/hub/media${q}`, { method: "POST", headers: { "content-type": mp.type, "content-length": String(mp.body.length) }, body: new Uint8Array(mp.body) }, o.token === undefined ? author : o.token);
+  };
+  const mkDraft = async (tenant: string) => {
+    const slug = `p8-${run}-${seq++}`;
+    const r = await send("/api/hub/articles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant, title: `P8 ${slug}`, slug, actor: P8_HUMAN }) });
+    if (r.status !== 201) throw new Error(`mkDraft ${tenant} ⇒ ${r.status} ${r.text.slice(0, 200)}`);
+    return r.body.id as number;
+  };
+  const exact = (r: Reply) => [r.status, r.text];
+  const frozen = (status: number, body: Doc) => [status, JSON.stringify(body)];
+  const BAD = frozen(400, { ok: false, status: "bad_request", reason: "invalid media upload request" });
+  const NF = frozen(404, { ok: false, status: "not_found", reason: "article not found for tenant" });
+  const TYPE = frozen(415, { ok: false, status: "media_type", reason: "only JPEG, PNG or WebP images are accepted" });
+  const DIMS = frozen(422, { ok: false, status: "media_dimensions", reason: "image exceeds 4096 px per edge or 16800000 pixels" });
+  const BIG = frozen(413, { ok: false, status: "too_large", reason: "request body exceeds 4065536 bytes" });
+
+  const gcvDraft = await mkDraft("gcv");
+  const dtwDraft = await mkDraft("dtw");
+  const realJpeg = await sharp({ create: { width: 1800, height: 1200, channels: 3, background: { r: 120, g: 160, b: 200 } } })
+    .jpeg({ quality: 80 })
+    .withExif({ IFD0: { Copyright: "p8 owner", ImageDescription: "p8 gps 10.77,106.70" }, IFD3: { GPSLatitudeRef: "N", GPSLongitudeRef: "E" } })
+    .toBuffer();
+  const smallPng = await sharp({ create: { width: 40, height: 30, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0.4 } } }).png().toBuffer();
+  const base = (file: { data: Buffer; type: string }, articleId: number | string = gcvDraft): [string, string | { data: Buffer; type: string }][] => [
+    ["file", file],
+    ["alt", "P8 alt"],
+    ["articleId", String(articleId)],
+    ["actorRole", P8_ACTOR.role],
+    ["actorId", P8_ACTOR.id],
+  ];
+  const withAlt = (alt: string) => base({ data: smallPng, type: "image/png" }).map(([k, v]) => (k === "alt" ? [k, alt] : [k, v])) as [string, string | { data: Buffer; type: string }][];
+
+  if (want("C")) {
+    // Happy path + response allowlist + Activity Log (D1 / E9).
+    const log0 = Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'media_uploaded'`))[0]?.n);
+    const ok = await upload("gcv", [...base({ data: realJpeg, type: "image/jpeg" }), ["credit", "P8 credit"]]);
+    const media = (ok.body.media ?? {}) as Doc;
+    expect("C-1: 201 + response allowlist exactly {ok, media:{id, alt, credit, mimeType, width, height, filesize, url, sizes}}", [
+      ok.status, Object.keys(ok.body), Object.keys(media), media.alt, media.credit, media.mimeType, media.width, media.height,
+      Object.keys((media.sizes ?? {}) as Doc), typeof media.url === "string" && (media.url as string).startsWith("/api/media/file/hub-"),
+    ], [201, ["ok", "media"], ["id", "alt", "credit", "mimeType", "width", "height", "filesize", "url", "sizes"], "P8 alt", "P8 credit", "image/jpeg", 1800, 1200, ["thumbnail", "card", "hero"], true]);
+    const mid = media.id as number;
+    const mrow = (await rows(sql`SELECT tenant_id, prefix, filename, mime_type FROM media WHERE id = ${mid}`))[0] ?? {};
+    expect("C-2: (AC1) media row: tenant = gcv from the TOKEN grant, prefix = gcv set by the server, server file name hub-<uuid>.jpg", [
+      Number(mrow.tenant_id), mrow.prefix, /^hub-[0-9a-f-]{36}\.jpg$/.test(String(mrow.filename)), mrow.mime_type,
+    ], [s6.tenants.gcv!.id, "gcv", true, "image/jpeg"]);
+    const logs = await rows(sql`SELECT tenant_id, actor_type, actor_engine_id, target_collection, target_id, detail FROM activity_log WHERE event_type = 'media_uploaded' AND target_id = ${String(mid)}`);
+    const lg = logs[0] ?? {};
+    const detail = (lg.detail ?? {}) as Doc;
+    const dtext = JSON.stringify(lg);
+    expect("C-3: (AC17 / D1 / E9) exactly one media_uploaded row; tenant column set; targetCollection media; detail {via:hub, actor:{role,id}, articleId}; no email, no token", [
+      Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'media_uploaded'`))[0]?.n) - log0, logs.length,
+      Number(lg.tenant_id), lg.actor_type, Number(lg.actor_engine_id), lg.target_collection, Object.keys(detail).sort(), detail.via, sortKeys6(detail.actor), detail.articleId,
+      dtext.includes("@"), dtext.includes(author),
+    ], [1, 1, s6.tenants.gcv!.id, "engine", s6.engines.author.id, "media", ["actor", "articleId", "via"], "hub", { id: "hub-user-8", role: "editor" }, gcvDraft, false, false]);
+
+    expect("C-4: no token ⇒ 401", exact(await upload("gcv", base({ data: smallPng, type: "image/png" }), { token: null })), frozen(401, { ok: false, status: "unauthorized" }));
+    const ks = await upload("gcv", base({ data: smallPng, type: "image/png" }), { token: noauthor });
+    expect("C-5: (kill-switch) hubAuthor off ⇒ 403 frozen body", exact(ks), frozen(403, { ok: false, status: "forbidden", reason: "hub author not allowed for this engine" }));
+    expect("C-6: tenant missing / empty ⇒ 400", [exact(await upload(null, base({ data: smallPng, type: "image/png" }))), exact(await upload("", base({ data: smallPng, type: "image/png" }))), exact(await upload("  ", base({ data: smallPng, type: "image/png" })))], [BAD, BAD, BAD]);
+    const wad = await upload("wad", base({ data: smallPng, type: "image/png" }));
+    expect("C-7: tenant outside the grant ⇒ 403 forbidden + allowedTenants (resolveHubWriteTenant shape)", [wad.status, wad.body.status, wad.body.reason, Array.isArray(wad.body.allowedTenants) && !(wad.body.allowedTenants as string[]).includes("wad")], [403, "forbidden", "tenant not in allowed scope", true]);
+    // features.articles off for world-travel-brief (restored in finally).
+    const wtbId = s6.tenants["world-travel-brief"]!.id;
+    const tw = (await payload.findByID({ collection: "tenants", id: wtbId, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const feats = (tw.features ?? {}) as Doc;
+    try {
+      await payload.update({ collection: "tenants", id: wtbId, overrideAccess: true, context: { disableRevalidate: true }, data: { features: { ...feats, articles: false } } as never });
+      expect("C-8: tenant with features.articles off ⇒ 403 feature_disabled (frozen)", exact(await upload("world-travel-brief", base({ data: smallPng, type: "image/png" }))), frozen(403, { ok: false, status: "feature_disabled", reason: "articles feature disabled for tenant" }));
+    } finally {
+      await payload.update({ collection: "tenants", id: wtbId, overrideAccess: true, context: { disableRevalidate: true }, data: { features: feats } as never });
+    }
+
+    // 411: a streamed body has no Content-Length.
+    const mp = await multipart8(base({ data: smallPng, type: "image/png" }));
+    const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(mp.body)); c.close(); } });
+    expect("C-9: no Content-Length ⇒ 411 (frozen)", exact(await send("/api/hub/media?tenant=gcv", { method: "POST", headers: { "content-type": mp.type }, body: stream, duplex: "half" })), frozen(411, { ok: false, status: "length_required", reason: "Content-Length header is required" }));
+    // 413 by Content-Length (real oversize body; refused before it is read) and by file size.
+    const huge = await upload("gcv", base({ data: Buffer.concat([pngHeader8(10, 10), Buffer.alloc(4_065_600)]), type: "image/png" }));
+    const fat = await upload("gcv", base({ data: Buffer.concat([pngHeader8(10, 10), Buffer.alloc(4_000_001 - pngHeader8(10, 10).length)]), type: "image/png" }));
+    expect("C-10: request > 4,065,536 B ⇒ 413; file 4,000,001 B in a smaller request ⇒ 413 — one frozen body (status too_large)", [exact(huge), exact(fat)], [BIG, BIG]);
+
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="9" height="9"/>');
+    const gif = Buffer.from("GIF89a\x0a\x00\x0a\x00\x00\x00\x00;", "latin1");
+    expect("C-11: (AC4) SVG declared image/jpeg, SVG as svg+xml, GIF, PNG declared jpeg, PNG CgBI ⇒ 415", [
+      exact(await upload("gcv", base({ data: svg, type: "image/jpeg" }))),
+      exact(await upload("gcv", base({ data: svg, type: "image/svg+xml" }))),
+      exact(await upload("gcv", base({ data: gif, type: "image/gif" }))),
+      exact(await upload("gcv", base({ data: smallPng, type: "image/jpeg" }))),
+      exact(await upload("gcv", base({ data: pngHeader8(10, 10, true), type: "image/png" }))),
+    ], [TYPE, TYPE, TYPE, TYPE, TYPE]);
+    const t0 = performance.now();
+    const len0 = await upload("gcv", base({ data: jpegBadLen8(0), type: "image/jpeg" }));
+    const len1 = await upload("gcv", base({ data: jpegBadLen8(1), type: "image/jpeg" }));
+    expect("C-12: JPEG segment length 0 / 1 ⇒ 415 in finite time", [exact(len0), exact(len1), performance.now() - t0 < 10_000], [TYPE, TYPE, true]);
+    expect("C-13: (AC4) PNG header 20000×20000 and 4097×100, JPEG with EXIF thumbnail 160×120 + real SOF 5000×5000 ⇒ 422 media_dimensions", [
+      exact(await upload("gcv", base({ data: pngHeader8(20000, 20000), type: "image/png" }))),
+      exact(await upload("gcv", base({ data: pngHeader8(4097, 100), type: "image/png" }))),
+      exact(await upload("gcv", base({ data: jpegThumbBig8(), type: "image/jpeg" }))),
+    ], [DIMS, DIMS, DIMS]);
+    expect("C-14: (AC19) alt with C0 / bidi / CR / LF / `]` / 301 chars ⇒ 400; blank alt ⇒ 422 alt_required", [
+      exact(await upload("gcv", withAlt("a\u0001b"))), exact(await upload("gcv", withAlt("a‮b"))), exact(await upload("gcv", withAlt("a\rb"))),
+      exact(await upload("gcv", withAlt("a\nb"))), exact(await upload("gcv", withAlt("a](https://x.test/i.png)"))), exact(await upload("gcv", withAlt("x".repeat(301)))),
+      exact(await upload("gcv", withAlt("   "))),
+    ], [BAD, BAD, BAD, BAD, BAD, BAD, frozen(422, { ok: false, status: "alt_required", reason: "alt text is required" })]);
+    const pngFile = { data: smallPng, type: "image/png" };
+    expect("C-15: (AC19) unknown field (email), alt twice, articleId missing, actorRole viewer ⇒ 400", [
+      exact(await upload("gcv", [...base(pngFile), ["email", "p8@example.invalid"]])),
+      exact(await upload("gcv", [...base(pngFile), ["alt", "again"]])),
+      exact(await upload("gcv", base(pngFile).filter(([k]) => k !== "articleId"))),
+      exact(await upload("gcv", base(pngFile).map(([k, v]) => (k === "actorRole" ? [k, "viewer"] : [k, v])) as [string, string][])),
+    ], [BAD, BAD, BAD, BAD]);
+    expect("C-16: articleId 'abc', 20 digits, 400 digits, another tenant's draft, a non-existent id ⇒ 404 (frozen, = PATCH body)", [
+      exact(await upload("gcv", base(pngFile, "abc"))), exact(await upload("gcv", base(pngFile, "9".repeat(20)))), exact(await upload("gcv", base(pngFile, "9".repeat(400)))),
+      exact(await upload("gcv", base(pngFile, dtwDraft))), exact(await upload("gcv", base(pngFile, 2147483646))),
+    ], [NF, NF, NF, NF, NF]);
+    const ne = async (id: number) => (await upload("dtw", base(pngFile, id))).body.reason;
+    expect("C-17: not editable: engine article ⇒ origin; main published (hub draft re-saved) ⇒ status; manual draft by a CMS user ⇒ not_hub_authored (422)", [
+      await ne(s6.articles.engine.id), await ne(s6.articles.hubDraftPublishedThenSavedDraft.id), await ne(s6.articles.manualDraftByCmsUser.id),
+      (await upload("dtw", base(pngFile, s6.articles.engine.id))).status,
+    ], ["origin", "status", "not_hub_authored", 422]);
+    const nRows = Number((await rows(sql`SELECT count(*)::int AS n FROM media WHERE filename LIKE 'hub-%'`))[0]?.n);
+    expect("C-18: only the accepted uploads created media rows so far (C-1 only)", nRows >= 1, true);
+  }
+
+  if (want("P3")) {
+    const prog = await sharp({ create: { width: 900, height: 600, channels: 3, background: "#808080" } }).jpeg({ quality: 85, progressive: true }).toBuffer();
+    const v = await import("../src/lib/hub-media-validate");
+    const scans = v.countJpegScans(prog);
+    const r10 = await upload("gcv", base({ data: prog, type: "image/jpeg" }));
+    expect("P3-1: a real progressive JPEG (sharp/libjpeg scan script) passes", [scans >= 2 && scans <= 64, r10.status], [true, 201]);
+    const extra: Buffer[] = [];
+    for (let i = 0; i < 70 - scans; i++) extra.push(Buffer.from([0xff, 0xff, 0xda, 0x00, 0x08, 1, 1, 0, 0, 0x3f, 0]));
+    const many = Buffer.concat([prog, ...extra]);
+    const t0 = performance.now();
+    const r65 = await upload("gcv", base({ data: many, type: "image/jpeg" }));
+    const ms = Math.round(performance.now() - t0);
+    console.log(`OBS   P3: 70-SOS JPEG (FF FF DA fill form) refused in ${ms} ms (server round-trip)`);
+    expect("P3-2: (E6) > 64 SOS markers (each with FF fill) ⇒ 415 in < 1 s", [v.countJpegScans(many) > 64, exact(r65), ms < 1000], [true, TYPE, true]);
+    const src = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: { r: 10, g: 200, b: 10 } } })
+      .jpeg({ quality: 80 })
+      .withExif({ IFD0: { Copyright: "p8 gps owner" }, IFD3: { GPSLatitudeRef: "S", GPSLongitudeRef: "W" } })
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const r = await upload("gcv", base({ data: src, type: "image/jpeg" }));
+    const m = (r.body.media ?? {}) as Doc;
+    const fileRes = await fetch(`${BASE}${m.url as string}`);
+    const stored = Buffer.from(await fileRes.arrayBuffer());
+    const meta = await sharp(stored).metadata();
+    expect("P3-3: (AC27 / D5) stored original re-encoded: EXIF/GPS gone, orientation applied (2000×1000 o6 ⇒ 1000×2000), mime kept; sizes thumbnail+card (no hero: 1000 wide < 1600)", [
+      r.status, fileRes.status, meta.format, meta.exif === undefined, meta.orientation ?? null, [meta.width, meta.height], [m.width, m.height], Object.keys((m.sizes ?? {}) as Doc),
+    ], [201, 200, "jpeg", true, null, [1000, 2000], [1000, 2000], ["thumbnail", "card"]]);
+    const pr = await upload("gcv", base({ data: smallPng, type: "image/png" }));
+    const pm = (pr.body.media ?? {}) as Doc;
+    const pmeta = await sharp(Buffer.from(await (await fetch(`${BASE}${pm.url as string}`)).arrayBuffer())).metadata();
+    expect("P3-4: (AC27) PNG with alpha stays PNG with alpha; a 40×30 image gets no larger size (sizes absent)", [pr.status, pm.mimeType, pmeta.format, pmeta.hasAlpha, "sizes" in pm], [201, "image/png", "png", true, false]);
+    const wb = await sharp({ create: { width: 1700, height: 900, channels: 3, background: "#123456" } }).webp({ quality: 80 }).toBuffer();
+    const wr = await upload("gcv", base({ data: wb, type: "image/webp" }));
+    expect("P3-5: WebP accepted, stays WebP, ≥1600 wide ⇒ hero size", [wr.status, ((wr.body.media ?? {}) as Doc).mimeType, Object.keys((((wr.body.media ?? {}) as Doc).sizes ?? {}) as Doc)], [201, "image/webp", ["thumbnail", "card", "hero"]]);
+  }
+
+  if (want("P1")) await check8P1(expect, payload);
+
+  console.log(`\n[check8] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(state.failures === 0 ? 0 : 1);
+}
+
+/**
+ * P1 (step 1.6, plan §5.1): the candidate token module + the REAL Lexical
+ * converters of this CMS, run inside `runWithHardTimeout` (no DB, no async inside).
+ * Prints PASS/FAIL per criterion (i)–(iv) for branch B, the branch-A observation
+ * and the T8 (a) vectors. NOT wired into the write path yet (that is 2.2).
+ */
+async function check8P1(expect: (label: string, actual: unknown, wanted: unknown) => void, payload: P): Promise<void> {
+  const tokenMod = await import("../src/lib/hub-author-media-token");
+  const coreMod = await import("../src/lib/hub-author-convert-core");
+  const bodyMod = await import("../src/lib/hub-author-body");
+  const mdMod = await import("../src/lib/hub-article-markdown");
+  const cfg = (await mdMod.loadHubEditorConfig(payload.config)) as Parameters<typeof coreMod.lexicalConverters>[0];
+  const real = coreMod.lexicalConverters(cfg);
+  const conv = tokenMod.mediaTokenConverters(real);
+  const kids = (lex: unknown) => (((lex as Doc).root as Doc)?.children ?? []) as Doc[];
+  const obs8 = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
+
+  const MD0 = "Intro paragraph.\n\n![any typed alt](cms-media:5)\n\nOutro paragraph.";
+  const MD1 = "Intro paragraph.\n\n![](cms-media:5)\n\nOutro paragraph.";
+  type P1Out = { types: string[]; up: Doc | null; md0Out: string; md1Out: string; md2: string; equal: boolean; equalRaw: boolean; populated: string; tokenAltInMd1: boolean };
+  const p1 = (a: { conv: typeof conv; real: typeof real; MD0: string; MD1: string; lte: typeof coreMod.lexicalTreesEqual }): P1Out => {
+    const lex0 = a.conv.toLexical(a.MD0) as Doc;
+    const ks = ((lex0.root as Doc).children as Doc[]) ?? [];
+    const up = ks.find((n) => n.type === "upload") ?? null;
+    const md0Out = a.conv.toMarkdown(lex0);
+    const lex1 = a.conv.toLexical(a.MD1);
+    const md1Out = a.conv.toMarkdown(lex1);
+    const lex2 = a.conv.toLexical(md1Out);
+    const md2 = a.conv.toMarkdown(lex2);
+    const populated = (lex1 as Doc);
+    const popKids = (((populated.root as Doc).children as Doc[]) ?? []).map((n) => (n.type === "upload" ? { ...n, value: { id: 5, url: "/api/media/file/x.png", alt: "pop alt", mimeType: "image/png", filename: "x.png" } } : n));
+    const popLex = { ...populated, root: { ...(populated.root as Doc), children: popKids } };
+    return {
+      types: ks.map((n) => String(n.type)),
+      up: up ? { type: up.type, relationTo: up.relationTo, value: up.value } : null,
+      md0Out,
+      md1Out,
+      md2,
+      equal: a.lte(lex1, lex2),
+      equalRaw: JSON.stringify(lex1) === JSON.stringify(lex2),
+      populated: a.conv.toMarkdown(popLex),
+      tokenAltInMd1: md0Out.includes("any typed alt"),
+    };
+  };
+  let r: P1Out | null = null;
+  let err: unknown = null;
+  try {
+    r = bodyMod.runWithHardTimeout(p1, { conv, real, MD0, MD1, lte: coreMod.lexicalTreesEqual }, 5000);
+  } catch (e) {
+    err = e;
+  }
+  obs8("P1 raw result", r ?? { error: (err as Error | null)?.message ?? String(err) });
+  const i = r !== null && r.types.join(",") === "paragraph,upload,paragraph" && JSON.stringify(r.up) === JSON.stringify({ type: "upload", relationTo: "media", value: 5 });
+  const ii = r !== null && r.md0Out === MD1 && !r.tokenAltInMd1;
+  const iii = r !== null && r.md1Out === MD1 && r.md2 === MD1 && r.equal && r.populated === MD1;
+  const iv = r !== null && err === null;
+  expect("P1 (i) `![<any alt>](cms-media:5)` imports to upload{relationTo:media, value:5} as a root child", i, true);
+  expect("P1 (ii) export is the canonical `![](cms-media:5)` (typed alt not re-emitted)", ii, true);
+  expect("P1 (iii) md1 → lex → md1 identical; lexicalTreesEqual(lex1, lex2) true; populated value exports the same string", iii, true);
+  expect("P1 (iv) ran entirely inside runWithHardTimeout (vm, sync, no DB)", iv, true);
+  console.log(`OBS   P1 VERDICT branch B: ${i && ii && iii && iv ? "VALID (all 4 criteria)" : "NOT valid"}`);
+  // E4 note: the CURRENT comparator does not look at value / relationTo (COMPARED_KEYS).
+  const changedId = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 6, format: "" }] } };
+  const sameId = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 5, format: "" }] } };
+  obs8("P1 E4 baseline: lexicalTreesEqual(upload 5, upload 6) with the UNCHANGED comparator (2.2 must make this false)", coreMod.lexicalTreesEqual(sameId, changedId));
+  obs8("P1 checkLexicalTree({upload, relationTo:media, value:1}) BEFORE 2.2 (upload not yet allowed ⇒ node expected)", coreMod.checkLexicalTree({ root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 1 }] } }));
+
+  // Branch A: does a plain Markdown image with a CMS media URL import as an upload node with an id, without DB?
+  let aTypes: unknown = null;
+  try {
+    aTypes = bodyMod.runWithHardTimeout((a: { real: typeof real }) => {
+      const lex = a.real.toLexical("Intro.\n\n![alt](/api/media/file/hub-x.png)\n\nOutro.") as Doc;
+      return (((lex.root as Doc).children as Doc[]) ?? []).map((n) => ({ type: n.type, kids: ((n.children as Doc[]) ?? []).map((c) => c.type) }));
+    }, { real }, 5000);
+  } catch (e) {
+    aTypes = { error: (e as Error).message };
+  }
+  const aValid = JSON.stringify(aTypes).includes('"upload"');
+  obs8("P1 branch A: real import of `![alt](/api/media/file/hub-x.png)` (node types)", aTypes);
+  console.log(`OBS   P1 VERDICT branch A: ${aValid ? "imports an upload node (check id)" : "NOT valid (no upload node from a URL image)"}`);
+  // Payload's own transformer (observation only): `![media:5]()` placeholder round-trip.
+  try {
+    const nat = bodyMod.runWithHardTimeout((a: { real: typeof real }) => {
+      const lex = a.real.toLexical("![media:5]()") as Doc;
+      return { kids: (((lex.root as Doc).children as Doc[]) ?? []).map((n) => ({ type: n.type, relationTo: n.relationTo, value: n.value })), back: a.real.toMarkdown(lex) };
+    }, { real }, 5000);
+    obs8("P1 native Payload placeholder `![media:5]()` (UploadMarkdownTransformer, not used by the plan)", nat);
+  } catch (e) {
+    obs8("P1 native placeholder threw", (e as Error).message);
+  }
+
+  // T8 (a) vectors on the module: non-token forms ⇒ not a token ⇒ the generic image check still says `image`.
+  const isImg = (md: string) => tokenMod.withoutMediaTokenLines(md).includes("![");
+  const vec: Record<string, string> = {
+    "mid-sentence": "Text ![](cms-media:5) text", list: "- ![](cms-media:5)", quote: "> ![](cms-media:5)", heading: "## ![](cms-media:5)",
+    "link label": "[![](cms-media:5)](https://x.test)", "wrapped in link": "[x](https://x.test) ![](cms-media:5)", "two tokens": "![](cms-media:5)![](cms-media:6)",
+    reference: "![a][r]\n\n[r]: cms-media:1", title: '![](cms-media:5 "t")', "code span": "`![](cms-media:5)`", "id 0": "![](cms-media:0)", "id 01": "![](cms-media:01)",
+    "list + 2-space indent": "- item\n\n  ![](cms-media:5)", "fence w/ blank line": "```\n\n![](cms-media:5)\n\n```", "CRLF mid-body": "A.\r\n\r\n![](cms-media:5)\r\n\r\nB.",
+    "U+2028 after": "A.\n\n![](cms-media:5) \n\nB.", "U+2029 after": "A.\n\n![](cms-media:5) \n\nB.", "indent 1": "A.\n\n ![](cms-media:5)\n\nB.",
+    "indent 3": "A.\n\n   ![](cms-media:5)\n\nB.", "indent 4": "A.\n\n    ![](cms-media:5)\n\nB.", "alt with ]": "![a]b](cms-media:5)",
+  };
+  const bad = Object.entries(vec).filter(([, md]) => tokenMod.extractMediaIds(md).length !== 0 || !isImg(md)).map(([k]) => k);
+  expect(`P1 T8(a): ${Object.keys(vec).length} non-token vectors ⇒ no token id, still \`image\``, bad, []);
+  expect("P1 T8(a): neighbour line of only spaces counts as blank ⇒ token", tokenMod.extractMediaIds("A.\n  \n![](cms-media:5)\n  \nB."), ["5"]);
+  expect("P1 T8(a): `!\\[` (escaped) is plain text: no token, no `![`", [tokenMod.extractMediaIds("!\\[](cms-media:5)"), isImg("!\\[](cms-media:5)")], [[], false]);
+  const d11 = "1".repeat(11), d20 = "9".repeat(20), d400 = "7".repeat(400);
+  expect("P1 ids above int4 (11 / 20 / 400 digits) keep the token shape (pass the image check; refs must report out_of_range at 2.2)", [tokenMod.extractMediaIds(`![](cms-media:${d11})\n\n![](cms-media:${d20})\n\n![](cms-media:${d400})`).map((s) => s.length), isImg(`![](cms-media:${d400})`)], [[11, 20, 400], false]);
+  const lex2 = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 5 }, { type: "upload", relationTo: "media", value: 9 }] } };
+  const checked = new Set(["5"]);
+  const outside = tokenMod.uploadIdsInTree(lex2).filter((x) => !checked.has(x));
+  expect("P1 lex2 holds an upload id outside the tenant-checked set ⇒ detected (would be unknown_ref at 2.2)", outside, ["9"]);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -9713,10 +10188,14 @@ const run = flag("setup")
                                       ? setup7
                                       : flag("check7")
                                         ? check7
-                                        : null;
+                                        : flag("setup8")
+                                          ? setup8
+                                          : flag("check8")
+                                            ? check8
+                                            : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only",
   );
   process.exit(2);
 }
