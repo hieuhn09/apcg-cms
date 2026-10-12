@@ -14,6 +14,12 @@
  * `editable:true`  ⇒ EVERY field (`article.*`, `bodyMarkdown`, `edit.*`) comes from
  * the ONE latest read — never mixed with the main row.
  *
+ * APCGHub P5.2 (K10): ONE added branch — the main row is a manual draft AND the latest
+ * version is `scheduled` AND hub-authored (same tenant) ⇒ `edit` = {editable: false,
+ * editableReason: "scheduled", scheduledFor, version} and `article.*` comes from the
+ * latest version (the hub shows "scheduled for …" + Unschedule). A schedule made by a
+ * CMS admin user (not hub-authored) keeps the old answer (`status`, main row).
+ *
  * `bodyEditable` is computed only when editable (round-trip safety, inside the vm
  * time guard; timeout ⇒ false). Same two barriers as the detail route: an explicit
  * `select` + a sanitizer that builds a FRESH object (no spread).
@@ -47,9 +53,10 @@ export const HUB_ARTICLE_EDIT_SELECT = {
   pinnedToLatest: true,
   exclusive: true,
   sponsor: true,
+  scheduledFor: true, // K10 (P5.2): the hour of a hub-scheduled latest version
 } as const;
 
-export type HubEditableReason = "ok" | "origin" | "status" | "not_hub_authored";
+export type HubEditableReason = "ok" | "origin" | "status" | "not_hub_authored" | "scheduled";
 
 type Doc = Record<string, unknown>;
 
@@ -71,7 +78,16 @@ const idOf = (v: unknown): number | string | null => toId(v) ?? null;
 
 export interface HubArticleEditNo {
   editable: false;
-  editableReason: Exclude<HubEditableReason, "ok">;
+  editableReason: Exclude<HubEditableReason, "ok" | "scheduled">;
+}
+
+/** K10 (P5.2): a hub-authored article scheduled from the hub — read-only, with its hour. */
+export interface HubArticleEditScheduled {
+  editable: false;
+  editableReason: "scheduled";
+  /** UTC `YYYY-MM-DDTHH:mm:ss.fffZ`; null when stored without an hour (only a CMS admin can do that). */
+  scheduledFor: string | null;
+  version: number | null;
 }
 
 export interface HubArticleEditYes {
@@ -103,14 +119,14 @@ export interface HubArticleEditYes {
   sponsor: string | null;
 }
 
-export type HubArticleEdit = HubArticleEditNo | HubArticleEditYes;
+export type HubArticleEdit = HubArticleEditNo | HubArticleEditYes | HubArticleEditScheduled;
 
 export function sanitizeHubArticleEdit(
   doc: Doc,
   o: { bodyEditable: boolean; editable: boolean; editableReason: HubEditableReason },
 ): HubArticleEdit {
   if (!o.editable || o.editableReason !== "ok") {
-    return { editable: false, editableReason: o.editableReason === "ok" ? "status" : o.editableReason };
+    return { editable: false, editableReason: o.editableReason === "ok" || o.editableReason === "scheduled" ? "status" : o.editableReason };
   }
   const secondary = Array.isArray(doc.secondarySections)
     ? doc.secondarySections.map((row) => {
@@ -175,6 +191,19 @@ export async function loadHubArticleEdit(args: {
     return { edit: { editable: false, editableReason: "status" }, latest: null };
   }
   const latestReason = editableReasonOf(latest);
+  // K10 (P5.2): main manual draft (checked above) + latest scheduled + hub-authored ⇒ "scheduled".
+  if (latestReason === "status" && latest.workflowStatus === "scheduled" && (await isHubAuthoredDoc(payload, latest))) {
+    const at = latest.scheduledFor == null ? null : new Date(latest.scheduledFor as string);
+    return {
+      edit: {
+        editable: false,
+        editableReason: "scheduled",
+        scheduledFor: at && !Number.isNaN(at.getTime()) ? at.toISOString() : null,
+        version: typeof latest.version === "number" ? latest.version : null,
+      },
+      latest,
+    };
+  }
   if (latestReason) return { edit: { editable: false, editableReason: latestReason }, latest: null };
   if (!(await isHubAuthoredDoc(payload, latest))) {
     return { edit: { editable: false, editableReason: "not_hub_authored" }, latest: null };

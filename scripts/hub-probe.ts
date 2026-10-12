@@ -8115,12 +8115,13 @@ async function check7() {
   const { state, expect } = makeExpect();
   if (flag("unit-only")) {
     await check7Unit(expect);
+    await check7UnitB(expect);
     console.log(`\n[check7] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
     process.exit(state.failures === 0 ? 0 : 1);
   }
   const inFile = arg("in");
   if (!inFile) {
-    console.error("usage: tsx scripts/hub-probe.ts --check7 --in <f7> [--only LA-1,…] [--server-log <file>] [--la-n-high] | --check7 --unit-only | --check7 --only GATE");
+    console.error("usage: tsx scripts/hub-probe.ts --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE");
     process.exit(2);
   }
   const want = (id: string) => only.length === 0 || only.includes(id);
@@ -8131,6 +8132,12 @@ async function check7() {
   const db = rawDb(payload);
   const D = payload.db as unknown as Db7;
   const mod = await loadLockMod7();
+  if (flag("hooks-only")) {
+    await check7Hooks({ expect, payload, s6, f7 });
+    console.log(`
+[check7] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (hooks-only)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
   const gcv = s6.tenants.gcv!.id;
   const fx = s6.fixtures.gcv!;
   const run = runId6();
@@ -8425,6 +8432,8 @@ async function check7() {
     }
   }
 
+  await check7B({ expect, want, payload, s6, f7 });
+
   expect("LA-PROC: probe process — no uncaught error / unhandled rejection", uncaught, []);
   if (serverLog) expect("LA-PROC: dev server log — no new uncaughtException / unhandledRejection lines during the run", (logHits() ?? 0) - (logHits0 ?? 0), 0);
 
@@ -8480,6 +8489,1190 @@ async function findSlugConflict7(payload: P, tenantId: Id7, slug: string, exclud
   return findSlugConflict({ payload: payload as never, tenantId: tenantId as never, slug, excludeId: excludeId as never }) as Promise<{ id: Id7 } | null>;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// --check7 CMS-B groups (APCGHub P5.2 Stage 2.1): the two new routes
+//   POST /api/hub/articles/{id}/publish     POST /api/hub/articles/{id}/schedule
+// and the `view=edit` "scheduled" branch (content-engine plan
+// process/features/apcg-hub/active/apcg-hub-p5-2-publish-schedule-unpublish_PLAN_30-09-26.md,
+// §4.1–§4.2, K1–K16, Stage 2.1). Same rules as group LA: every label opens with
+// "<case name>: "; the product modules are imported lazily, so on a tree without
+// them each case that needs them FAILS instead of the probe failing to load.
+//
+//   npx tsx scripts/hub-probe.ts --check7 --unit-only               # + *-U, V-U, K10-U, E-actor (no DB, no server)
+//   npx tsx scripts/hub-probe.ts --check7 --in <f7> [--only P,S,…]   # + HTTP groups A E P S U V B G K10 W T WH CR C
+//   npx tsx scripts/hub-probe.ts --check7 --hooks-only --in <f7>    # group H: in-process core on the DB, no server
+// LOCAL ONLY: guard7 (assertLocalTargets + assertLocalDb) runs first in every mode.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PubCoreMod7 = typeof import("../src/lib/hub-author-publish-core");
+type EditSelMod7 = typeof import("../src/lib/hub-article-edit-select");
+type Expect7 = (label: string, actual: unknown, wanted: unknown) => void;
+
+async function loadPubCore7(): Promise<PubCoreMod7 | null> {
+  try {
+    return (await import("../src/lib/hub-author-publish-core")) as PubCoreMod7;
+  } catch {
+    return null;
+  }
+}
+
+const B7_ACTOR = { email: "cmsb7@example.invalid", role: "editor", id: "hub-user-b7" };
+const B7_ACTOR_SORTED = sortKeys6(B7_ACTOR);
+const B7_NOW = Date.parse("2026-10-08T03:00:00.000Z");
+const B7_BODY = { root: { type: "root", children: [{ type: "paragraph", children: [{ type: "text", text: "x" }] }] } };
+const B7_REASON = { publish: "hub composer publish", schedule: "hub composer schedule", unschedule: "hub composer unschedule" } as const;
+const B7_NOT_FOUND = { ok: false, status: "not_found", reason: "article not found for tenant" };
+const B7_MISSING = "CMS-B code missing (hub-author-publish-core.ts / a new export)";
+
+/** Unit fake Payload for the publish core: writes through `req` go to the fake transaction buffer. */
+function fakePubStore7(o: { updateThrows?: unknown; lookupThrows?: boolean; hubAuthor?: boolean; articlesFeature?: boolean } = {}) {
+  const tenant = { id: 1, slug: "gcv", status: "active", defaultLanguage: "en", features: { articles: o.articlesFeature ?? true } };
+  const pillars: Doc[] = [
+    { id: 11, tenant: 1, slug: "p-main" },
+    { id: 12, tenant: 1, slug: "p-nosub" },
+    { id: 13, tenant: 1, slug: "exclusive" },
+    { id: 14, tenant: 1, slug: "p-other" },
+    { id: 15, tenant: 1, slug: "pressroom" },
+    { id: 99, tenant: 2, slug: "p-elsewhere" },
+  ];
+  const subsections: Doc[] = [{ id: 21, tenant: 1, pillar: 11 }, { id: 22, tenant: 1, pillar: 11 }, { id: 23, tenant: 1, pillar: 14 }, { id: 98, tenant: 2, pillar: 99 }];
+  const articles = new Map<number, { latest: Doc; main: Doc }>();
+  const updates: Doc[] = [];
+  const activity: Doc[] = [];
+  const lookups: string[] = [];
+  const match = (doc: Doc, w: unknown): boolean => {
+    if (!w || typeof w !== "object") return true;
+    const q = w as Doc;
+    if (Array.isArray(q.and)) return (q.and as unknown[]).every((x) => match(doc, x));
+    for (const [k, cond] of Object.entries(q)) {
+      const c = (cond ?? {}) as Doc;
+      const v = doc[k];
+      if ("equals" in c && String(v) !== String(c.equals)) return false;
+      if ("in" in c && !(c.in as unknown[]).map(String).includes(String(v))) return false;
+    }
+    return true;
+  };
+  const put = (req: unknown, f: () => void) => {
+    const r = req as FakeReq7 | undefined;
+    if (r && Array.isArray(r.buf)) r.buf.push(f);
+    else f();
+  };
+  const payload = {
+    config: {},
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    async findByID(a: Doc) {
+      if (a.collection === "tenants") return { ...tenant, features: { ...tenant.features } };
+      if (a.collection === "content-engines") return { id: 7, hubAuthor: o.hubAuthor ?? true };
+      if (a.collection === "articles") {
+        const x = articles.get(Number(a.id));
+        return x ? { ...(a.draft ? x.latest : x.main) } : null;
+      }
+      return null;
+    },
+    async find(a: Doc) {
+      const col = String(a.collection);
+      if (col === "pillars" || col === "subsections") {
+        lookups.push(col);
+        if (o.lookupThrows) throw Object.assign(new Error("lookup down"), { code: "ECONNREFUSED" });
+      }
+      const src = col === "pillars" ? pillars : col === "subsections" ? subsections : col === "articles" ? [...articles.values()].map((x) => (a.draft ? x.latest : x.main)) : [];
+      const docs = src.filter((d) => match(d, a.where)).slice(0, Number(a.limit ?? 10)).map((d) => ({ ...d }));
+      return { docs, totalDocs: docs.length };
+    },
+    async create(a: Doc) {
+      if (a.collection === "activityLog") activity.push(a.data as Doc);
+      return {};
+    },
+    async update(a: Doc) {
+      updates.push({ id: a.id, draft: a.draft === true, data: a.data, context: a.context, depth: a.depth, overrideAccess: a.overrideAccess, viaReq: a.req != null });
+      if (o.updateThrows !== undefined) throw o.updateThrows;
+      const id = Number(a.id);
+      const x = articles.get(id);
+      put(a.req, () => {
+        const y = articles.get(id);
+        if (!y) return;
+        y.latest = { ...y.latest, ...(a.data as Doc) };
+        if (a.draft !== true) y.main = { ...y.latest };
+      });
+      return { ...(x?.latest ?? {}), ...(a.data as Doc), id };
+    },
+  };
+  const doc = (id: number, extra: Doc = {}): Doc => ({
+    id, tenant: 1, origin: "manual", workflowStatus: "draft", _status: "draft", version: 3, lastEngine: 7, title: "T", slug: `s-${id}`,
+    body: B7_BODY, pillar: 11, subSection: 21, author: 3, readMin: 2, sponsored: false, sponsor: null, secondarySections: [], briefs: [],
+    video: null, heroImage: null, videoDescription: null, scheduledFor: null, ...extra,
+  });
+  const seed = (id: number, latest: Doc = {}, main: Doc = {}) => articles.set(id, { latest: doc(id, latest), main: doc(id, main) });
+  return { payload, articles, updates, activity, lookups, seed };
+}
+
+async function check7UnitB(expect: Expect7): Promise<void> {
+  const core = await loadPubCore7();
+  const lockMod = await loadLockMod7();
+  const inp = (await import("../src/lib/hub-author-input")) as unknown as Record<string, unknown>;
+  const sel = (await import("../src/lib/hub-article-edit-select")) as EditSelMod7;
+  const parsePub = inp.parsePublishBody as ((raw: unknown) => Doc) | undefined;
+  const parseSch = inp.parseScheduleBody as ((raw: unknown) => Doc) | undefined;
+  const parseUpd = inp.parseUpdateBody as (raw: unknown) => Doc;
+  const norm = inp.normalizeHubUtc as ((s: string) => string | null) | undefined;
+  const nowIso = new Date(B7_NOW).toISOString();
+  const at = (sec: number) => new Date(B7_NOW + sec * 1000).toISOString();
+  const okAuthW = (async () => ({ ok: true, engine: { id: 8, name: "w", status: "active", hubRead: true, hubWrite: true }, tenants: [{ id: 1, slug: "gcv" }] })) as never;
+  const lockWith = (ops: unknown) => (lockMod ? (a: never, fn: never) => lockMod.withHubArticleLock(a, fn, ops as never) : undefined) as never;
+  const has = (...fns: unknown[]) => core != null && fns.every((f) => typeof f === "function");
+  const miss = (label: string, wanted: unknown) => expect(label, B7_MISSING, wanted);
+  type Run = { status: number; body: Doc; retryAfter: string | null; f: ReturnType<typeof fakeLockOps7> };
+  const exec = async (op: "publish" | "schedule", store: ReturnType<typeof fakePubStore7>, b: Doc, o: { id?: string; f?: ReturnType<typeof fakeLockOps7> } = {}): Promise<Run> => {
+    const f = o.f ?? fakeLockOps7();
+    const id = o.id ?? "5";
+    const req = new Request(`http://localhost/api/hub/articles/${id}/${op}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
+    const deps = { getPayload: async () => store.payload as never, authenticate: okAuthW, lock: lockWith(f.ops), now: () => B7_NOW };
+    const ctx = { params: Promise.resolve({ id }) };
+    const res = op === "publish" ? await core!.handleHubPublishWith(req, ctx, deps as never) : await core!.handleHubScheduleWith(req, ctx, deps as never);
+    const text = await res.text();
+    let body: Doc = {};
+    try {
+      body = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, body, retryAfter: res.headers.get("retry-after"), f };
+  };
+  const pubB = (ev = 3, extra: Doc = {}) => ({ tenant: "gcv", expectedVersion: ev, actor: B7_ACTOR, ...extra });
+  const schB = (when: string | null = at(7200), ev = 3) => ({ tenant: "gcv", expectedVersion: ev, actor: B7_ACTOR, scheduledFor: when });
+  const unB = (expected: string | null, ev = 3) => ({ tenant: "gcv", expectedVersion: ev, actor: B7_ACTOR, scheduledFor: null, expectedScheduledFor: expected });
+  const fieldsOf = (r: { status: number; body: Doc }) => [r.status, r.body.status, sortKeys6(r.body.fields ?? null)];
+  const acquires = (f: ReturnType<typeof fakeLockOps7>) => f.events.filter((e) => e.startsWith("acquire")).map((e) => e.split(":").slice(2).join(":"));
+
+  // ── S-U / U-U / P-U: the pure parsers (K7) ──
+  if (norm) {
+    expect("S-U1: K7 normalises …T10:00Z / …T10:00:00Z ⇒ …T10:00:00.000Z and …T10:00:00.5Z / …T10:00:00.500Z ⇒ …T10:00:00.500Z", ["2026-10-08T10:00Z", "2026-10-08T10:00:00Z", "2026-10-08T10:00:00.5Z", "2026-10-08T10:00:00.500Z", "2026-10-08T10:00:00.05Z"].map((s) => norm(s)), ["2026-10-08T10:00:00.000Z", "2026-10-08T10:00:00.000Z", "2026-10-08T10:00:00.500Z", "2026-10-08T10:00:00.500Z", "2026-10-08T10:00:00.050Z"]);
+  } else miss("S-U1: K7 normalises …", "normalizeHubUtc");
+  if (parseSch && parsePub) {
+    const fOf = (raw: Doc) => {
+      const r = parseSch(raw);
+      return r.ok ? "ok" : [r.status, (r.body as Doc).fields ?? (r.body as Doc).reason];
+    };
+    const rolled = ["2026-02-30T10:00:00Z", "2026-04-31T10:00:00Z", "2026-10-08T24:00:00Z"];
+    expect("S-U2: K7 rolled dates (2026-02-30, 2026-04-31, …T24:00) ⇒ 422 scheduledFor format (toISOString must equal the normalised input)", rolled.map((s) => fOf(schB(s))), rolled.map(() => [422, { scheduledFor: "format" }]));
+    const impossible = ["2026-13-01T10:00Z", "2026-10-08T25:00Z", "2026-10-08T10:60Z", "2026-10-08T10:00:60Z", "2026-00-10T10:00Z", "2026-10-00T10:00Z"];
+    let threw: unknown = null;
+    let out: unknown[] = [];
+    try {
+      out = impossible.map((s) => fOf(schB(s)));
+    } catch (e) {
+      threw = (e as Error).name;
+    }
+    expect("S-U3: K7 impossible times (month 13, hour 25, minute 60, second 60, month 00, day 00) ⇒ 422 format, never a throw (Number.isNaN before toISOString)", [threw, out], [null, impossible.map(() => [422, { scheduledFor: "format" }])]);
+    const noKey = { tenant: "gcv", expectedVersion: 3, actor: B7_ACTOR };
+    expect("S-U4: scheduledFor missing ⇒ required; 123 ⇒ type; 'tomorrow' ⇒ format; '2026-10-08 10:00:00Z' (space) ⇒ format; '2026-10-08T10:00:00+07:00' ⇒ format", [fOf(noKey), fOf(schB(123 as never)), fOf(schB("tomorrow")), fOf(schB("2026-10-08 10:00:00Z")), fOf(schB("2026-10-08T10:00:00+07:00"))], [[422, { scheduledFor: "required" }], [422, { scheduledFor: "type" }], [422, { scheduledFor: "format" }], [422, { scheduledFor: "format" }], [422, { scheduledFor: "format" }]]);
+    const u1 = parseSch({ ...noKey, scheduledFor: null });
+    const u2 = parseSch({ ...schB(at(7200)), expectedScheduledFor: at(7200) });
+    const u3 = parseSch(unB("soon"));
+    const u4 = parseSch(unB(null));
+    const u5 = parseSch(unB("2026-10-08T05:00Z"));
+    expect("U-U1: unschedule body: expectedScheduledFor missing ⇒ 422 required; next to a scheduledFor VALUE ⇒ 422 invalid; bad string ⇒ format; null and a K7 string ⇒ ok (op unschedule, expected normalised)", [
+      [u1.status, (u1.body as Doc | undefined)?.fields], [u2.status, (u2.body as Doc | undefined)?.fields], [u3.status, (u3.body as Doc | undefined)?.fields],
+      [u4.ok, (u4.value as Doc | undefined)?.op, (u4.value as Doc | undefined)?.expectedScheduledFor], [u5.ok, (u5.value as Doc | undefined)?.expectedScheduledFor],
+    ], [[422, { expectedScheduledFor: "required" }], [422, { expectedScheduledFor: "invalid" }], [422, { expectedScheduledFor: "format" }], [true, "unschedule", null], [true, "2026-10-08T05:00:00.000Z"]]);
+    const p = (raw: unknown) => {
+      const r = parsePub(raw);
+      return r.ok ? ["ok", (r.value as Doc).op] : [r.status, (r.body as Doc).reason ?? (r.body as Doc).fields];
+    };
+    expect("P-U1: publish body = exactly tenant / expectedVersion / actor: + scheduledFor ⇒ 400 unknown field(s): scheduledFor; + zzz ⇒ 400; tenant missing ⇒ 400; not an object ⇒ 400; the 3 keys ⇒ ok op publish", [p({ ...pubB(), scheduledFor: at(7200) }), p({ ...pubB(), zzz: 1 }), p({ expectedVersion: 3, actor: B7_ACTOR }), p([]), p(pubB())], [[400, "unknown field(s): scheduledFor"], [400, "unknown field(s): zzz"], [400, "tenant is required"], [400, "body must be a JSON object"], ["ok", "publish"]]);
+    // E-actor (R3C-16): the copied actor block must stay identical to parseCommon's.
+    const actors: unknown[] = [undefined, "x", [], { role: "editor" }, { email: "a", role: "editor" }, { email: "a@b", role: "editor" }, { email: "a@b.co", role: "boss" }, { email: "a@b.co" }, { email: "a@b.co", role: "editor", id: true }, { email: "a@b.co", role: "editor", id: "x".repeat(65) }, { email: "a\u0001@b.co", role: "editor" }, { email: `${"a".repeat(250)}@b.co`, role: "editor" }, { email: "a@b.co", role: "editor", q: 1 }, { email: "a@b.co", role: "marketer", id: 7 }, { email: "a@b.co", role: 5 }];
+    const shape = (r: Doc) => (r.ok ? ["ok", (r.value as Doc).actor] : [r.status, r.body]);
+    const rowsE = actors.map((a) => {
+      const base: Doc = { tenant: "gcv", expectedVersion: 3 };
+      if (a !== undefined) base.actor = a;
+      return [shape(parseUpd(base)), shape(parsePub(base)), shape(parseSch({ ...base, scheduledFor: at(7200) }))];
+    });
+    expect("E-actor: the SAME actor input ⇒ the SAME result from parseUpdateBody (PATCH), parsePublishBody and parseScheduleBody (15 variants, bad and good)", rowsE.map((r) => JSON.stringify(r[0]) === JSON.stringify(r[1]) && JSON.stringify(r[0]) === JSON.stringify(r[2])), actors.map(() => true));
+    const evs: unknown[] = [undefined, "x", 0, 2147483648, 1.5, 7];
+    const rowsV = evs.map((ev) => {
+      const base: Doc = { tenant: "gcv", actor: B7_ACTOR };
+      if (ev !== undefined) base.expectedVersion = ev;
+      const a = parseUpd(base);
+      const b = parsePub(base);
+      return JSON.stringify(a.ok ? (a.value as Doc).expectedVersion : a.body) === JSON.stringify(b.ok ? (b.value as Doc).expectedVersion : b.body);
+    });
+    expect("E-version: expectedVersion missing / 'x' / 0 / 2147483648 / 1.5 / 7 ⇒ the SAME result as PATCH", rowsV, evs.map(() => true));
+  } else {
+    for (const n of ["S-U2", "S-U3", "S-U4", "U-U1", "P-U1", "E-actor", "E-version"]) miss(`${n}: parser`, "parsePublishBody / parseScheduleBody");
+  }
+
+  if (core && typeof core.scheduleWindowCode === "function") {
+    expect("S-U5: window (now injected): +60 s ⇒ out_of_range, +61 s ⇒ ok, +365 d ⇒ ok, +365 d + 1 s ⇒ out_of_range, −1 s ⇒ out_of_range", [60, 61, 365 * 86400, 365 * 86400 + 1, -1].map((s) => core.scheduleWindowCode(at(s), B7_NOW)), ["out_of_range", null, null, "out_of_range", "out_of_range"]);
+  } else miss("S-U5: window", "scheduleWindowCode");
+
+  if (!has(core?.handleHubPublishWith, core?.handleHubScheduleWith) || !lockMod) {
+    for (const n of ["P-U2", "P-U3", "S-U6", "U-U2", "U-NOSLUG", "U-DUE", "U-CHANGED", "U-NULL", "U-K4", "G-U1", "G-U2", "G-U3", "G-U4", "G-U5", "G-U6", "G-U7", "G-U8", "V-U", "V-ALL", "V-WIN", "V-PUB", "V-LOOKUP", "C-U1", "C-U2", "C-U3", "C-U4", "C-U5"]) miss(`${n}: core`, "present");
+  } else {
+    const sortedUpd = (u: Doc | undefined) => u && sortKeys6({ id: u.id, draft: u.draft, data: u.data, context: u.context, depth: u.depth, overrideAccess: u.overrideAccess, viaReq: u.viaReq });
+    {
+      const s = fakePubStore7();
+      s.seed(5);
+      const r = await exec("publish", s, pubB());
+      expect("P-U2: publish ⇒ 200 {ok, id, tenant, workflowStatus published, version 3, publishedAt = now}; ONE non-draft update via req, data EXACTLY {_status published, workflowStatus published, publishedAt now}, context EXACTLY {hubWrite {actor, reason 'hub composer publish'}, engineId} (NO disableRevalidate); 1 commit, 0 kill", [r.status, r.body, s.updates.length, sortedUpd(s.updates[0]), r.f.count("commit"), r.f.count("kill"), s.articles.get(5)?.main.workflowStatus], [200, { ok: true, id: 5, tenant: "gcv", workflowStatus: "published", version: 3, publishedAt: nowIso }, 1, sortKeys6({ id: 5, draft: false, data: { _status: "published", workflowStatus: "published", publishedAt: nowIso }, context: { hubWrite: { actor: B7_ACTOR, reason: B7_REASON.publish }, engineId: 8 }, depth: 0, overrideAccess: true, viaReq: true }), 1, 0, "published"]);
+      expect("P-U3: publish takes the article lock, then ONE slug lock on the STORED slug (order [article, slug])", acquires(r.f), [la7ArticleKey(1, 5).join(":"), la7SlugKey(1, "s-5").join(":")]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5);
+      const r = await exec("schedule", s, schB("2026-10-08T05:00Z"));
+      const when = "2026-10-08T05:00:00.000Z";
+      expect("S-U6: schedule ⇒ 200 {…, workflowStatus scheduled, scheduledFor normalised}; ONE draft:true update, data EXACTLY {workflowStatus scheduled, scheduledFor, publishedAt = scheduledFor, _status draft}, context {hubWrite reason 'hub composer schedule', engineId, disableRevalidate true}; main row untouched", [r.status, r.body, s.updates.length, sortedUpd(s.updates[0]), s.articles.get(5)?.main.workflowStatus, acquires(r.f).length], [200, { ok: true, id: 5, tenant: "gcv", workflowStatus: "scheduled", version: 3, scheduledFor: when }, 1, sortKeys6({ id: 5, draft: true, data: { workflowStatus: "scheduled", scheduledFor: when, publishedAt: when, _status: "draft" }, context: { hubWrite: { actor: B7_ACTOR, reason: B7_REASON.schedule }, engineId: 8, disableRevalidate: true }, depth: 0, overrideAccess: true, viaReq: true }), "draft", 2]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5, { workflowStatus: "scheduled", scheduledFor: at(7200) });
+      const r = await exec("schedule", s, unB(at(7200)));
+      expect("U-U2: unschedule ⇒ 200 {…, workflowStatus draft, scheduledFor null}; ONE draft:true update, data EXACTLY {workflowStatus draft, scheduledFor null, publishedAt = now, _status draft}, context {hubWrite reason 'hub composer unschedule', engineId, disableRevalidate true}", [r.status, r.body, s.updates.length, sortedUpd(s.updates[0])], [200, { ok: true, id: 5, tenant: "gcv", workflowStatus: "draft", version: 3, scheduledFor: null }, 1, sortKeys6({ id: 5, draft: true, data: { workflowStatus: "draft", scheduledFor: null, publishedAt: nowIso, _status: "draft" }, context: { hubWrite: { actor: B7_ACTOR, reason: B7_REASON.unschedule }, engineId: 8, disableRevalidate: true }, depth: 0, overrideAccess: true, viaReq: true })]);
+      expect("U-NOSLUG: unschedule ⇒ acquires = [article key] only (slug key ×0; no K4 / K13 lookups)", [acquires(r.f), s.lookups.length], [[la7ArticleKey(1, 5).join(":")], 0]);
+    }
+    {
+      const out: unknown[] = [];
+      for (const sec of [59, 60, 61]) {
+        const s = fakePubStore7();
+        s.seed(5, { workflowStatus: "scheduled", scheduledFor: at(sec) });
+        const r = await exec("schedule", s, unB(at(sec)));
+        out.push([sec, r.status, r.body.status ?? null, r.body.reason ?? null, r.body.currentScheduledFor ?? null, s.updates.length]);
+      }
+      expect("U-DUE: (unit, now injected) stored hour now+59 s ⇒ 409 schedule_conflict due + currentScheduledFor, 0 update; now+60 s ⇒ 409 due; now+61 s ⇒ 200", out, [[59, 409, "schedule_conflict", "due", at(59), 0], [60, 409, "schedule_conflict", "due", at(60), 0], [61, 200, null, null, null, 1]]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5, { workflowStatus: "scheduled", scheduledFor: "2026-10-08T05:00:00.000Z" });
+      const r = await exec("schedule", s, unB("2026-10-08T06:00:00.000Z"));
+      const s2 = fakePubStore7();
+      s2.seed(5, { workflowStatus: "scheduled", scheduledFor: "2026-10-08T05:00:00.000Z" });
+      const r2 = await exec("schedule", s2, unB("2026-10-08T05:00Z"));
+      expect("U-CHANGED: expectedScheduledFor ≠ the stored hour ⇒ 409 {schedule_conflict, changed, currentScheduledFor = stored}, 0 update; the same instant written differently (…T05:00Z) ⇒ 200", [r.status, r.body, s.updates.length, r2.status], [409, { ok: false, status: "schedule_conflict", reason: "changed", currentScheduledFor: "2026-10-08T05:00:00.000Z" }, 0, 200]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5, { workflowStatus: "scheduled", scheduledFor: null });
+      const r = await exec("schedule", s, unB(at(7200)));
+      const s2 = fakePubStore7();
+      s2.seed(5, { workflowStatus: "scheduled", scheduledFor: null });
+      const r2 = await exec("schedule", s2, unB(null));
+      expect("U-NULL: a scheduled article stored WITHOUT an hour: expectedScheduledFor string ⇒ 409 changed (currentScheduledFor null); null ⇒ 200 (the due check is skipped)", [r.status, r.body, r2.status, s2.updates.length], [409, { ok: false, status: "schedule_conflict", reason: "changed", currentScheduledFor: null }, 200, 1]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5, { workflowStatus: "scheduled", scheduledFor: at(7200), author: null, pillar: 13, subSection: null, body: null, title: "" });
+      const r = await exec("schedule", s, unB(at(7200)));
+      expect("U-K4: a scheduled article that now breaks K4 / K13 (no author, blocked pillar, no body, no title) ⇒ unschedule 200, 0 taxonomy lookups", [r.status, s.lookups.length], [200, 0]);
+    }
+    // ── G-U: gates ──
+    {
+      const s = fakePubStore7();
+      s.seed(5, { workflowStatus: "scheduled", scheduledFor: at(7200) });
+      const a = await exec("publish", s, pubB());
+      const b = await exec("schedule", s, schB(at(9000)));
+      expect("G-U1: K2 — publish from a latest SCHEDULED version ⇒ 422 not_editable status, 0 update", [a.status, a.body, s.updates.length], [422, { ok: false, status: "not_editable", reason: "status" }, 0]);
+      expect("G-U2: K1 — schedule a latest SCHEDULED version again ⇒ 422 not_editable status, 0 update", [b.status, b.body, s.updates.length], [422, { ok: false, status: "not_editable", reason: "status" }, 0]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5);
+      const r = await exec("schedule", s, unB(null));
+      expect("G-U3: unschedule a latest DRAFT ⇒ 422 not_editable status, 0 update", [r.status, r.body, s.updates.length], [422, { ok: false, status: "not_editable", reason: "status" }, 0]);
+    }
+    {
+      const s = fakePubStore7({ hubAuthor: false });
+      s.seed(5);
+      s.seed(6, { workflowStatus: "scheduled", scheduledFor: at(7200) });
+      const out = [await exec("publish", s, pubB()), await exec("schedule", s, schB()), await exec("schedule", s, unB(at(7200)), { id: "6" })].map((r) => [r.status, r.body.reason]);
+      expect("G-U4: not hub-authored (lastEngine has no hubAuthor) ⇒ 422 not_editable not_hub_authored for publish / schedule / unschedule, 0 update", [out, s.updates.length], [[[422, "not_hub_authored"], [422, "not_hub_authored"], [422, "not_hub_authored"]], 0]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5, { origin: "engine" });
+      s.seed(6, {}, { workflowStatus: "published" });
+      s.seed(7, { origin: "engine", workflowStatus: "scheduled", scheduledFor: at(7200) });
+      const out = [await exec("publish", s, pubB()), await exec("publish", s, pubB(), { id: "6" }), await exec("schedule", s, unB(at(7200)), { id: "7" })].map((r) => [r.status, r.body.reason]);
+      expect("G-U5: latest origin engine ⇒ 422 origin; main row published ⇒ 422 status; unschedule a non-manual latest ⇒ 422 origin", [out, s.updates.length], [[[422, "origin"], [422, "status"], [422, "origin"]], 0]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5);
+      s.seed(6, { workflowStatus: "scheduled", scheduledFor: at(7200) });
+      const out = [await exec("publish", s, pubB(2)), await exec("schedule", s, schB(at(7200), 4)), await exec("schedule", s, unB(at(7200), 9), { id: "6" })].map((r) => [r.status, r.body]);
+      const vc = { ok: false, status: "version_conflict", reason: "article version changed", currentVersion: 3 };
+      expect("G-U6: expectedVersion ≠ the latest version ⇒ 409 version_conflict currentVersion 3 for publish / schedule / unschedule, 0 update", [out, s.updates.length], [[[409, vc], [409, vc], [409, vc]], 0]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5, { tenant: 2 });
+      s.seed(6, {}, { tenant: 2 });
+      const out = [await exec("publish", s, pubB()), await exec("publish", s, pubB(), { id: "6" }), await exec("publish", s, pubB(), { id: "77" }), await exec("schedule", s, schB(), { id: "2147483648" })].map((r) => [r.status, r.body]);
+      expect("G-U7: latest or main row of another tenant / missing / > int4 ⇒ 404 with the ONE not_found body", out, [[404, B7_NOT_FOUND], [404, B7_NOT_FOUND], [404, B7_NOT_FOUND], [404, B7_NOT_FOUND]]);
+    }
+    {
+      const s = fakePubStore7({ articlesFeature: false });
+      s.seed(5);
+      const a = await exec("publish", s, pubB());
+      const s2 = fakePubStore7();
+      s2.seed(5);
+      const b = await exec("schedule", s2, { ...schB(), tenant: "wad" });
+      expect("G-U8: features.articles off ⇒ 403 feature_disabled; tenant outside the grant ⇒ 403 forbidden + allowedTenants + one engine_tenant_denied row", [a.status, a.body, b.status, b.body, s2.activity.filter((x) => x.eventType === "engine_tenant_denied").length], [403, { ok: false, status: "feature_disabled", reason: "articles feature disabled for tenant" }, 403, { ok: false, status: "forbidden", reason: "tenant not in allowed scope", allowedTenants: ["gcv"] }, 1]);
+    }
+    // ── V-U: K4 (a…l) + K13, one defect per case, through SCHEDULE (publish shares the check) ──
+    const v1 = async (latest: Doc) => {
+      const s = fakePubStore7();
+      s.seed(5, latest);
+      const r = await exec("schedule", s, schB());
+      return [...fieldsOf(r), s.updates.length];
+    };
+    const ok200 = [200, undefined, null, 1];
+    const inv = (f: Doc) => [422, "invalid", sortKeys6(f), 0];
+    const cases: [string, Doc, unknown][] = [
+      ["a title empty", { title: "" }, inv({ title: "required" })],
+      ["a title blank", { title: "   " }, inv({ title: "required" })],
+      ["b body null", { body: null }, inv({ bodyMarkdown: "required" })],
+      ["b body = empty paragraph", { body: { root: { type: "root", children: [{ type: "paragraph", children: [] }] } } }, inv({ bodyMarkdown: "required" })],
+      ["c pillar null", { pillar: null, subSection: null }, inv({ pillarSlug: "required" })],
+      ["c pillar of another tenant", { pillar: 99, subSection: null }, inv({ pillarSlug: "invalid" })],
+      ["d sub-section missing, the pillar HAS sub-sections (D-SUB)", { subSection: null }, inv({ subSectionSlug: "required" })],
+      ["d sub-section missing, the pillar has NO sub-section", { pillar: 12, subSection: null }, ok200],
+      ["d sub-section of another pillar", { subSection: 23 }, inv({ subSectionSlug: "invalid" })],
+      ["d sub-section of another tenant", { subSection: 98 }, inv({ subSectionSlug: "invalid" })],
+      ["e author null", { author: null }, inv({ authorId: "required" })],
+      ["f sponsored without sponsor", { sponsored: true, sponsor: null }, inv({ sponsor: "required" })],
+      ["f sponsored with sponsor", { sponsored: true, sponsor: "ACME" }, ok200],
+      ["g slug empty", { slug: "" }, inv({ slug: "required" })],
+      ["h readMin 0", { readMin: 0 }, inv({ readMin: "out_of_range" })],
+      ["h readMin null", { readMin: null }, inv({ readMin: "out_of_range" })],
+      ["i secondary row pillar null", { secondarySections: [{ pillar: null }] }, inv({ secondary: "invalid" })],
+      ["i secondary row sub-section of another pillar", { secondarySections: [{ pillar: 14, subSection: 21 }] }, inv({ secondary: "invalid" })],
+      ["i secondary row pillar of another tenant", { secondarySections: [{ pillar: 99 }] }, inv({ secondary: "invalid" })],
+      ["i secondary row valid", { secondarySections: [{ pillar: 14, subSection: 23 }] }, ok200],
+      ["j video without heroImage", { video: 5, videoDescription: "d" }, inv({ heroImage: "required" })],
+      ["j video without heroImage and videoDescription", { video: 5 }, inv({ heroImage: "required", videoDescription: "required" })],
+      ["j video with heroImage and videoDescription", { video: 5, heroImage: 4, videoDescription: "d" }, ok200],
+      ["k primary pillar engine-blocked (exclusive)", { pillar: 13, subSection: null }, inv({ pillarSlug: "blocked_pillar" })],
+      ["k secondary row engine-blocked (exclusive)", { secondarySections: [{ pillar: 13 }] }, inv({ secondary: "blocked_pillar" })],
+      ["k pressroom primary + no author (no single-home exemption)", { pillar: 15, subSection: null, author: null }, inv({ pillarSlug: "blocked_pillar", authorId: "required" })],
+      ["l briefs row without source", { briefs: [{ label: "a", value: "1" }] }, inv({ briefs: "invalid" })],
+      ["l briefs 5 rows", { briefs: [1, 2, 3, 4, 5].map((i) => ({ label: `l${i}`, value: `${i}`, source: "s" })) }, inv({ briefs: "invalid" })],
+      ["l briefs 4 full rows", { briefs: [1, 2, 3, 4].map((i) => ({ label: `l${i}`, value: `${i}`, source: "s" })) }, ok200],
+    ];
+    for (const [k, latest, want] of cases) expect(`V-U: ${k}`, await v1(latest), want);
+    expect("V-ALL: every K4 item wrong at once ⇒ ONE 422 with every field (gộp), 0 update", await v1({ title: "", body: null, slug: "", readMin: 0, author: null, sponsored: true, sponsor: null, pillar: null, subSection: null, secondarySections: [{ pillar: null }], video: 5, briefs: [{ label: "a" }] }), inv({ title: "required", bodyMarkdown: "required", slug: "required", readMin: "out_of_range", authorId: "required", sponsor: "required", heroImage: "required", videoDescription: "required", briefs: "invalid", pillarSlug: "required", secondary: "invalid" }));
+    {
+      const s = fakePubStore7();
+      s.seed(5, { author: null });
+      const r = await exec("schedule", s, schB(at(30)));
+      expect("V-WIN: schedule window error + K4 error ⇒ ONE 422 {authorId required, scheduledFor out_of_range}", [...fieldsOf(r), s.updates.length], inv({ authorId: "required", scheduledFor: "out_of_range" }));
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5, { author: null });
+      const r = await exec("publish", s, pubB());
+      expect("V-PUB: publish runs the same K4 check (author null ⇒ 422 authorId required), 0 update", [...fieldsOf(r), s.updates.length], inv({ authorId: "required" }));
+    }
+    {
+      const s = fakePubStore7({ lookupThrows: true });
+      s.seed(5);
+      const r = await exec("schedule", s, schB());
+      expect("V-LOOKUP: a taxonomy lookup that throws ⇒ 500 internal_error + one integration_error row (no guess), 0 update, 0 commit, 1 kill", [r.status, r.body, s.activity.filter((x) => x.eventType === "integration_error").length, s.updates.length, r.f.count("commit"), r.f.count("kill")], [500, { ok: false, status: "internal_error" }, 1, 0, 0, 1]);
+    }
+    // ── C-U: the write step's error mapping + one deterministic race ──
+    {
+      const s = fakePubStore7({ updateThrows: Object.assign(new Error("fk"), { name: "DatabaseError", code: "23503" }) });
+      s.seed(5);
+      const r = await exec("publish", s, pubB());
+      expect("C-U1: write fails with class 23 (23503) and NO other article holds the slug ⇒ 500 internal_error + one integration_error row (NOT 409 existing:{id:null}); 1 kill", [r.status, r.body, s.activity.filter((x) => x.eventType === "integration_error").length, r.f.count("kill"), r.f.count("commit")], [500, { ok: false, status: "internal_error" }, 1, 1, 0]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5);
+      s.seed(6, { slug: "s-5" });
+      const r = await exec("publish", s, pubB());
+      expect("C-U2: another article's latest version holds the slug ⇒ 409 slug_conflict existing = that id, 0 update, 1 kill", [r.status, r.body, s.updates.length, r.f.count("kill")], [409, { ok: false, status: "slug_conflict", reason: "slug already exists for this tenant", existing: { id: 6 } }, 0, 1]);
+    }
+    {
+      const s = fakePubStore7({ updateThrows: Object.assign(new Error("lock"), { name: "DatabaseError", code: "55P03" }) });
+      s.seed(5);
+      const r = await exec("publish", s, pubB());
+      expect("C-U3: write throws 55P03 ⇒ 503 busy + Retry-After 2, 0 integration_error, 1 kill", [r.status, r.body, r.retryAfter, s.activity.filter((x) => x.eventType === "integration_error").length, r.f.count("kill")], [503, LA7_BUSY_BODY, "2", 0, 1]);
+    }
+    {
+      const ve = Object.assign(new Error("The following fields are invalid"), { name: "ValidationError", data: { errors: [{ path: "pillar" }, { path: "author" }] } });
+      const s = fakePubStore7({ updateThrows: ve });
+      s.seed(5);
+      const r = await exec("publish", s, pubB());
+      expect("C-U4: the non-draft update throws a Payload ValidationError (the Payload net behind K4) ⇒ 422 invalid {pillar, author}, 1 kill", [r.status, r.body.status, r.body.fields, r.f.count("kill")], [422, "invalid", { pillar: "invalid", author: "invalid" }, 1]);
+    }
+    {
+      const s = fakePubStore7();
+      s.seed(5);
+      const f = fakeLockOps7();
+      const [a, b] = await Promise.all([exec("publish", s, pubB(), { f }), exec("publish", s, pubB(), { f })]);
+      const st = [a, b].sort((x, y) => x.status - y.status);
+      expect("C-U5: two concurrent publish on ONE draft through the REAL helper (in-memory mutex) ⇒ exactly one 200 + one 422 not_editable status; 1 commit + 1 kill; one update", [st.map((x) => x.status), st[1]?.body, f.count("commit"), f.count("kill"), s.updates.length], [[200, 422], { ok: false, status: "not_editable", reason: "status" }, 1, 1, 1]);
+    }
+  }
+
+  // ── K10-U: the view=edit "scheduled" branch (hub-article-edit-select.ts) ──
+  {
+    const mk = (latest: Doc, o: { hubAuthor?: boolean; main?: Doc } = {}) => {
+      const s = fakePubStore7({ hubAuthor: o.hubAuthor });
+      s.seed(5, latest, o.main);
+      return s;
+    };
+    const load = async (s: ReturnType<typeof fakePubStore7>) => {
+      const r = await sel.loadHubArticleEdit({ payload: s.payload as never, mainDoc: s.articles.get(5)!.main, tenantId: 1 });
+      return [r.edit, r.latest ? (r.latest as Doc).title : null];
+    };
+    const sched = { workflowStatus: "scheduled", scheduledFor: "2026-10-08T05:00:00.000Z", title: "Latest title", version: 4 };
+    expect("K10-U1: latest scheduled + hub-authored + main manual draft ⇒ edit EXACTLY {editable false, editableReason scheduled, scheduledFor, version} and the LATEST doc is returned (article.* from it)", await load(mk(sched)), [{ editable: false, editableReason: "scheduled", scheduledFor: "2026-10-08T05:00:00.000Z", version: 4 }, "Latest title"]);
+    expect("K10-U2: latest scheduled but NOT hub-authored (CMS-admin schedule) ⇒ edit {editable false, editableReason status} only, latest NOT returned", await load(mk(sched, { hubAuthor: false })), [{ editable: false, editableReason: "status" }, null]);
+    expect("K10-U3: hub-authored scheduled article stored WITHOUT an hour ⇒ scheduledFor null", await load(mk({ ...sched, scheduledFor: null })), [{ editable: false, editableReason: "scheduled", scheduledFor: null, version: 4 }, "Latest title"]);
+    expect("K10-U4: main row published ⇒ status, latest never used", await load(mk(sched, { main: { workflowStatus: "published" } })), [{ editable: false, editableReason: "status" }, null]);
+    expect("K10-U5: HUB_ARTICLE_EDIT_SELECT selects scheduledFor (and still version / lastEngine)", [(sel.HUB_ARTICLE_EDIT_SELECT as Doc).scheduledFor ?? null, (sel.HUB_ARTICLE_EDIT_SELECT as Doc).version ?? null, (sel.HUB_ARTICLE_EDIT_SELECT as Doc).lastEngine ?? null], [true, true, true]);
+  }
+}
+
+/** Shared HTTP / DB helpers of the CMS-B groups (`--check7 --in`), bound to one probe run. */
+function b7Env(payload: P, s6: Setup6, f7: Setup7) {
+  const db = rawDb(payload);
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const T = {
+    author: tok(s6.engines.author.tokenFile),
+    write: tok(s6.engines.writeonly.tokenFile),
+    noauthor: tok(s6.engines.noauthor.tokenFile),
+    writenoread: tok(f7.engines.writenoread.tokenFile),
+  };
+  const pubTokDtw = tok(s6.publicReadTokenFile.dtw!);
+  const tid = { dtw: s6.tenants.dtw!.id, gcv: s6.tenants.gcv!.id, "world-travel-brief": s6.tenants["world-travel-brief"]!.id } as const;
+  type TB = keyof typeof tid;
+  const fx = (t: TB) => s6.fixtures[t]!;
+  const run = runId6();
+  let seq = 0;
+  type Reply = { status: number; text: string; body: Doc; ms: number; retryAfter: string | null; aborted?: boolean };
+  const call = async (method: string, path: string, body?: unknown, token: string | null = T.write, timeoutMs = 20_000, raw?: string): Promise<Reply> => {
+    const t0 = performance.now();
+    try {
+      const res = await fetch(`${BASE}${path}`, {
+        method,
+        headers: { ...(body !== undefined || raw !== undefined ? { "content-type": "application/json" } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        body: raw !== undefined ? raw : body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const text = await res.text();
+      let parsed: Doc = {};
+      try {
+        parsed = JSON.parse(text) as Doc;
+      } catch {
+        /* non-JSON */
+      }
+      return { status: res.status, text, body: parsed, ms: Math.round(performance.now() - t0), retryAfter: res.headers.get("retry-after") };
+    } catch {
+      return { status: 0, text: "", body: {}, ms: Math.round(performance.now() - t0), retryAfter: null, aborted: true };
+    }
+  };
+  const rows = async (q: unknown): Promise<Doc[]> => ((await db.execute(q)) as { rows?: Doc[] }).rows ?? [];
+  const mkDraft = async (t: TB, extra: Doc = {}) => {
+    const slug = `b7-${run}-${seq++}`;
+    const body: Doc = { tenant: t, title: `B7 ${slug}`, slug, pillarSlug: "p6-main", subSectionSlug: "p6-sub", authorId: fx(t).authors[0], bodyMarkdown: "Đoạn thân bài thử CMS-B.", actor: B7_ACTOR, ...extra };
+    for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
+    const r = await call("POST", "/api/hub/articles", body, T.author);
+    if (r.status !== 201) throw new Error(`mkDraft ${t} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return { id: r.body.id as number, slug: (r.body.slug as string) ?? slug, version: r.body.version as number };
+  };
+  const patchHub = (t: TB, id: number, expectedVersion: number, fields: Doc) => call("PATCH", `/api/hub/articles/${id}`, { tenant: t, actor: B7_ACTOR, expectedVersion, ...fields }, T.author);
+  const pub = (t: string, id: number | string, ev: unknown, token: string | null = T.write) => call("POST", `/api/hub/articles/${id}/publish`, { tenant: t, expectedVersion: ev, actor: B7_ACTOR }, token);
+  const sch = (t: string, id: number | string, ev: unknown, scheduledFor: unknown) => call("POST", `/api/hub/articles/${id}/schedule`, { tenant: t, expectedVersion: ev, actor: B7_ACTOR, scheduledFor });
+  const unsch = (t: string, id: number | string, ev: unknown, expectedScheduledFor: unknown) => call("POST", `/api/hub/articles/${id}/schedule`, { tenant: t, expectedVersion: ev, actor: B7_ACTOR, scheduledFor: null, expectedScheduledFor });
+  const latestOf = async (id: number) => (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const mainOf = async (id: number) => (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const mainRaw = async (id: number) => (await rows(sql`SELECT _status::text AS s, workflow_status::text AS w, version::int AS v, published_at AS "publishedAt" FROM articles WHERE id = ${id}`))[0] ?? null;
+  const verCount = async (id: number) => Number((await rows(sql`SELECT count(*)::int AS n FROM _articles_v WHERE parent_id = ${id}`))[0]?.n ?? 0);
+  const maxLogId = async () => Number((await rows(sql`SELECT coalesce(max(id), 0)::int AS m FROM activity_log`))[0]?.m ?? 0);
+  const logsFor = async (id: number, since: number) => rows(sql`SELECT event_type::text AS e, from_status AS f, to_status AS t, detail FROM activity_log WHERE target_id = ${String(id)} AND id > ${since} ORDER BY id`);
+  const tjobs = async (id: number) => Number((await rows(sql`SELECT count(*)::int AS n FROM translation_jobs WHERE article_id = ${id}`))[0]?.n ?? 0);
+  const pendingOf = async (id: number) => ((((await latestOf(id)).translationStatus as Doc[] | undefined) ?? []).filter((r) => r.state === "pending")).length;
+  const advisory = async () => rows(sql`SELECT pid, granted FROM pg_locks WHERE locktype = 'advisory'`);
+  const inMin = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
+  const inSec = (s: number) => new Date(Date.now() + s * 1000).toISOString();
+  /** A CMS-admin style Local API draft edit (no hub context): bumps version, keeps lastEngine. */
+  const tamper = (id: number, data: Doc) => payload.update({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, data: data as never, context: { disableRevalidate: true } });
+  /** Move / set the stored hour of a scheduled draft (hubWrite context ⇒ version unchanged). */
+  const setHour = (id: number, at: string | null) =>
+    payload.update({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, data: { workflowStatus: "scheduled", scheduledFor: at, publishedAt: at ?? new Date().toISOString(), _status: "draft" } as never, context: { hubWrite: { actor: B7_ACTOR, reason: "probe sets the hour" }, engineId: s6.engines.writeonly.id, disableRevalidate: true } });
+  const slugToLatest = async (id: number, slug: string) => {
+    await db.execute(sql`UPDATE _articles_v_locales SET version_slug = ${slug} WHERE _parent_id IN (SELECT id FROM _articles_v WHERE parent_id = ${id} AND latest = true)`);
+  };
+  const snap = async (id: number) => {
+    const l = await latestOf(id);
+    return { version: l.version, lastEngine: l.lastEngine ?? null, editedByHuman: l.editedByHuman ?? null, lastEditedBy: l.lastEditedBy ?? null };
+  };
+  const pubGet = (slug: string) => call("GET", `/api/public/articles/${encodeURIComponent(slug)}`, undefined, pubTokDtw);
+  const pubList = () => call("GET", "/api/public/articles?limit=100", undefined, pubTokDtw);
+  const cron = async () => {
+    const r = await call("GET", "/api/cron/publish-scheduled", undefined, null, 60_000);
+    return { status: r.status, published: ((r.body.published as Doc[] | undefined) ?? []).map((x) => String(x.id)), failed: r.body.failed ?? null };
+  };
+  const pillarId = async (t: TB, slug: string) => ((await payload.find({ collection: "pillars", where: { and: [{ tenant: { equals: tid[t] } }, { slug: { equals: slug } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined)?.id as number | undefined;
+  const subId = async (t: TB, pillarSlug: string, slug: string) => {
+    const p = await pillarId(t, pillarSlug);
+    return ((await payload.find({ collection: "subsections", where: { and: [{ tenant: { equals: tid[t] } }, { pillar: { equals: p } }, { slug: { equals: slug } }] }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as unknown as Doc | undefined)?.id as number | undefined;
+  };
+  // jsonb does not keep key order: the actor is compared with sorted keys (B7_ACTOR_SORTED).
+  const hubDetail = (r: Doc | undefined) => (r ? { via: (r.detail as Doc | null)?.via ?? null, reason: (r.detail as Doc | null)?.reason ?? null, actor: sortKeys6((r.detail as Doc | null)?.actor ?? null) } : null);
+  return { db, T, tid, fx, run, call, rows, mkDraft, patchHub, pub, sch, unsch, latestOf, mainOf, mainRaw, verCount, maxLogId, logsFor, tjobs, pendingOf, advisory, inMin, inSec, tamper, setHour, slugToLatest, snap, pubGet, pubList, cron, pillarId, subId, hubDetail, nextSeq: () => seq++ };
+}
+
+async function check7B(e: { expect: Expect7; want: (id: string) => boolean; payload: P; s6: Setup6; f7: Setup7 }): Promise<void> {
+  const { expect, want, payload, s6, f7 } = e;
+  const E = b7Env(payload, s6, f7);
+  const { T, tid, call, mkDraft, patchHub, pub, sch, unsch, latestOf, mainOf, mainRaw, maxLogId, logsFor, inMin, inSec, tamper, snap } = E;
+  const NF = JSON.stringify(B7_NOT_FOUND);
+  const notEd = (reason: string) => ({ ok: false, status: "not_editable", reason });
+  const fieldsOf = (r: { status: number; body: Doc }) => [r.status, r.body.status ?? null, sortKeys6(r.body.fields ?? null)];
+  // warm both new routes (dev compiles on first hit).
+  {
+    const w = await mkDraft("gcv");
+    await pub("gcv", w.id, w.version + 99);
+    await sch("gcv", w.id, w.version + 99, inMin(120));
+  }
+
+  // ══ A: auth + isolation on the two new routes (PB-12 again) ══
+  if (want("A")) {
+    const g = await mkDraft("gcv");
+    for (const route of ["publish", "schedule"] as const) {
+      const body: Doc = route === "publish" ? { tenant: "gcv", expectedVersion: g.version, actor: B7_ACTOR } : { tenant: "gcv", expectedVersion: g.version, actor: B7_ACTOR, scheduledFor: inMin(120) };
+      const p = (id: number | string, b: Doc, tk: string | null) => call("POST", `/api/hub/articles/${id}/${route}`, b, tk);
+      const r401 = await p(g.id, body, null);
+      expect(`A-1: (${route}) no bearer ⇒ 401`, r401.status, 401);
+      const ra = await p(g.id, body, T.author);
+      const rn = await p(g.id, body, T.noauthor);
+      const rw = await p(g.id, body, T.writenoread);
+      expect(`A-2: (${route}) author key / hubRead-only key (no hubWrite) ⇒ 403 'hub write not allowed for this engine'; hubWrite key without hubRead ⇒ 403 'hub read not allowed for this engine'`, [ra.status, ra.body.reason, rn.status, rn.body.reason, rw.status, rw.body.reason], [403, "hub write not allowed for this engine", 403, "hub write not allowed for this engine", 403, "hub read not allowed for this engine"]);
+      const l0 = await maxLogId();
+      const rwad = await p(g.id, { ...body, tenant: "wad" }, T.write);
+      const denied = Number((await E.rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE id > ${l0} AND event_type = 'engine_tenant_denied'`))[0]?.n);
+      expect(`A-3: (${route}) tenant outside the key (wad) ⇒ 403 forbidden + allowedTenants, one engine_tenant_denied row`, [rwad.status, rwad.body.status, rwad.body.reason, Array.isArray(rwad.body.allowedTenants), denied], [403, "forbidden", "tenant not in allowed scope", true, 1]);
+      const r4 = [await p(g.id, { ...body, tenant: "dtw" }, T.write), await p(2147483648, body, T.write), await p("abc", body, T.write), await p(2147483600, body, T.write)];
+      expect(`A-4: (${route}) id of another tenant / > int4 / malformed / unknown ⇒ 404 with the SAME body`, r4.map((r) => [r.status, r.text]), r4.map(() => [404, NF]));
+    }
+  }
+
+  // ══ E: error bodies byte-for-byte equal to PATCH (K14) ══
+  if (want("E")) {
+    const g = await mkDraft("gcv");
+    const fut = inMin(120);
+    const trio = async (label: string, bp: Doc | undefined, bs: Doc | undefined, o: { id?: number | string; raw?: string; tokens?: [string | null, string | null] } = {}) => {
+      const id = o.id ?? g.id;
+      const [tp, tw] = o.tokens ?? [T.author, T.write];
+      const a = await call("PATCH", `/api/hub/articles/${id}`, bp, tp, 20_000, o.raw);
+      const p = await call("POST", `/api/hub/articles/${id}/publish`, bp, tw, 20_000, o.raw);
+      const s = await call("POST", `/api/hub/articles/${id}/schedule`, bs, tw, 20_000, o.raw);
+      expect(label, [a.status, p.status === a.status && p.text === a.text, s.status === a.status && s.text === a.text], [a.status, true, true]);
+      return a;
+    };
+    const a401 = await trio("E-401: no bearer ⇒ publish / schedule body = PATCH body byte for byte", { tenant: "gcv" }, { tenant: "gcv" }, { tokens: [null, null] });
+    expect("E-401: status 401", a401.status, 401);
+    const big = JSON.stringify({ tenant: "gcv", pad: "a".repeat(1_000_001) });
+    const a413 = await trio("E-413: body > 1,000,000 bytes ⇒ publish / schedule = PATCH byte for byte", undefined, undefined, { raw: big });
+    expect("E-413: status 413", a413.status, 413);
+    await trio("E-400: invalid JSON ⇒ = PATCH byte for byte", undefined, undefined, { raw: "{" });
+    await trio("E-400: not an object ([]) ⇒ = PATCH byte for byte", undefined, undefined, { raw: "[]" });
+    await trio("E-400: tenant missing ⇒ = PATCH byte for byte", { expectedVersion: 1, actor: B7_ACTOR }, { expectedVersion: 1, actor: B7_ACTOR, scheduledFor: fut });
+    await trio("E-400: unknown key zzz ⇒ = PATCH byte for byte", { tenant: "gcv", zzz: 1 }, { tenant: "gcv", zzz: 1 });
+    await trio("E-400: unknown actor key ⇒ = PATCH byte for byte", { tenant: "gcv", expectedVersion: 1, actor: { ...B7_ACTOR, q: 1 } }, { tenant: "gcv", expectedVersion: 1, actor: { ...B7_ACTOR, q: 1 }, scheduledFor: fut });
+    const a422 = await trio("E-422: invalid actor + expectedVersion ⇒ = PATCH byte for byte", { tenant: "gcv", expectedVersion: "x", actor: { email: "bad", role: "editor" } }, { tenant: "gcv", expectedVersion: "x", actor: { email: "bad", role: "editor" }, scheduledFor: fut });
+    expect("E-422: fields", [a422.status, a422.body.fields], [422, { "actor.email": "format", expectedVersion: "type" }]);
+    await trio("E-404: id of another tenant ⇒ = PATCH byte for byte", { tenant: "dtw", expectedVersion: 1, actor: B7_ACTOR }, { tenant: "dtw", expectedVersion: 1, actor: B7_ACTOR, scheduledFor: fut });
+    await trio("E-404: id > int4 ⇒ = PATCH byte for byte", { tenant: "gcv", expectedVersion: 1, actor: B7_ACTOR }, { tenant: "gcv", expectedVersion: 1, actor: B7_ACTOR, scheduledFor: fut }, { id: 2147483648 });
+    await trio("E-403: tenant outside the key ⇒ = PATCH byte for byte", { tenant: "wad", expectedVersion: 1, actor: B7_ACTOR }, { tenant: "wad", expectedVersion: 1, actor: B7_ACTOR, scheduledFor: fut });
+    const a409 = await trio("E-409: version_conflict ⇒ = PATCH byte for byte", { tenant: "gcv", expectedVersion: g.version + 5, actor: B7_ACTOR }, { tenant: "gcv", expectedVersion: g.version + 5, actor: B7_ACTOR, scheduledFor: fut });
+    expect("E-409: status 409 + currentVersion", [a409.status, a409.body.currentVersion], [409, g.version]);
+    const pubA = s6.articles.published;
+    const aNe = await trio("E-422: not_editable (published article) ⇒ = PATCH byte for byte", { tenant: "dtw", expectedVersion: 1, actor: B7_ACTOR }, { tenant: "dtw", expectedVersion: 1, actor: B7_ACTOR, scheduledFor: fut }, { id: pubA.id });
+    expect("E-422: not_editable status", aNe.body, notEd("status"));
+    const pf = await call("POST", `/api/hub/articles/${g.id}/publish`, { tenant: "gcv", expectedVersion: g.version, actor: B7_ACTOR }, T.author);
+    const af = await call("PATCH", `/api/hub/articles/${g.id}`, { tenant: "gcv", expectedVersion: g.version, actor: B7_ACTOR, title: "x" }, T.write);
+    expect("E-403: missing flag (NOT byte-compared: two auth functions) ⇒ publish with the author key 403 'hub write …'; PATCH with the write key 403 'hub author …'", [pf.status, pf.body.reason, af.status, af.body.reason], [403, "hub write not allowed for this engine", 403, "hub author not allowed for this engine"]);
+    // 409 slug_conflict: publish of a draft whose latest slug = another article's main slug ⇔ POST with that slug.
+    const a = await mkDraft("gcv");
+    const b = await mkDraft("gcv");
+    await E.slugToLatest(b.id, a.slug);
+    const ps = await pub("gcv", b.id, b.version);
+    const cs = await call("POST", "/api/hub/articles", { tenant: "gcv", title: `B7 dup ${E.run}`, slug: a.slug, pillarSlug: "p6-main", subSectionSlug: "p6-sub", authorId: E.fx("gcv").authors[0], actor: B7_ACTOR }, T.author);
+    expect("E-409: slug_conflict of publish = POST slug_conflict byte for byte (existing = the article holding the slug)", [ps.status, ps.text === cs.text, ps.body.existing], [409, true, { id: a.id }]);
+  }
+
+  // ══ P: publish ══
+  if (want("P")) {
+    const f = E.fx("gcv");
+    const d = await mkDraft("gcv", { dek: "Dek một", tagSlugs: ["p6-tag-a"] });
+    const p = await patchHub("gcv", d.id, d.version, {
+      title: `B7 P1 retitled ${E.run}`, bodyMarkdown: "Thân bài MỚI sau PATCH.\n\nĐoạn hai.", dek: "Dek hai", pillarSlug: "p6-other", subSectionSlug: "p6-sub",
+      secondary: [{ pillarSlug: "p6-main", subSectionSlug: "p6-sub2" }], tagSlugs: ["p6-tag-a", "p6-tag-b"], countrySlugs: ["vietnam"], coAuthorIds: [f.authors[1]], flags: { aiAssisted: true },
+    });
+    const KEYS = ["title", "slug", "dek", "takeaways", "readMin", "pillar", "subSection", "author", "coAuthors", "tags", "countries", "country", "aiAssisted", "body"];
+    const pick = (doc: Doc) => {
+      const out: Doc = {};
+      for (const k of KEYS) out[k] = doc[k] ?? null;
+      out.secondary = ((doc.secondarySections as Doc[] | undefined) ?? []).map((r) => [r.pillar, r.subSection ?? null]);
+      return sortKeys6(out) as Doc;
+    };
+    const lat = pick(await latestOf(d.id));
+    const mainBefore = pick(await mainOf(d.id));
+    const before = await snap(d.id);
+    const l0 = await maxLogId();
+    const t0 = Date.now();
+    const r = await pub("gcv", d.id, p.body.version);
+    const mainAfter = pick(await mainOf(d.id));
+    const diffBefore = Object.keys(lat).filter((k) => JSON.stringify(lat[k]) !== JSON.stringify(mainBefore[k]));
+    const diffAfter = Object.keys(lat).filter((k) => JSON.stringify(lat[k]) !== JSON.stringify(mainAfter[k]));
+    expect("P-1: publish a hub draft (gcv, translations off) ⇒ 200 {ok, id, tenant gcv, workflowStatus published, version (unchanged), publishedAt ±5 s} — exactly these keys", [p.status, r.status, r.body.ok, r.body.id, r.body.tenant, r.body.workflowStatus, r.body.version === before.version, Math.abs(Date.parse(String(r.body.publishedAt)) - t0) <= 5000, Object.keys(r.body).sort()], [200, 200, true, d.id, "gcv", "published", true, true, ["id", "ok", "publishedAt", "tenant", "version", "workflowStatus"]]);
+    const mr = await mainRaw(d.id);
+    expect("P-2: the main row after publish = the latest draft before it (every content field incl. secondary / rels); _status and workflowStatus published; the fields really differed before", [diffBefore.length > 0, diffAfter, mr?.s, mr?.w], [true, [], "published", "published"]);
+    const logs = await logsFor(d.id, l0);
+    expect("P-3: version / lastEngine / editedByHuman / lastEditedBy unchanged; exactly ONE activity row article_published draft→published, detail {via hub, actor, reason 'hub composer publish'}", [await snap(d.id), logs.map((l) => [l.e, l.f, l.t]), E.hubDetail(logs[0])], [before, [["article_published", "draft", "published"]], { via: "hub", reason: B7_REASON.publish, actor: B7_ACTOR_SORTED }]);
+    expect("P-4: the article's own slug never conflicts with itself (excludeId — the 200 above); no advisory lock left", (await E.advisory()).length, 0);
+    const again = await pub("gcv", d.id, r.body.version);
+    const pa = await patchHub("gcv", d.id, r.body.version as number, { title: "after publish" });
+    expect("P-5: publish again ⇒ 422 not_editable status; PATCH after publish ⇒ 422 not_editable status", [again.status, again.body, pa.status, pa.body], [422, notEd("status"), 422, notEd("status")]);
+    const s1 = await mkDraft("gcv");
+    const sr = await sch("gcv", s1.id, s1.version, inMin(120));
+    const l1 = await maxLogId();
+    const p2 = await pub("gcv", s1.id, s1.version);
+    expect("P-6: K2 — publish a SCHEDULED article ⇒ 422 not_editable status; still scheduled; main draft; 0 rows", [sr.status, p2.status, p2.body, (await latestOf(s1.id)).workflowStatus, (await mainRaw(s1.id))?.w, (await logsFor(s1.id, l1)).length], [200, 422, notEd("status"), "scheduled", "draft", 0]);
+    const v1 = await mkDraft("gcv");
+    const l2 = await maxLogId();
+    const vc = await pub("gcv", v1.id, v1.version + 1);
+    expect("P-7: expectedVersion ≠ latest ⇒ 409 version_conflict currentVersion; main draft; 0 rows", [vc.status, vc.body, (await mainRaw(v1.id))?.w, (await logsFor(v1.id, l2)).length], [409, { ok: false, status: "version_conflict", reason: "article version changed", currentVersion: v1.version }, "draft", 0]);
+    const cms = s6.articles.manualDraftByCmsUser;
+    const eng = s6.articles.engine;
+    const live = s6.articles.hubDraftPublishedThenSavedDraft;
+    const nh = await pub("dtw", cms.id, (await latestOf(cms.id)).version);
+    const og = await pub("dtw", eng.id, (await latestOf(eng.id)).version);
+    const lv = await pub("dtw", live.id, (await latestOf(live.id)).version);
+    expect("P-8: CMS-admin draft (no hub engine) ⇒ 422 not_hub_authored; engine article ⇒ 422 origin; hub draft published then saved as draft in CMS admin ⇒ 422 status", [nh.body, og.body, lv.body], [notEd("not_hub_authored"), notEd("origin"), notEd("status")]);
+  }
+
+  // ══ S: schedule ══
+  if (want("S")) {
+    const d = await mkDraft("gcv");
+    const before = await snap(d.id);
+    const l0 = await maxLogId();
+    const whenD = new Date(Math.ceil((Date.now() + 2 * 3600_000) / 60_000) * 60_000);
+    const shortForm = `${whenD.toISOString().slice(0, 16)}Z`;
+    const r = await sch("gcv", d.id, d.version, shortForm);
+    const lat = await latestOf(d.id);
+    const mr = await mainRaw(d.id);
+    expect("S-1: schedule with the short form …THH:mmZ ⇒ 200 {ok, id, tenant, workflowStatus scheduled, version, scheduledFor normalised …:00.000Z} — exactly these keys", [r.status, r.body.workflowStatus, r.body.scheduledFor, r.body.version === before.version, Object.keys(r.body).sort()], [200, "scheduled", whenD.toISOString(), true, ["id", "ok", "scheduledFor", "tenant", "version", "workflowStatus"]]);
+    expect("S-2: latest scheduled, scheduledFor = publishedAt = the hour; main row still draft/draft; version / lastEngine / editedByHuman unchanged", [lat.workflowStatus, lat.scheduledFor, lat.publishedAt, mr?.s, mr?.w, await snap(d.id)], ["scheduled", whenD.toISOString(), whenD.toISOString(), "draft", "draft", before]);
+    const logs = await logsFor(d.id, l0);
+    expect("S-3: exactly ONE activity row status_changed draft→scheduled, detail {via hub, actor, reason 'hub composer schedule'}", [logs.map((l) => [l.e, l.f, l.t]), E.hubDetail(logs[0])], [[["status_changed", "draft", "scheduled"]], { via: "hub", reason: B7_REASON.schedule, actor: B7_ACTOR_SORTED }]);
+    const again = await sch("gcv", d.id, d.version, inMin(180));
+    expect("S-4: K1 — schedule again ⇒ 422 not_editable status (change the hour = unschedule, then schedule)", [again.status, again.body], [422, notEd("status")]);
+    const e1 = await mkDraft("gcv");
+    const bad = async (v: unknown, omit = false) => {
+      const b: Doc = { tenant: "gcv", expectedVersion: e1.version, actor: B7_ACTOR };
+      if (!omit) b.scheduledFor = v;
+      const x = await call("POST", `/api/hub/articles/${e1.id}/schedule`, b);
+      return [x.status, x.body.fields ?? x.body.status ?? null];
+    };
+    const fmts = ["tomorrow", "2026-02-30T10:00:00Z", "2026-04-31T10:00:00Z", "2026-10-08T24:00:00Z", "2026-13-01T10:00Z", "2026-10-08T25:00Z", "2026-10-08T10:60Z", "2026-10-08T10:00:60Z", "2026-00-10T10:00Z", "2026-10-00T10:00Z"];
+    expect("S-5: scheduledFor missing ⇒ required; 123 ⇒ type; 'tomorrow', rolled dates (02-30, 04-31, T24:00) and impossible times (13, 25h, 60m, 60s, month 00, day 00) ⇒ 422 format — never 500", [await bad(null, true), await bad(123), ...(await Promise.all(fmts.map((v) => bad(v))))], [[422, { scheduledFor: "required" }], [422, { scheduledFor: "type" }], ...fmts.map(() => [422, { scheduledFor: "format" }])]);
+    expect("S-6: window over HTTP: now+30 s ⇒ out_of_range; now+366 d ⇒ out_of_range (exact 60 / 61 s and 365 d edges: unit S-U5)", [await bad(inSec(30)), await bad(new Date(Date.now() + 366 * 86400_000).toISOString())], [[422, { scheduledFor: "out_of_range" }], [422, { scheduledFor: "out_of_range" }]]);
+    const s7 = await call("POST", `/api/hub/articles/${e1.id}/schedule`, { tenant: "gcv", expectedVersion: e1.version, actor: B7_ACTOR, scheduledFor: inMin(120), expectedScheduledFor: inMin(120) });
+    expect("S-7: expectedScheduledFor next to a scheduledFor value ⇒ 422 {expectedScheduledFor invalid}", [s7.status, s7.body.fields], [422, { expectedScheduledFor: "invalid" }]);
+    const np = await mkDraft("gcv", { pillarSlug: undefined, subSectionSlug: undefined });
+    const l3 = await maxLogId();
+    const r8 = await sch("gcv", np.id, np.version, inMin(120));
+    expect("S-8: E8 — schedule a draft with no pillar ⇒ 422 {pillarSlug required}; still draft; 0 rows", [...fieldsOf(r8), (await latestOf(np.id)).workflowStatus, (await logsFor(np.id, l3)).length], [422, "invalid", { pillarSlug: "required" }, "draft", 0]);
+    const r9 = await sch("gcv", np.id, np.version, inSec(30));
+    expect("S-9: window + K4 in ONE 422 (no pillar AND now+30 s) ⇒ {pillarSlug required, scheduledFor out_of_range}", fieldsOf(r9), [422, "invalid", sortKeys6({ pillarSlug: "required", scheduledFor: "out_of_range" })]);
+  }
+
+  // ══ U: unschedule (D-UNSCH) ══
+  if (want("U")) {
+    const d = await mkDraft("gcv");
+    const sr = await sch("gcv", d.id, d.version, inMin(120));
+    const hour = sr.body.scheduledFor as string;
+    const l0 = await maxLogId();
+    const t0 = Date.now();
+    const u = await unsch("gcv", d.id, d.version, hour);
+    const lat = await latestOf(d.id);
+    expect("U-1: unschedule ⇒ 200 {ok, id, tenant, workflowStatus draft, version, scheduledFor null}; latest draft, scheduledFor null, publishedAt = now ±5 s (not the old hour); version unchanged", [u.status, u.body, lat.workflowStatus, lat.scheduledFor ?? null, Math.abs(Date.parse(String(lat.publishedAt)) - t0) <= 5000, lat.publishedAt !== hour], [200, { ok: true, id: d.id, tenant: "gcv", workflowStatus: "draft", version: d.version, scheduledFor: null }, "draft", null, true, true]);
+    const logs = await logsFor(d.id, l0);
+    expect("U-2: exactly ONE activity row status_changed scheduled→draft, detail {via hub, actor, reason 'hub composer unschedule'}", [logs.map((l) => [l.e, l.f, l.t]), E.hubDetail(logs[0])], [[["status_changed", "scheduled", "draft"]], { via: "hub", reason: B7_REASON.unschedule, actor: B7_ACTOR_SORTED }]);
+    const again = await unsch("gcv", d.id, d.version, hour);
+    expect("U-3: unschedule again ⇒ 422 not_editable status", [again.status, again.body], [422, notEd("status")]);
+    const pr = await patchHub("gcv", d.id, d.version, { title: `B7 U after ${E.run}` });
+    expect("U-4: after unschedule the draft is editable again (PATCH 200)", pr.status, 200);
+    const d2 = await mkDraft("gcv");
+    const sr2 = await sch("gcv", d2.id, d2.version, inMin(120));
+    const m5 = await call("POST", `/api/hub/articles/${d2.id}/schedule`, { tenant: "gcv", expectedVersion: d2.version, actor: B7_ACTOR, scheduledFor: null });
+    expect("U-5: scheduledFor:null without expectedScheduledFor ⇒ 422 {expectedScheduledFor required}; still scheduled", [m5.status, m5.body.fields, (await latestOf(d2.id)).workflowStatus], [422, { expectedScheduledFor: "required" }, "scheduled"]);
+    const l1 = await maxLogId();
+    const ch = await unsch("gcv", d2.id, d2.version, inMin(999));
+    expect("U-CHANGED: expectedScheduledFor ≠ the stored hour ⇒ 409 {schedule_conflict, changed, currentScheduledFor = stored}; still scheduled; 0 rows", [ch.status, ch.body, (await latestOf(d2.id)).workflowStatus, (await logsFor(d2.id, l1)).length], [409, { ok: false, status: "schedule_conflict", reason: "changed", currentScheduledFor: sr2.body.scheduledFor }, "scheduled", 0]);
+    const d3 = await mkDraft("gcv");
+    await sch("gcv", d3.id, d3.version, inMin(120));
+    const near = inSec(30);
+    await E.setHour(d3.id, near);
+    const l2 = await maxLogId();
+    const due = await unsch("gcv", d3.id, d3.version, near);
+    expect("U-DUE: stored hour now+30 s ⇒ 409 {schedule_conflict, due, currentScheduledFor}; still scheduled; 0 rows", [due.status, due.body, (await latestOf(d3.id)).workflowStatus, (await logsFor(d3.id, l2)).length], [409, { ok: false, status: "schedule_conflict", reason: "due", currentScheduledFor: near }, "scheduled", 0]);
+    const far = inSec(120);
+    await E.setHour(d3.id, far);
+    const ok = await unsch("gcv", d3.id, d3.version, far);
+    expect("U-DUE: stored hour now+120 s ⇒ 200 (wide HTTP edge; 59 / 61 s edges are unit U-DUE)", [ok.status, (await latestOf(d3.id)).workflowStatus], [200, "draft"]);
+    const d4 = await mkDraft("gcv");
+    await E.setHour(d4.id, null);
+    const nn = await unsch("gcv", d4.id, d4.version, "2030-01-01T00:00:00.000Z");
+    const n0 = await unsch("gcv", d4.id, d4.version, null);
+    expect("U-NULL: scheduled article stored WITHOUT an hour: expectedScheduledFor string ⇒ 409 changed (currentScheduledFor null); null ⇒ 200", [nn.status, nn.body, n0.status, (await latestOf(d4.id)).workflowStatus], [409, { ok: false, status: "schedule_conflict", reason: "changed", currentScheduledFor: null }, 200, "draft"]);
+    const d5 = await mkDraft("gcv");
+    const sr5 = await sch("gcv", d5.id, d5.version, inMin(120));
+    await tamper(d5.id, { author: null, workflowStatus: "scheduled", scheduledFor: sr5.body.scheduledFor });
+    const v5 = (await latestOf(d5.id)).version;
+    const k4 = await unsch("gcv", d5.id, v5, sr5.body.scheduledFor);
+    expect("U-K4: a scheduled article that now breaks K4 (author removed in CMS admin) is still unscheduled ⇒ 200", [k4.status, (await latestOf(d5.id)).workflowStatus], [200, "draft"]);
+  }
+
+  // ══ V: K4 (a…l) one defect per case, over HTTP (PB-7b) ══
+  if (want("V")) {
+    const gcv = tid.gcv;
+    await ensurePillar(payload, gcv, "p7-nosub", "P7 No Sub", 92);
+    const subOther = await E.subId("gcv", "p6-other", "p6-sub");
+    const pOther = await E.pillarId("gcv", "p6-other");
+    const subMain = await E.subId("gcv", "p6-main", "p6-sub");
+    let videoId: number | null = null;
+    try {
+      videoId = Number((await E.rows(sql`INSERT INTO video_media (tenant_id, filename, mime_type, filesize, url) VALUES (${gcv}, ${`b7-${E.run}.mp4`}, 'video/mp4', 8, ${`/b7-${E.run}.mp4`}) RETURNING id`))[0]?.id);
+    } catch {
+      videoId = null;
+    }
+    const one = async (label: string, t: "gcv" | "world-travel-brief", extra: Doc, mutate: ((id: number) => Promise<unknown>) | null, wantFields: Doc | null) => {
+      const d = await mkDraft(t, extra);
+      if (mutate) await mutate(d.id);
+      const lat0 = await latestOf(d.id);
+      const v0 = await E.verCount(d.id);
+      const l0 = await maxLogId();
+      const r = await sch(t, d.id, lat0.version, inMin(120));
+      const after = await latestOf(d.id);
+      if (wantFields == null) {
+        expect(label, [r.status, after.workflowStatus], [200, "scheduled"]);
+      } else {
+        expect(label, [...fieldsOf(r), after.workflowStatus, after.version === lat0.version, (await E.verCount(d.id)) === v0, (await logsFor(d.id, l0)).length], [422, "invalid", sortKeys6(wantFields), "draft", true, true, 0]);
+      }
+    };
+    await one("V-a: title empty ⇒ 422 {title required}, 0 write, 0 rows", "gcv", {}, (id) => tamper(id, { title: "" }), { title: "required" });
+    await one("V-b: body absent ⇒ 422 {bodyMarkdown required}", "gcv", { bodyMarkdown: undefined }, null, { bodyMarkdown: "required" });
+    await one("V-c: no pillar ⇒ 422 {pillarSlug required}", "gcv", { pillarSlug: undefined, subSectionSlug: undefined }, null, { pillarSlug: "required" });
+    await one("V-d: pillar HAS sub-sections, no sub-section (D-SUB) ⇒ 422 {subSectionSlug required}", "gcv", { subSectionSlug: undefined }, null, { subSectionSlug: "required" });
+    await one("V-d: pillar with NO sub-section, no sub-section ⇒ passes (200)", "gcv", { pillarSlug: "p7-nosub", subSectionSlug: undefined }, null, null);
+    await one("V-d: sub-section of another pillar (set in CMS admin) ⇒ 422 {subSectionSlug invalid}", "gcv", {}, (id) => tamper(id, { subSection: subOther }), { subSectionSlug: "invalid" });
+    await one("V-e: no author ⇒ 422 {authorId required}", "gcv", { authorId: undefined }, null, { authorId: "required" });
+    await one("V-f: sponsored without sponsor (set in CMS admin) ⇒ 422 {sponsor required}", "gcv", {}, (id) => tamper(id, { sponsored: true, sponsor: null }), { sponsor: "required" });
+    await one("V-g: slug empty (latest version) ⇒ 422 {slug required}", "gcv", {}, (id) => E.slugToLatest(id, ""), { slug: "required" });
+    await one("V-h: readMin 0 (set in CMS admin) ⇒ 422 {readMin out_of_range}", "gcv", {}, (id) => tamper(id, { readMin: 0 }), { readMin: "out_of_range" });
+    await one("V-i: secondary row whose sub-section belongs to another pillar ⇒ 422 {secondary invalid}", "gcv", {}, (id) => tamper(id, { secondarySections: [{ pillar: pOther, subSection: subMain }] }), { secondary: "invalid" });
+    await one("V-i: secondary row with no pillar ⇒ 422 {secondary invalid}", "gcv", {}, (id) => tamper(id, { secondarySections: [{ pillar: null }] }), { secondary: "invalid" });
+    if (videoId != null) {
+      await one("V-j: video without heroImage (description set) ⇒ 422 {heroImage required}", "gcv", {}, (id) => tamper(id, { video: videoId, videoDescription: "mô tả" }), { heroImage: "required" });
+      await one("V-j: video without heroImage and videoDescription ⇒ 422 {heroImage required, videoDescription required}", "gcv", {}, (id) => tamper(id, { video: videoId }), { heroImage: "required", videoDescription: "required" });
+    } else expect("V-j: a videoMedia row could be created in the disposable DB", "no video_media row", "present");
+    await one("V-k: primary pillar engine-blocked (gcv exclusive, set in CMS admin) ⇒ 422 {pillarSlug blocked_pillar}", "gcv", {}, async (id) => tamper(id, { pillar: await ensurePillar(payload, gcv, "exclusive", "Exclusive", 99), subSection: null }), { pillarSlug: "blocked_pillar" });
+    await one("V-l: WTB briefs row without source ⇒ 422 {briefs invalid}", "world-travel-brief", {}, (id) => tamper(id, { briefs: [{ label: "a", value: "1" }] }), { briefs: "invalid" });
+    await one("V-l: WTB briefs with 5 rows ⇒ 422 {briefs invalid}", "world-travel-brief", {}, (id) => tamper(id, { briefs: [1, 2, 3, 4, 5].map((i) => ({ label: `l${i}`, value: `${i}`, source: "s" })) }), { briefs: "invalid" });
+    await one("V-ALL: no body + no pillar + no author + title '' + readMin 0 + sponsored w/o sponsor + slug '' ⇒ ONE 422 with every field", "gcv", { bodyMarkdown: undefined, pillarSlug: undefined, subSectionSlug: undefined, authorId: undefined }, async (id) => {
+      await tamper(id, { title: "", readMin: 0, sponsored: true, sponsor: null });
+      await E.slugToLatest(id, "");
+    }, { title: "required", bodyMarkdown: "required", pillarSlug: "required", authorId: "required", sponsor: "required", slug: "required", readMin: "out_of_range" });
+    const np = await mkDraft("gcv", { authorId: undefined });
+    const pr = await pub("gcv", np.id, np.version);
+    expect("V-PUB: publish runs the same check (no author ⇒ 422 {authorId required}); main still draft", [...fieldsOf(pr), (await mainRaw(np.id))?.w], [422, "invalid", { authorId: "required" }, "draft"]);
+  }
+
+  // ══ B: K13 — blocked pillars, set by a CMS-admin user after the hub saved ══
+  if (want("B")) {
+    const gcv = tid.gcv;
+    const excl = await ensurePillar(payload, gcv, "exclusive", "Exclusive", 99);
+    const press = await ensurePillar(payload, gcv, "pressroom", "Pressroom", 98);
+    const d = await mkDraft("gcv");
+    await tamper(d.id, { pillar: excl, subSection: null });
+    const v = (await latestOf(d.id)).version;
+    const a = await pub("gcv", d.id, v);
+    const b = await sch("gcv", d.id, v, inMin(120));
+    expect("B-1: primary pillar changed to gcv 'exclusive' in CMS admin ⇒ publish AND schedule 422 {pillarSlug blocked_pillar}; main draft", [fieldsOf(a), fieldsOf(b), (await mainRaw(d.id))?.w], [[422, "invalid", { pillarSlug: "blocked_pillar" }], [422, "invalid", { pillarSlug: "blocked_pillar" }], "draft"]);
+    const d2 = await mkDraft("gcv");
+    await tamper(d2.id, { pillar: press, subSection: null, author: null });
+    const r2 = await pub("gcv", d2.id, (await latestOf(d2.id)).version);
+    expect("B-2: primary pillar 'pressroom' (single-home) and NO author ⇒ 422 {pillarSlug blocked_pillar, authorId required} (no single-home author exemption)", fieldsOf(r2), [422, "invalid", sortKeys6({ pillarSlug: "blocked_pillar", authorId: "required" })]);
+    const d3 = await mkDraft("gcv");
+    await tamper(d3.id, { secondarySections: [{ pillar: excl }] });
+    const r3 = await sch("gcv", d3.id, (await latestOf(d3.id)).version, inMin(120));
+    expect("B-3: a secondary row on gcv 'exclusive' ⇒ 422 {secondary blocked_pillar}", fieldsOf(r3), [422, "invalid", { secondary: "blocked_pillar" }]);
+  }
+
+  // ══ G: gates on fixtures + AC22 (untick Hub Author) ══
+  if (want("G")) {
+    const pa = s6.articles.published;
+    const v = (await latestOf(pa.id)).version;
+    const out = [await pub("dtw", pa.id, v), await sch("dtw", pa.id, v, inMin(120)), await unsch("dtw", pa.id, v, null)].map((r) => [r.status, r.body]);
+    expect("G-1: a published article ⇒ publish / schedule / unschedule all 422 not_editable status", out, [[422, notEd("status")], [422, notEd("status")], [422, notEd("status")]]);
+    const cmsS = (await payload.create({ collection: "articles", draft: true, depth: 0, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { tenant: tid.dtw, title: `B7 cms sched ${E.run}`, slug: `b7-${E.run}-cms-${E.nextSeq()}`, origin: "manual", workflowStatus: "draft", _status: "draft", readMin: 1 } as never })) as unknown as Doc;
+    await tamper(cmsS.id as number, { workflowStatus: "scheduled", scheduledFor: inMin(120) });
+    const vs = (await latestOf(cmsS.id as number)).version;
+    const us = await unsch("dtw", cmsS.id as number, vs, (await latestOf(cmsS.id as number)).scheduledFor);
+    expect("G-2: unschedule an article scheduled in CMS admin (not hub-authored) ⇒ 422 not_hub_authored", [us.status, us.body], [422, notEd("not_hub_authored")]);
+    const d = await mkDraft("gcv");
+    const eng = s6.engines.author.id;
+    let r1: { status: number; body: Doc } = { status: 0, body: {} };
+    try {
+      await payload.update({ collection: "content-engines", id: eng, overrideAccess: true, data: { hubAuthor: false } as never });
+      r1 = await pub("gcv", d.id, d.version);
+    } finally {
+      await payload.update({ collection: "content-engines", id: eng, overrideAccess: true, data: { hubAuthor: true } as never });
+    }
+    const r2 = await pub("gcv", d.id, d.version);
+    expect("G-3: AC22 — Hub Author unticked on the engine that created the draft ⇒ publish 422 not_hub_authored; ticked again ⇒ 200", [r1.status, r1.body, r2.status], [422, notEd("not_hub_authored"), 200]);
+  }
+
+  // ══ K10: GET view=edit on a scheduled article (PB-6 after K10) + PB-15 ══
+  if (want("K10")) {
+    const d = await mkDraft("gcv");
+    const p = await patchHub("gcv", d.id, d.version, { title: `B7 K10 latest ${E.run}` });
+    const sr = await sch("gcv", d.id, p.body.version, inMin(120));
+    const ve = await call("GET", `/api/hub/articles/${d.id}?tenant=gcv&view=edit`, undefined, T.author);
+    const main = await mainOf(d.id);
+    expect("K10-1: hub-scheduled draft ⇒ view=edit 200, edit EXACTLY {editable false, editableReason scheduled, scheduledFor, version}; article.* from the LATEST version (title ≠ main row title)", [ve.status, ve.body.edit, (ve.body.article as Doc | undefined)?.title, main.title !== `B7 K10 latest ${E.run}`], [200, { editable: false, editableReason: "scheduled", scheduledFor: sr.body.scheduledFor, version: p.body.version }, `B7 K10 latest ${E.run}`, true]);
+    const lat = await latestOf(d.id);
+    const art = (ve.body.article ?? {}) as Doc;
+    expect("PB-15: title / slug of the PATCH-style read (no locale) = view=edit (locale en) on the scheduled hub article", [art.title, art.slug], [lat.title, lat.slug]);
+    const cms = (await payload.create({ collection: "articles", draft: true, depth: 0, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { tenant: tid.gcv, title: `B7 K10 cms main ${E.run}`, slug: `b7-${E.run}-k10-${E.nextSeq()}`, origin: "manual", workflowStatus: "draft", _status: "draft", readMin: 1 } as never })) as unknown as Doc;
+    await tamper(cms.id as number, { title: `B7 K10 cms latest ${E.run}`, workflowStatus: "scheduled", scheduledFor: inMin(120) });
+    const ve2 = await call("GET", `/api/hub/articles/${cms.id}?tenant=gcv&view=edit`, undefined, T.author);
+    expect("K10-2: article scheduled in CMS admin (NOT hub-authored), main manual draft ⇒ edit {editable false, editableReason status} only (no scheduledFor); article.* = the MAIN row", [ve2.status, ve2.body.edit, (ve2.body.article as Doc | undefined)?.title], [200, { editable: false, editableReason: "status" }, `B7 K10 cms main ${E.run}`]);
+    const ve3 = await call("GET", `/api/hub/articles/${d.id}?tenant=dtw&view=edit`, undefined, T.author);
+    expect("K10-3: other tenant ⇒ 404 (same body)", [ve3.status, ve3.text], [404, NF]);
+    const ve4 = await call("GET", `/api/hub/articles/${d.id}?tenant=gcv`, undefined, T.author);
+    expect("K10-4: default GET (no view=edit) unchanged: no edit block, article.* = the main row", ["edit" in ve4.body, (ve4.body.article as Doc | undefined)?.title], [false, main.title]);
+  }
+
+  // ══ W: public visibility (dtw has a public read token) ══
+  if (want("W")) {
+    const d = await mkDraft("dtw");
+    const g0 = await E.pubGet(d.slug);
+    const r = await pub("dtw", d.id, d.version);
+    const g1 = await E.pubGet(d.slug);
+    const list = await E.pubList();
+    expect("W-1: public API 404 before publish; 200 after publish (same title) and listed", [g0.status, r.status, g1.status, ((g1.body.doc ?? {}) as Doc).title, JSON.stringify(list.body).includes(d.slug)], [404, 200, 200, `B7 ${d.slug}`, true]);
+    const s = await mkDraft("dtw");
+    const sr = await sch("dtw", s.id, s.version, inMin(120));
+    const g2 = await E.pubGet(s.slug);
+    const list2 = await E.pubList();
+    const mr = await mainRaw(s.id);
+    expect("W-2: a scheduled article stays hidden: public 404, not listed, main row draft/draft", [sr.status, g2.status, JSON.stringify(list2.body).includes(s.slug), mr?.s, mr?.w], [200, 404, false, "draft", "draft"]);
+  }
+
+  // ══ T: both tenant kinds (translations off: gcv; on: world-travel-brief 19 targets, dtw 2 targets) ══
+  if (want("T")) {
+    const out: Doc = {};
+    for (const [t, n] of [["gcv", 0], ["world-travel-brief", 19], ["dtw", 2]] as const) {
+      const d = await mkDraft(t);
+      const before = await snap(d.id);
+      const j0 = await E.tjobs(d.id);
+      const l0 = await maxLogId();
+      const r = await pub(t, d.id, d.version);
+      const logs = await logsFor(d.id, l0);
+      out[t] = { status: r.status, jobs: (await E.tjobs(d.id)) - j0, published: logs.filter((l) => l.e === "article_published").length, queued: logs.filter((l) => l.e === "translation_queued").length, other: logs.filter((l) => l.e !== "article_published" && l.e !== "translation_queued").length, pending: await E.pendingOf(d.id), stable: JSON.stringify(await snap(d.id)) === JSON.stringify(before) };
+      expect(`T-1: (${t}) publish ⇒ translationJobs ${n}, rows 1 article_published + ${n} translation_queued, translationStatus pending ${n}, version / lastEngine / editedByHuman / lastEditedBy unchanged`, out[t], { status: 200, jobs: n, published: 1, queued: n, other: 0, pending: n, stable: true });
+    }
+    const w = await mkDraft("world-travel-brief");
+    const before = await snap(w.id);
+    const l0 = await maxLogId();
+    const sr = await sch("world-travel-brief", w.id, w.version, inMin(120));
+    const ls = await logsFor(w.id, l0);
+    const l1 = await maxLogId();
+    const ur = await unsch("world-travel-brief", w.id, w.version, sr.body.scheduledFor);
+    const lu = await logsFor(w.id, l1);
+    expect("T-2: (world-travel-brief) schedule then unschedule ⇒ one row each, 0 translationJobs, 0 pending, version unchanged", [sr.status, ls.map((l) => l.e), ur.status, lu.map((l) => l.e), await E.tjobs(w.id), await E.pendingOf(w.id), JSON.stringify(await snap(w.id)) === JSON.stringify(before)], [200, ["status_changed"], 200, ["status_changed"], 0, 0, true]);
+  }
+
+  // ══ WH: revalidate webhooks per operation (fake frontend; dev server has CENTRAL_SIGNING_SECRET) ══
+  if (want("WH")) {
+    const http = await import("node:http");
+    let hits = 0;
+    const srv = http.createServer((rq, rs) => {
+      if (rq.method === "POST" && (rq.url ?? "").startsWith("/api/revalidate")) hits++;
+      rq.resume();
+      rs.writeHead(200, { "content-type": "application/json" });
+      rs.end("{}");
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as { port: number }).port;
+    const setFront = (t: "gcv" | "world-travel-brief", url: string | null) => payload.update({ collection: "tenants", id: tid[t], overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: url } as never });
+    try {
+      for (const t of ["gcv", "world-travel-brief"] as const) await setFront(t, `http://127.0.0.1:${port}`);
+      for (const t of ["gcv", "world-travel-brief"] as const) {
+        const x = await mkDraft(t);
+        const y = await mkDraft(t);
+        hits = 0;
+        const rs = await sch(t, x.id, x.version, inMin(120));
+        await sleep7(300);
+        const hS = hits;
+        hits = 0;
+        const ru = await unsch(t, x.id, x.version, rs.body.scheduledFor);
+        await sleep7(300);
+        const hU = hits;
+        hits = 0;
+        const rp = await pub(t, y.id, y.version);
+        await sleep7(500);
+        const hP = hits;
+        expect(`WH-1: (${t}) webhook POSTs: schedule 0, unschedule 0, publish ${t === "gcv" ? "exactly 1" : "1–2"} (positive control: publish > 0)`, [rs.status, hS, ru.status, hU, rp.status, t === "gcv" ? hP === 1 : hP >= 1 && hP <= 2], [200, 0, 200, 0, 200, true]);
+        console.log(`OBS   WH-1 (${t}) publish POSTs = ${hP}, publish ms = ${rp.ms}`);
+      }
+    } finally {
+      for (const t of ["gcv", "world-travel-brief"] as const) await setFront(t, null);
+      srv.close();
+    }
+  }
+
+  // ══ CR: the existing cron on hub-scheduled articles ══
+  if (want("CR")) {
+    const d = await mkDraft("dtw");
+    const p = await patchHub("dtw", d.id, d.version, { title: `B7 CR retitled ${E.run}`, bodyMarkdown: "Thân bài sau PATCH cho CR." });
+    const sr = await sch("dtw", d.id, p.body.version, inMin(120));
+    const past = new Date(Math.floor((Date.now() - 60_000) / 1000) * 1000 + 125).toISOString();
+    await E.setHour(d.id, past);
+    const latBefore = await latestOf(d.id);
+    const err0 = Number((await E.rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'integration_error' AND target_id = ${String(d.id)}`))[0]?.n);
+    const c = await E.cron();
+    const m = await mainOf(d.id);
+    const err1 = Number((await E.rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'integration_error' AND target_id = ${String(d.id)}`))[0]?.n);
+    const g = await E.pubGet(d.slug);
+    expect("CR-1: the unchanged cron publishes a hub-scheduled draft when due: published, publishedAt = scheduledFor, content = latest, 0 integration_error, public 200", [sr.status, c.status, c.published.includes(String(d.id)), m.workflowStatus, m._status, m.publishedAt, m.title === latBefore.title && JSON.stringify(m.body) === JSON.stringify(latBefore.body), err1 - err0, g.status, ((g.body.doc ?? {}) as Doc).publishedAt], [200, 200, true, "published", "published", past, true, 0, 200, past]);
+    const u = await mkDraft("dtw");
+    const ur = await sch("dtw", u.id, u.version, inMin(120));
+    const uu = await unsch("dtw", u.id, u.version, ur.body.scheduledFor);
+    const c2 = await E.cron();
+    expect("CR-2: after unschedule the cron does NOT publish the article (main draft, public 404)", [uu.status, c2.published.includes(String(u.id)), (await mainRaw(u.id))?.w, (await E.pubGet(u.slug)).status], [200, false, "draft", 404]);
+  }
+
+  // ══ C: concurrency + locks on the new routes ══
+  if (want("C")) {
+    const r1: string[] = [];
+    let contentOk = true;
+    for (let i = 0; i < 8; i++) {
+      const d = await mkDraft("gcv");
+      const t0 = (await latestOf(d.id)).title;
+      const [a, b] = await Promise.all([pub("gcv", d.id, d.version), patchHub("gcv", d.id, d.version, { title: `B7 C1 ${E.run} ${i}` })]);
+      const tag = (r: { status: number; body: Doc }) => (r.status === 200 ? "200/" : `${r.status}/${r.body.status === "not_editable" ? r.body.reason : r.body.status}`);
+      r1.push(`${tag(a)}|${tag(b)}`);
+      const m = await mainOf(d.id);
+      if (a.status === 200 && m.title !== t0) contentOk = false;
+      if (b.status === 200 && m.workflowStatus !== "draft") contentOk = false;
+    }
+    const allowed = new Set(["200/|422/status", "409/version_conflict|200/"]);
+    expect("C-1: 8 rounds × publish ∥ PATCH (same expectedVersion) ⇒ each round exactly one 200: publish-won ⇒ PATCH 422 not_editable status and the published title = the pre-PATCH title; PATCH-won ⇒ publish 409 version_conflict and the article stays draft", [r1.every((x) => allowed.has(x)), contentOk], [true, true]);
+    console.log(`OBS   C-1 outcomes ${JSON.stringify(r1)}`);
+    const r2: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const d = await mkDraft("gcv");
+      const [a, b] = await Promise.all([pub("gcv", d.id, d.version), pub("gcv", d.id, d.version)]);
+      r2.push([a.status, b.status].sort().join(","));
+    }
+    expect("C-2: 8 rounds × publish ∥ publish ⇒ every round exactly [200, 422]", [...new Set(r2)], ["200,422"]);
+    const r3: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const d = await mkDraft("gcv");
+      const [a, b] = await Promise.all([pub("gcv", d.id, d.version), patchHub("gcv", d.id, d.version, { slug: `b7-${E.run}-dl-${E.nextSeq()}` })]);
+      r3.push(`${a.status}|${b.status}`);
+    }
+    expect("C-DL: 8 rounds × publish ∥ PATCH that changes the slug ⇒ every request answers (no 500 / 503 / abort), exactly one 200 per round", r3.every((x) => x === "200|422" || x === "409|200"), true);
+    console.log(`OBS   C-DL outcomes ${JSON.stringify(r3)}`);
+    const { spawn } = await import("node:child_process");
+    const out: Doc = {};
+    for (const target of ["row", "verrow"] as const) {
+      const d = await mkDraft("gcv");
+      const v = (await E.rows(sql`SELECT id FROM _articles_v WHERE parent_id = ${d.id} AND latest = true ORDER BY id DESC LIMIT 1`))[0];
+      const h = holder7(spawn, target, { id: target === "row" ? d.id : Number(v?.id ?? 0) });
+      await h.held;
+      const r = await call("POST", `/api/hub/articles/${d.id}/publish`, { tenant: "gcv", expectedVersion: d.version, actor: B7_ACTOR }, T.write, 10_000);
+      h.kill();
+      out[target] = { status: r.status, body: r.body, retryAfter: r.retryAfter, inWindow: r.ms >= 2500 && r.ms <= 6000, aborted: r.aborted ?? false, mainW: (await mainRaw(d.id))?.w };
+      await sleep7(300);
+    }
+    expect("C-R: (LA-R on publish) a row lock held on what publish touches (articles row; latest version row) ⇒ 503 busy + Retry-After 2 after ~3 s, NOT 500, no hang, main row still draft", out, {
+      row: { status: 503, body: LA7_BUSY_BODY, retryAfter: "2", inWindow: true, aborted: false, mainW: "draft" },
+      verrow: { status: 503, body: LA7_BUSY_BODY, retryAfter: "2", inWindow: true, aborted: false, mainW: "draft" },
+    });
+    // LA-W on publish (MB-B9): the core takes the article lock.
+    const d = await mkDraft("gcv");
+    const kA = la7ArticleKey(tid.gcv, d.id);
+    const h = holder7(spawn, "advisory", { k1: kA[0], k2: kA[1] });
+    await h.held;
+    let done = false;
+    const p = pub("gcv", d.id, d.version).then((x) => ((done = true), x));
+    let seen = 0;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 2000 && seen === 0) {
+      seen = (await E.rows(sql`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND granted = false AND classid::bigint = ${kA[0] >>> 0} AND objid::bigint = ${kA[1] >>> 0}`)).map((x) => Number(x.n))[0] ?? 0;
+      if (seen === 0) await sleep7(50);
+    }
+    const pending = !done;
+    h.kill();
+    const rr = await p;
+    expect("C-W: (LA-W on publish) the article key held by another session ⇒ within 2 s ONE waiting row on that key and publish has not answered; release ⇒ 200", [seen, pending, rr.status], [1, true, 200]);
+    // slug twins (MB-B8): latest slug = another article's MAIN slug; = another article's LATEST draft slug.
+    const a = await mkDraft("gcv");
+    const b = await mkDraft("gcv");
+    await E.slugToLatest(b.id, a.slug);
+    const sb = await pub("gcv", b.id, b.version);
+    const c = await mkDraft("gcv");
+    const dd = await mkDraft("gcv");
+    const fresh = `b7-${E.run}-twin-${E.nextSeq()}`;
+    await E.slugToLatest(c.id, fresh);
+    await E.slugToLatest(dd.id, fresh);
+    const sc = await sch("gcv", dd.id, dd.version, inMin(120));
+    expect("C-SLUG: the slug is held by another article — its MAIN row ⇒ publish 409 slug_conflict existing = it; its LATEST draft only ⇒ schedule 409 existing = it; both stay draft", [sb.status, sb.body.status, sb.body.existing, sc.status, sc.body.existing, (await latestOf(b.id)).workflowStatus, (await latestOf(dd.id)).workflowStatus], [409, "slug_conflict", { id: a.id }, 409, { id: c.id }, "draft", "draft"]);
+    expect("C-3: after the C group, pg_locks holds no advisory lock", (await E.advisory()).length, 0);
+  }
+}
+
+/** `--check7 --hooks-only --in <f7>`: group H — the publish core IN-PROCESS on the DB (no dev server). */
+async function check7Hooks(e: { expect: Expect7; payload: P; s6: Setup6; f7: Setup7 }): Promise<void> {
+  const { expect, payload, s6, f7 } = e;
+  const core = await loadPubCore7();
+  const lockMod = await loadLockMod7();
+  const handlers = (await import("../src/lib/hub-author-handlers")) as HandlersMod7;
+  const E = b7Env(payload, s6, f7);
+  const { T, maxLogId, logsFor, latestOf, mainRaw, snap } = E;
+  if (!core || !lockMod) {
+    for (const n of ["H-1", "H-2", "H-3", "H-4", "H-5", "H-6", "H-7", "H-8"]) expect(`${n}: in-process core`, B7_MISSING, "present");
+    return;
+  }
+  const deps = { getPayload: async () => payload as never };
+  const rq = (path: string, body: unknown, token: string) => new Request(`http://127.0.0.1/api/hub/articles${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+  const asJson = async (r: Response) => ({ status: r.status, body: (await r.json()) as Doc });
+  const mk = async (t: "gcv" | "world-travel-brief") => {
+    const slug = `b7h-${E.run}-${E.nextSeq()}`;
+    const r = await asJson(await handlers.handleHubDraftCreateWith(rq("", { tenant: t, title: `B7H ${slug}`, slug, pillarSlug: "p6-main", subSectionSlug: "p6-sub", authorId: E.fx(t).authors[0], bodyMarkdown: "Thân bài H.", actor: B7_ACTOR }, T.author), deps as never));
+    if (r.status !== 201) throw new Error(`H mkDraft ⇒ ${r.status} ${JSON.stringify(r.body).slice(0, 200)}`);
+    return { id: r.body.id as number, version: r.body.version as number };
+  };
+  const ctx = (id: number) => ({ params: Promise.resolve({ id: String(id) }) });
+  const pubH = async (t: string, id: number, ev: number) => asJson(await core.handleHubPublishWith(rq(`/${id}/publish`, { tenant: t, expectedVersion: ev, actor: B7_ACTOR }, T.write), ctx(id), deps as never));
+  const schH = async (t: string, id: number, ev: number, at: string | null, exp?: string | null) =>
+    asJson(await core.handleHubScheduleWith(rq(`/${id}/schedule`, at === null ? { tenant: t, expectedVersion: ev, actor: B7_ACTOR, scheduledFor: null, expectedScheduledFor: exp ?? null } : { tenant: t, expectedVersion: ev, actor: B7_ACTOR, scheduledFor: at }, T.write), ctx(id), deps as never));
+  const rowsOf = (logs: Doc[]) => logs.map((l) => [l.e, l.f, l.t]);
+  {
+    const d = await mk("gcv");
+    const before = await snap(d.id);
+    const l0 = await maxLogId();
+    const r = await pubH("gcv", d.id, d.version);
+    const logs = await logsFor(d.id, l0);
+    expect("H-1: (gcv) publish in-process ⇒ 200; ONE row article_published draft→published detail {via hub, actor, reason}; version / lastEngine / editedByHuman / lastEditedBy unchanged; main published", [r.status, rowsOf(logs), E.hubDetail(logs[0]), JSON.stringify(await snap(d.id)) === JSON.stringify(before), (await mainRaw(d.id))?.w], [200, [["article_published", "draft", "published"]], { via: "hub", reason: B7_REASON.publish, actor: B7_ACTOR_SORTED }, true, "published"]);
+  }
+  {
+    const d = await mk("gcv");
+    const l0 = await maxLogId();
+    const r = await schH("gcv", d.id, d.version, E.inMin(120));
+    const ls = await logsFor(d.id, l0);
+    expect("H-2: (gcv) schedule in-process ⇒ ONE row status_changed draft→scheduled detail reason 'hub composer schedule'; main draft", [r.status, rowsOf(ls), E.hubDetail(ls[0])?.reason, (await mainRaw(d.id))?.w], [200, [["status_changed", "draft", "scheduled"]], B7_REASON.schedule, "draft"]);
+    const l1 = await maxLogId();
+    const t0 = Date.now();
+    const u = await schH("gcv", d.id, d.version, null, r.body.scheduledFor as string);
+    const lu = await logsFor(d.id, l1);
+    const lat = await latestOf(d.id);
+    expect("H-3: (gcv) unschedule in-process ⇒ ONE row status_changed scheduled→draft detail reason 'hub composer unschedule'; publishedAt = now ±5 s", [u.status, rowsOf(lu), E.hubDetail(lu[0])?.reason, Math.abs(Date.parse(String(lat.publishedAt)) - t0) <= 5000], [200, [["status_changed", "scheduled", "draft"]], B7_REASON.unschedule, true]);
+  }
+  {
+    const d = await mk("world-travel-brief");
+    const before = await snap(d.id);
+    const l0 = await maxLogId();
+    const r = await pubH("world-travel-brief", d.id, d.version);
+    const logs = await logsFor(d.id, l0);
+    expect("H-4: (world-travel-brief, 19 targets) publish in-process ⇒ 1 article_published + 19 translation_queued rows, 19 translationJobs, 19 pending, version unchanged", [r.status, logs.filter((l) => l.e === "article_published").length, logs.filter((l) => l.e === "translation_queued").length, await E.tjobs(d.id), await E.pendingOf(d.id), JSON.stringify(await snap(d.id)) === JSON.stringify(before)], [200, 1, 19, 19, 19, true]);
+  }
+  {
+    const d = await mk("world-travel-brief");
+    const before = await snap(d.id);
+    const r = await schH("world-travel-brief", d.id, d.version, E.inMin(120));
+    const u = await schH("world-travel-brief", d.id, d.version, null, r.body.scheduledFor as string);
+    expect("H-5: (world-travel-brief) schedule + unschedule in-process ⇒ 0 translationJobs, 0 pending, version unchanged", [r.status, u.status, await E.tjobs(d.id), await E.pendingOf(d.id), JSON.stringify(await snap(d.id)) === JSON.stringify(before)], [200, 200, 0, 0, true]);
+  }
+  {
+    const http = await import("node:http");
+    let hits = 0;
+    const srv = http.createServer((rqq, rs) => {
+      if (rqq.method === "POST" && (rqq.url ?? "").startsWith("/api/revalidate")) hits++;
+      rqq.resume();
+      rs.writeHead(200, { "content-type": "application/json" });
+      rs.end("{}");
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as { port: number }).port;
+    const setFront = (url: string | null) => payload.update({ collection: "tenants", id: E.tid.gcv, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: url } as never });
+    try {
+      await setFront(`http://127.0.0.1:${port}`);
+      const x = await mk("gcv");
+      const y = await mk("gcv");
+      hits = 0;
+      const rs1 = await schH("gcv", x.id, x.version, E.inMin(120));
+      await sleep7(200);
+      const hS = hits;
+      hits = 0;
+      await schH("gcv", x.id, x.version, null, rs1.body.scheduledFor as string);
+      await sleep7(200);
+      const hU = hits;
+      hits = 0;
+      await pubH("gcv", y.id, y.version);
+      await sleep7(300);
+      expect("H-6: (gcv, CENTRAL_SIGNING_SECRET in the probe env) webhook POSTs in-process: schedule 0, unschedule 0, publish exactly 1", [Boolean(process.env.CENTRAL_SIGNING_SECRET), hS, hU, hits], [true, 0, 0, 1]);
+    } finally {
+      await setFront(null);
+      srv.close();
+    }
+  }
+  {
+    // H-7 (LA-ROLL on the publish shape, PB-3v): a real publish write through req, then fn throws ⇒ kill ⇒ nothing changed.
+    const d = await mk("gcv");
+    const before = await mainRaw(d.id);
+    const v0 = await E.verCount(d.id);
+    let thrown: unknown = null;
+    try {
+      await lockMod.withHubArticleLock({ tenantId: E.tid.gcv, articleId: d.id }, async (c) => {
+        await payload.update({ collection: "articles", id: d.id, req: c.req as never, depth: 0, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: new Date().toISOString() } as never, context: { hubWrite: { actor: B7_ACTOR, reason: B7_REASON.publish }, engineId: s6.engines.writeonly.id } });
+        throw new Error("b7 roll");
+      });
+    } catch (x) {
+      thrown = x;
+    }
+    expect("H-7: (LA-ROLL, publish shape) a real non-draft publish write through req, then fn throws ⇒ kill ⇒ main row + version rows unchanged, no advisory lock", [(thrown as Error | null)?.message, JSON.stringify(await mainRaw(d.id)) === JSON.stringify(before), (await E.verCount(d.id)) === v0, (await E.advisory()).length], ["b7 roll", true, true, 0]);
+  }
+  {
+    // H-8 (PB-3v variant): the translation hook throws during publish (WTB) ⇒ 500, nothing committed.
+    const d = await mk("world-travel-brief");
+    const before = await mainRaw(d.id);
+    const pl = payload as unknown as { create: (a: Doc) => Promise<unknown> };
+    const orig = pl.create.bind(payload);
+    pl.create = async (a: Doc) => {
+      if (a.collection === "translationJobs") throw Object.assign(new Error("b7 injected translation failure"), { name: "B7Injected" });
+      return orig(a);
+    };
+    let r: { status: number; body: Doc };
+    try {
+      r = await pubH("world-travel-brief", d.id, d.version);
+    } finally {
+      pl.create = orig;
+    }
+    expect("H-8: (PB-3v variant, WTB) the translation hook throws during publish ⇒ 500 internal_error; main row unchanged (draft), 0 translationJobs, no advisory lock", [r.status, r.body, JSON.stringify(await mainRaw(d.id)) === JSON.stringify(before), await E.tjobs(d.id), (await E.advisory()).length], [500, { ok: false, status: "internal_error" }, true, 0, 0]);
+  }
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -8523,7 +9716,7 @@ const run = flag("setup")
                                         : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…] [--server-log <file>] [--la-n-high] | --check7 --unit-only | --check7 --only GATE",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE",
   );
   process.exit(2);
 }
