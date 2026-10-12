@@ -39,7 +39,8 @@ export const MEDIA_TOKEN_RE = /^!\[[^\]\n\r]*\]\(cms-media:([1-9][0-9]*)\)$/;
 
 const PLACEHOLDER_RE = /^\u0001cms-media:([1-9][0-9]*)\u0001$/;
 const BLANK_RE = /^[ \t]*$/;
-const FENCE_RE = /^ {0,3}(```|~~~)/;
+/** CommonMark fence line: ≤3 spaces, then ≥3 backticks or ≥3 tildes; group 2 = the rest. */
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 type Node = Record<string, unknown>;
 const isNode = (v: unknown): v is Node => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -53,16 +54,20 @@ export function mediaPlaceholder(id: string | number): string {
 export function findMediaTokenLines(md: string): { line: number; id: string }[] {
   const lines = md.split("\n");
   const out: { line: number; id: string }[] = [];
-  let fence: string | null = null;
+  // Review-1 M1: CommonMark fences. An opener is ≥3 of ONE char (a backtick opener's
+  // info string has no backtick); only a run of the SAME char, at least as long, with
+  // nothing but spaces/tabs after it, closes. So ```` … ``` … ```` is ONE block and a
+  // token on a line inside it is not a token. An unclosed fence runs to the end.
+  let fence: { ch: string; len: number } | null = null;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i]!;
     const f = FENCE_RE.exec(l);
     if (fence !== null) {
-      if (f && f[1] === fence) fence = null;
+      if (f && f[1]![0] === fence.ch && f[1]!.length >= fence.len && /^[ \t]*$/.test(f[2]!)) fence = null;
       continue;
     }
-    if (f) {
-      fence = f[1]!;
+    if (f && !(f[1]![0] === "`" && f[2]!.includes("`"))) {
+      fence = { ch: f[1]![0]!, len: f[1]!.length };
       continue;
     }
     const m = MEDIA_TOKEN_RE.exec(l);
@@ -202,10 +207,92 @@ export function uploadIdsInTree(lex: unknown): string[] {
   return out;
 }
 
-/** The ONE wrapper (T8): real converters + token handling on both directions. */
+/** Number of `upload` nodes of ANY relationTo, anywhere in a tree. Iterative. */
+function countUploadNodes(lex: unknown): number {
+  let n = 0;
+  const stack: unknown[] = [isNode(lex) ? lex.root : null];
+  while (stack.length) {
+    const x = stack.pop();
+    if (!isNode(x)) continue;
+    if (x.type === "upload") n++;
+    if (Array.isArray(x.children)) stack.push(...(x.children as unknown[]));
+  }
+  return n;
+}
+
+/** Does any text value of a tree hold the placeholder character U+0001? Iterative. */
+export function treeHasPlaceholderChar(lex: unknown): boolean {
+  const stack: unknown[] = [lex];
+  while (stack.length) {
+    const n = stack.pop();
+    if (typeof n === "string") {
+      if (n.includes("\u0001")) return true;
+      continue;
+    }
+    if (Array.isArray(n)) stack.push(...n);
+    else if (isNode(n)) for (const v of Object.values(n)) if (typeof v === "string" || typeof v === "object") stack.push(v);
+  }
+  return false;
+}
+
+/**
+ * The ONE wrapper (T8): real converters + token handling on both directions.
+ * Placeholder discipline (review-1 M1 + review-2 note a): U+0001 may only ever be
+ * the placeholder WE inserted, at exactly the positions we inserted it.
+ *   import: the Markdown must not already hold U+0001; after conversion every
+ *           inserted placeholder must have become an upload node (count equal) and
+ *           no U+0001 may remain anywhere in the tree ⇒ else throw.
+ *   export: the tree must not hold U+0001 in any text; after conversion the output
+ *           must hold exactly the placeholder lines of the upload nodes, in order,
+ *           each standing alone outside a fence, and no other U+0001 ⇒ else throw.
+ * A throw makes the write `node` (inside the vm) and the round-trip "not safe".
+ */
 export function mediaTokenConverters(base: BodyConverters): BodyConverters {
   return {
-    toLexical: (md) => placeholdersToUploadNodes(base.toLexical(tokensToPlaceholders(md))),
-    toMarkdown: (lex) => placeholdersToTokens(base.toMarkdown(uploadNodesToPlaceholders(lex))),
+    toLexical: (md) => {
+      if (md.includes("\u0001")) throw new Error("hub media token: placeholder character in the input");
+      const want = findMediaTokenLines(md).length;
+      const lex = placeholdersToUploadNodes(base.toLexical(tokensToPlaceholders(md)));
+      const got = countUploadNodes(lex);
+      if (got !== want || treeHasPlaceholderChar(lex)) throw new Error("hub media token: a token did not become a root upload node");
+      return lex;
+    },
+    toMarkdown: (lex) => {
+      if (treeHasPlaceholderChar(lex)) throw new Error("hub media token: placeholder character in the stored body");
+      const ids = (rootChildren(lex) ?? []).filter((n) => n.type === "upload").map((n) => uploadValueId(n.value));
+      const md = base.toMarkdown(uploadNodesToPlaceholders(lex));
+      if (typeof md !== "string") return md;
+      const placed = findPlaceholderLines(md);
+      const total = md.split("\u0001").length - 1;
+      if (placed.length !== ids.length || total !== 2 * ids.length || placed.some((p, i) => p !== String(ids[i]))) {
+        throw new Error("hub media token: export did not keep every image as its own paragraph");
+      }
+      return placeholdersToTokens(md);
+    },
   };
+}
+
+/** Placeholder lines of an exported body that stand alone (blank neighbours, outside a fence): their ids, in order. */
+function findPlaceholderLines(md: string): string[] {
+  const lines = md.split("\n");
+  const out: string[] = [];
+  let fence: { ch: string; len: number } | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    const f = FENCE_RE.exec(l);
+    if (fence !== null) {
+      if (f && f[1]![0] === fence.ch && f[1]!.length >= fence.len && /^[ \t]*$/.test(f[2]!)) fence = null;
+      continue;
+    }
+    if (f && !(f[1]![0] === "`" && f[2]!.includes("`"))) {
+      fence = { ch: f[1]![0]!, len: f[1]!.length };
+      continue;
+    }
+    const m = PLACEHOLDER_RE.exec(l);
+    if (!m) continue;
+    const prevBlank = i === 0 || BLANK_RE.test(lines[i - 1]!);
+    const nextBlank = i === lines.length - 1 || BLANK_RE.test(lines[i + 1]!);
+    if (prevBlank && nextBlank) out.push(m[1]!);
+  }
+  return out;
 }

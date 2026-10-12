@@ -65,7 +65,7 @@ import {
   type HubParseResult,
 } from "@/lib/hub-author-input";
 import { convertBody, isRoundTripSafeBody, lexicalTreesEqual, type ConvertResult, type HubEditorConfig } from "@/lib/hub-author-body";
-import { findSlugConflict, resolveDraftRefs, type ResolvedRefs } from "@/lib/hub-author-refs";
+import { bodyMediaIdsMatch, findSlugConflict, resolveDraftRefs, type ResolvedRefs } from "@/lib/hub-author-refs";
 import {
   busyResponse,
   isBusyCode,
@@ -283,6 +283,8 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     if (v.bodyMarkdown) {
       const c = await (deps?.convert ?? defaultConvert)(payload, v.bodyMarkdown);
       if (!c.ok) return conversionRejected(payload, c);
+      // P5.3 T8 (c): the stored tree's media ids must be exactly the tenant-checked ids.
+      if (!bodyMediaIdsMatch(c.lexical, refs.bodyMediaIds ?? [])) return invalid({ bodyMarkdown: "unknown_ref" });
       lexical = c.lexical;
     }
 
@@ -495,6 +497,8 @@ export async function handleHubDraftUpdateWith(
     if (v.bodyMarkdown) {
       const c = await (deps?.convert ?? defaultConvert)(payload, v.bodyMarkdown);
       if (!c.ok) return conversionRejected(payload, c);
+      // P5.3 T8 (c): the stored tree's media ids must be exactly the tenant-checked ids.
+      if (!bodyMediaIdsMatch(c.lexical, refs.bodyMediaIds ?? [])) return invalid({ bodyMarkdown: "unknown_ref" });
       lexical = c.lexical;
     }
 

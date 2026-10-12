@@ -194,3 +194,46 @@ describe("placeholders + converters (T8 d)", () => {
     assert.equal(uploadValueId({ id: -1 }), null);
   });
 });
+
+// ── step 2.2: fences (review-1 M1) + placeholder discipline (review-2 note a) ──
+
+describe("CommonMark fences (review-1 M1)", () => {
+  it("a token inside a 4-backtick fence that contains a 3-backtick line is NOT a token", () => {
+    const md = "````\n```\n\n![](cms-media:5)\n\n```\n````";
+    assert.deepEqual(ids(md), []);
+    assert.equal(isImage(md), true);
+  });
+  it("a longer closer closes; a shorter one or one with text after it does not", () => {
+    assert.deepEqual(ids("```\nx\n`````\n\n![](cms-media:5)"), ["5"]);
+    assert.deepEqual(ids("~~~~\nx\n~~~\n\n![](cms-media:5)"), []);
+    assert.deepEqual(ids("```\nx\n``` y\n\n![](cms-media:5)"), []);
+  });
+  it("a backtick line with a backtick in its info string is not an opener; an unclosed fence runs to the end", () => {
+    assert.deepEqual(ids("``` a`b\n\n![](cms-media:5)"), ["5"]);
+    assert.deepEqual(ids("```\n\n![](cms-media:5)"), []);
+  });
+});
+
+describe("placeholder discipline (no U+0001 except where the wrapper put it)", () => {
+  it("import: Markdown already holding U+0001 throws", () => {
+    assert.throws(() => mediaTokenConverters(fake).toLexical(`A.\n\n${mediaPlaceholder("5")}`));
+    assert.throws(() => mediaTokenConverters(fake).toLexical("a\u0001b"), "a stray U+0001 that is not a placeholder line");
+  });
+  it("import: a token whose placeholder does not come back as a root paragraph throws", () => {
+    const merging = { ...fake, toLexical: (md: string) => root(para(text(md.replace(/\n/g, " ")))) };
+    assert.throws(() => mediaTokenConverters(merging).toLexical("A.\n\n![](cms-media:5)\n\nB."));
+  });
+  it("export: a stored text holding U+0001 (e.g. a line equal to a placeholder) throws, never becomes a token", () => {
+    assert.throws(() => mediaTokenConverters(fake).toMarkdown(root(para(text(mediaPlaceholder("99"))))));
+    assert.throws(() => mediaTokenConverters(fake).toMarkdown(root(para(text("a\u0001b")))));
+  });
+  it("export: an exporter that glues the image to its neighbour throws", () => {
+    const glue = { ...fake, toMarkdown: (lex: unknown) => fake.toMarkdown(lex).replace(/\n\n/g, "\n") };
+    assert.throws(() => mediaTokenConverters(glue).toMarkdown(root(para(text("A.")), upload(5), para(text("B.")))));
+  });
+  it("round trip with two images and text stays exact", () => {
+    const conv = mediaTokenConverters(fake);
+    const md = "A.\n\n![](cms-media:5)\n\n![](cms-media:6)\n\nB.";
+    assert.equal(conv.toMarkdown(conv.toLexical(md)), md);
+  });
+});

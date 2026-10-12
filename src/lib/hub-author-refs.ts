@@ -24,6 +24,44 @@ import { ENGINE_BLOCKED_PILLARS } from "@/lib/constants";
 import { featureEnabled, type TenantDoc } from "@/lib/tenant";
 import type { HubFieldCode, HubFieldErrors } from "@/lib/hub-author-limits";
 import type { HubDraftFields } from "@/lib/hub-author-input";
+import { extractMediaIds, uploadIdsInTree } from "@/lib/hub-author-media-token";
+
+/** "2147483647" — compared as DIGIT STRINGS, never through Number() (a 400-digit id is Infinity). */
+const INT4_MAX_DIGITS = "2147483647";
+const digitsAboveInt4 = (d: string) => d.length > INT4_MAX_DIGITS.length || (d.length === INT4_MAX_DIGITS.length && d > INT4_MAX_DIGITS);
+
+/**
+ * P5.3 T5 / E8: body image ids of THIS tenant. Order (all BEFORE any query):
+ * an id above int4 ⇒ `out_of_range`; more than 30 distinct ids (counted before the
+ * tenant filter) ⇒ `too_many`; then ONE `scopedFind` — a missing id or another
+ * tenant's media ⇒ `unknown_ref`. Returns the distinct checked ids (digits).
+ */
+export async function resolveBodyMedia(
+  payload: Payload,
+  tenantId: Id,
+  md: string,
+): Promise<{ ok: true; ids: string[] } | { ok: false; code: HubFieldCode }> {
+  const ids = [...new Set(extractMediaIds(md))];
+  if (ids.some(digitsAboveInt4)) return { ok: false, code: "out_of_range" };
+  if (ids.length > MEDIA_BODY_MAX) return { ok: false, code: "too_many" };
+  if (ids.length === 0) return { ok: true, ids };
+  const res = await scopedFind({ payload, collection: "media", tenantId, where: { id: { in: ids.map(Number) } }, depth: 0, limit: ids.length + 1, page: 1 });
+  const found = new Set((res.docs as unknown as Doc[]).map((d) => String(d.id)));
+  return ids.every((i) => found.has(i)) ? { ok: true, ids } : { ok: false, code: "unknown_ref" };
+}
+
+/**
+ * P5.3 T8 (c): after conversion (OUTSIDE the vm) the stored tree's media upload ids
+ * must be EXACTLY the tenant-checked set — an extra, a missing or a malformed one ⇒
+ * the caller answers 422 `fields.bodyMarkdown: "unknown_ref"`.
+ */
+export function bodyMediaIdsMatch(lexical: unknown, checked: readonly string[]): boolean {
+  const inTree = uploadIdsInTree(lexical);
+  if (inTree.some((i) => i === "")) return false;
+  const a = new Set(inTree);
+  const b = new Set(checked);
+  return a.size === b.size && [...a].every((i) => b.has(i));
+}
 
 type Id = number | string;
 
@@ -136,6 +174,8 @@ export interface ResolvedRefs {
   coAuthors?: Id[];
   /** P5.3 T5: resolved hero media id (null = clear). */
   heroImage?: Id | null;
+  /** P5.3 T5 / T8: the distinct, tenant-checked body image ids (set whenever `bodyMarkdown` is sent). */
+  bodyMediaIds?: string[];
 }
 
 /**
@@ -233,6 +273,12 @@ export async function resolveDraftRefs(args: {
     if (input.heroImageId === null) refs.heroImage = null;
     else if (await resolveHeroMedia(payload, tenant.id, input.heroImageId)) refs.heroImage = input.heroImageId;
     else fields.heroImageId = "unknown_ref";
+  }
+
+  if (input.bodyMarkdown !== undefined) {
+    const r = await resolveBodyMedia(payload, tenant.id, input.bodyMarkdown);
+    if (r.ok) refs.bodyMediaIds = r.ids;
+    else fields.bodyMarkdown = r.code;
   }
 
   return Object.keys(fields).length ? { ok: false, fields } : { ok: true, refs };

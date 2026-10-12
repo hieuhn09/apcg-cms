@@ -10265,10 +10265,133 @@ async function check8() {
       const e = await getEdit(art, "gcv");
       const ed = (e.body.edit ?? {}) as Doc;
       expect("P7-1: (part, 1.8) saved body with upload nodes ⇒ view=edit editable, tokens in bodyMarkdown, bodyMedia listed", [ed.editable, String(((e.body.article ?? {}) as Doc).bodyMarkdown).includes(`![](cms-media:${gA})`), ((ed.bodyMedia ?? []) as Doc[]).length], [true, true, 3]);
-      expect("P7-0: (review NIT 6) before 2.2 a saved body with upload nodes is NOT bodyEditable (old hubs keep the old answer)", ed.bodyEditable, false);
+      const bm7 = String(((e.body.article ?? {}) as Doc).bodyMarkdown ?? "");
+      expect("P7-0: (AC25, step 2.2) a saved body with upload nodes is bodyEditable:true AND (review M2 invariant) its bodyMarkdown carries a token for every upload node (no fallback)", [
+        ed.bodyEditable, [gA, gB, dX, inj].every((m) => bm7.includes(`![](cms-media:${m})`)), bm7.includes("relation to"),
+      ], [true, true, false]);
       const n0 = uploadCount((await latestDoc(art)).body);
       const t = await patch(art, "gcv", { title: `P7 text-only ${run}` });
       expect("P7-2: PATCH a text field only (no bodyMarkdown) ⇒ 200; the stored upload nodes are kept", [t.status, t.body.changed, uploadCount((await latestDoc(art)).body), n0], [200, ["title"], n0, 5]);
+    }
+  }
+
+  // ── step 2.2 (branch B): body image tokens on the WRITE path, E8, AC25, K4 / D7 ──
+  if (want("B") || want("P7") || want("K4")) {
+    const writeTok = tok(s6.engines.writeonly.tokenFile);
+    const fxg = s6.fixtures.gcv!;
+    const post = (fields: Doc) => send("/api/hub/articles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", actor: P8_HUMAN, ...fields }) });
+    const newSlug = () => `p8-${run}-${seq++}`;
+    const full = (md: string) => ({ title: `P8 body ${seq}`, slug: newSlug(), pillarSlug: fxg.pillars[0], subSectionSlug: fxg.subsections.find((x) => x.pillar === fxg.pillars[0])?.slug, authorId: fxg.authors[0], bodyMarkdown: md });
+    const m1 = await uploaded("gcv", gcvDraft, "B own 1");
+    const m2 = await uploaded("gcv", gcvDraft, "B own 2");
+    const dM = await uploaded("dtw", dtwDraft, "B dtw");
+    const tokLine = (id: number | string) => `![](cms-media:${id})`;
+    const md1 = `Intro.\n\n${tokLine(m1)}\n\nOutro.`;
+    const fieldsOf = (r: Reply) => [r.status, (r.body.fields ?? r.body.status) as unknown];
+
+    if (want("B")) {
+      const i0 = await interr();
+      const c = await post(full(`Intro.\n\n![typed alt is ignored](cms-media:${m1})\n\nOutro.`));
+      const id = c.body.id as number;
+      const lt = await latestDoc(id);
+      const ups = (((lt.body ?? {}) as Doc).root as Doc)?.children as Doc[] | undefined;
+      expect("B-1: (AC11) POST with a body token ⇒ 201; stored tree = paragraph, upload{relationTo:media, value:m1}, paragraph", [
+        c.status, (ups ?? []).map((n) => n.type), (ups ?? []).filter((n) => n.type === "upload").map((n) => [n.relationTo, n.value]),
+      ], [201, ["paragraph", "upload", "paragraph"], [["media", m1]]]);
+      const ve = await getEdit(id, "gcv");
+      const ed = (ve.body.edit ?? {}) as Doc;
+      expect("B-2: (AC12 / AC25) view=edit: bodyEditable true, bodyMarkdown = canonical token (typed alt dropped), bodyMedia [m1]", [
+        ed.bodyEditable, ((ve.body.article ?? {}) as Doc).bodyMarkdown, ((ed.bodyMedia ?? []) as Doc[]).map((m) => m.id),
+      ], [true, md1, [m1]]);
+      const same = await patch(id, "gcv", { bodyMarkdown: md1 });
+      expect("B-3: PATCH the same canonical body ⇒ 200 changed [] (round-trip stable, no write)", [same.status, same.body.changed], [200, []]);
+      const sw = await patch(id, "gcv", { bodyMarkdown: `Intro.\n\n${tokLine(m2)}\n\nOutro.` });
+      const lt2 = await latestDoc(id);
+      expect("B-4: (E4) PATCH swapping the image id ⇒ 200 changed [bodyMarkdown]; stored upload value = m2", [sw.status, sw.body.changed, uploadCount(lt2.body), JSON.stringify(lt2.body).includes(`"value":${m2}`)], [200, ["bodyMarkdown"], 1, true]);
+      const n0 = uploadCount(lt2.body);
+      expect("B-5: (AC6 / AC7) body token of ANOTHER tenant's media / a non-existent id ⇒ 422 fields.bodyMarkdown unknown_ref; nothing stored", [
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine(dM)}` })), fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine(2147483646)}` })),
+        fieldsOf(await post(full(`A.\n\n${tokLine(dM)}`))), uploadCount((await latestDoc(id)).body),
+      ], [[422, { bodyMarkdown: "unknown_ref" }], [422, { bodyMarkdown: "unknown_ref" }], [422, { bodyMarkdown: "unknown_ref" }], n0]);
+      const big = (n: number, from: number) => Array.from({ length: n }, (_, i) => tokLine(from + i)).join("\n\n");
+      expect("B-6: (E8) body token ids of 11 / 20 / 400 digits (PATCH) and 2147483648 / 20 digits (POST) ⇒ 422 out_of_range BEFORE the id query", [
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine("1".repeat(11))}` })), fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine("9".repeat(20))}` })),
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine("7".repeat(400))}` })),
+        fieldsOf(await post(full(tokLine(2147483648)))), fieldsOf(await post(full(tokLine("9".repeat(20))))),
+      ], [[422, { bodyMarkdown: "out_of_range" }], [422, { bodyMarkdown: "out_of_range" }], [422, { bodyMarkdown: "out_of_range" }], [422, { bodyMarkdown: "out_of_range" }], [422, { bodyMarkdown: "out_of_range" }]]);
+      expect("B-7: (T5) 31 distinct ids ⇒ too_many (counted before the tenant filter); 30 distinct ids that do not exist ⇒ unknown_ref; a repeated id counts once", [
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: big(31, 2000000000) })), fieldsOf(await patch(id, "gcv", { bodyMarkdown: big(30, 2000000000) })),
+        (await patch(id, "gcv", { bodyMarkdown: Array.from({ length: 31 }, () => tokLine(m1)).join("\n\n") })).status,
+      ], [[422, { bodyMarkdown: "too_many" }], [422, { bodyMarkdown: "unknown_ref" }], 200]);
+      const imgOf = async (md: string) => fieldsOf(await patch(id, "gcv", { bodyMarkdown: md }));
+      expect("B-8: (T8 a / E10, real HTTP) token mid-sentence, in a list, indented 2 spaces between paragraphs, CRLF between paragraphs, inside a 4-backtick fence, with a title, alt containing `]` ⇒ 422 image", [
+        await imgOf(`See ${tokLine(m1)} here.`), await imgOf(`- ${tokLine(m1)}`), await imgOf(`A.\n\n  ${tokLine(m1)}\n\nB.`), await imgOf(`A.\r\n\r\n${tokLine(m1)}\r\n\r\nB.`),
+        await imgOf("````\n```\n\n" + tokLine(m1) + "\n\n```\n````"), await imgOf(`A.\n\n![](cms-media:${m1} "t")`), await imgOf(`A.\n\n![a]b](cms-media:${m1})`),
+      ], Array.from({ length: 7 }, () => [422, { bodyMarkdown: "image" }]));
+      const own21: number[] = [];
+      for (let i = 0; i < 21; i++) own21.push(await localMedia("gcv", `B 21 ${i}`));
+      const oneUnit = own21.map(tokLine).join("\n");
+      const sep = await patch(id, "gcv", { bodyMarkdown: own21.map(tokLine).join("\n\n") });
+      expect("B-9: 21 images on consecutive lines (one paragraph unit) ⇒ the existing 1b limit (behaviour recorded); 21 images each its own paragraph ⇒ 200, 21 upload nodes", [
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: oneUnit })), sep.status, uploadCount((await latestDoc(id)).body),
+      ], [[422, { bodyMarkdown: "too_large" }], 200, 21]);
+      expect("B-10: (E8) the B requests wrote 0 integration_error rows", (await interr()) - i0, 0);
+    }
+
+    if (want("P7")) {
+      const i0 = await interr();
+      // Image-only body (AC25 / P7): not empty, editable, publish does not fail `required`.
+      const c = await post(full(tokLine(m1)));
+      const id = c.body.id as number;
+      const ve = (await getEdit(id, "gcv")).body;
+      const ed = (ve.edit ?? {}) as Doc;
+      const pub = await send(`/api/hub/articles/${id}/publish`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", expectedVersion: ed.version, actor: P8_HUMAN }) }, writeTok);
+      const main = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      if (pub.status !== 200) console.log(`OBS   P7 image-only publish ⇒ ${pub.status} ${pub.text.slice(0, 300)} (gap hub-p5-3-image-only-body-required if 'required')`);
+      expect("P7-3: body of ONLY one image: POST 201, bodyEditable true, publish (hub write token) ⇒ 200, main row published with 1 upload node (no `required` error)", [
+        c.status, ed.bodyEditable, pub.status, main.workflowStatus, uploadCount(main.body),
+      ], [201, true, 200, "published", 1]);
+      // videoMedia upload node + a deleted media: the token export throws ⇒ default export, bodyEditable false, 0 integration_error.
+      const v1 = await mkDraft("gcv");
+      await tamper8(v1, { body: lexOf([paraNode("Video body."), { ...upNode(m1, 0), relationTo: "videoMedia" }]) });
+      const vr = (await getEdit(v1, "gcv")).body;
+      const gone = await localMedia("gcv", "P7 gone");
+      const d1 = await mkDraft("gcv");
+      await tamper8(d1, { body: lexOf([paraNode("Deleted media body."), upNode(gone, 0), paraNode("End.")]) });
+      await payload.delete({ collection: "media", id: gone, overrideAccess: true, context: { disableRevalidate: true } });
+      const dr = (await getEdit(d1, "gcv")).body;
+      console.log(`OBS   P7 deleted media: bodyEditable=${String(((dr.edit ?? {}) as Doc).bodyEditable)} bodyMarkdown=${JSON.stringify(((dr.article ?? {}) as Doc).bodyMarkdown)} bodyMedia=${JSON.stringify(((dr.edit ?? {}) as Doc).bodyMedia)}`);
+      expect("P7-4: (T9) body with a videoMedia upload node ⇒ editable, bodyEditable false, bodyMarkdown from the DEFAULT export (no cms-media token), bodyState ok", [
+        ((vr.edit ?? {}) as Doc).editable, ((vr.edit ?? {}) as Doc).bodyEditable, String(((vr.article ?? {}) as Doc).bodyMarkdown).includes("cms-media:"), ((vr.article ?? {}) as Doc).bodyState,
+      ], [true, false, false, "ok"]);
+      expect("P7-5: (T9) body whose media was deleted ⇒ bodyEditable false (a save could only fail), no token for the deleted id", [
+        ((dr.edit ?? {}) as Doc).bodyEditable, String(((dr.article ?? {}) as Doc).bodyMarkdown).includes(`cms-media:${gone}`),
+      ], [false, false]);
+      expect("P7-6: the P7 reads / writes wrote 0 integration_error rows", (await interr()) - i0, 0);
+    }
+
+    if (want("K4")) {
+      // D7: the cron's non-draft update must accept a body with an upload node.
+      const c = await post(full(`K4 intro.\n\n${tokLine(m1)}\n\nK4 outro.`));
+      const id = c.body.id as number;
+      const n0 = uploadCount((await latestDoc(id)).body);
+      expect("K4-0: the draft tree really holds an upload node BEFORE scheduling", [c.status, n0 >= 1], [201, true]);
+      const ev = ((await getEdit(id, "gcv")).body.edit as Doc).version;
+      const at = new Date(Math.ceil((Date.now() + 2 * 3600_000) / 60_000) * 60_000).toISOString();
+      const sc = await send(`/api/hub/articles/${id}/schedule`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", expectedVersion: ev, actor: P8_HUMAN, scheduledFor: at }) }, writeTok);
+      const raw = await latestDoc(id);
+      let cronUpdate: unknown = "ok";
+      try {
+        // EXACTLY the update of src/app/api/cron/publish-scheduled/route.ts (one article only, no global cron run).
+        await payload.update({ collection: "articles", id, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: raw.publishedAt ?? raw.scheduledFor ?? new Date().toISOString() } as never });
+      } catch (e) {
+        cronUpdate = { name: (e as Error).name, message: (e as Error).message.slice(0, 300) };
+      }
+      const main = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      console.log(`OBS   K4 cron-style non-draft update: ${JSON.stringify(cronUpdate)}`);
+      expect("K4-1: (D7) schedule ⇒ 200 scheduled; the cron's non-draft update ACCEPTS the upload node: main row published, upload node kept", [
+        sc.status, raw.workflowStatus, cronUpdate, main.workflowStatus, main._status, uploadCount(main.body),
+      ], [200, "scheduled", "ok", "published", "published", n0]);
     }
   }
 
@@ -10342,8 +10465,32 @@ async function check8P1(expect: (label: string, actual: unknown, wanted: unknown
   // E4 note: the CURRENT comparator does not look at value / relationTo (COMPARED_KEYS).
   const changedId = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 6, format: "" }] } };
   const sameId = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 5, format: "" }] } };
-  obs8("P1 E4 baseline: lexicalTreesEqual(upload 5, upload 6) with the UNCHANGED comparator (2.2 must make this false)", coreMod.lexicalTreesEqual(sameId, changedId));
-  obs8("P1 checkLexicalTree({upload, relationTo:media, value:1}) BEFORE 2.2 (upload not yet allowed ⇒ node expected)", coreMod.checkLexicalTree({ root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 1 }] } }));
+  const popSame = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: { id: 5, url: "/x" }, format: "", id: "ffffffffffffffffffffffff" }] } };
+  const otherRel = { root: { type: "root", children: [{ type: "upload", relationTo: "videoMedia", value: 5, format: "" }] } };
+  expect("P1 (E4) lexicalTreesEqual: upload 5 vs 6 ⇒ false (a changed image IS a change); number 5 vs populated {id:5} with another node id ⇒ true; media vs videoMedia ⇒ false", [
+    coreMod.lexicalTreesEqual(sameId, changedId), coreMod.lexicalTreesEqual(sameId, popSame), coreMod.lexicalTreesEqual(sameId, otherRel),
+  ], [false, true, false]);
+  const ck = (n: Doc) => coreMod.checkLexicalTree({ root: { type: "root", children: [n] } });
+  expect("P1 checkLexicalTree: {upload, relationTo:media, value:1} ⇒ ok; videoMedia / no relationTo / value 0 / value object / value \"1\" ⇒ node", [
+    ck({ type: "upload", relationTo: "media", value: 1 }).ok, ck({ type: "upload", relationTo: "videoMedia", value: 1 }), ck({ type: "upload", value: 1 }),
+    ck({ type: "upload", relationTo: "media", value: 0 }), ck({ type: "upload", relationTo: "media", value: { id: 1 } }), ck({ type: "upload", relationTo: "media", value: "1" }),
+  ], [true, { ok: false, code: "node" }, { ok: false, code: "node" }, { ok: false, code: "node" }, { ok: false, code: "node" }, { ok: false, code: "node" }]);
+  // 2.2: the REAL write path (convertBodyGuarded = hubBodyConverters in ONE vm call) and round-trip.
+  const g = bodyMod.convertBodyGuarded(cfg as never, MD0);
+  const gl = (g as { lexical?: unknown }).lexical;
+  expect("P1 (2.2) convertBodyGuarded(real) on `![typed](cms-media:5)`: ok, stored tree = paragraph, upload{media,5}, paragraph; markdownOut canonical; isRoundTripSafeBody(stored) and (populated) true", [
+    g.ok, g.ok ? kids(gl).map((n) => String(n.type)) : null, g.ok ? (g as { markdownOut: string }).markdownOut : null,
+    g.ok && bodyMod.isRoundTripSafeBody(cfg as never, gl),
+    g.ok && bodyMod.isRoundTripSafeBody(cfg as never, { ...(gl as Doc), root: { ...((gl as Doc).root as Doc), children: kids(gl).map((n) => (n.type === "upload" ? { ...n, value: { id: 5, url: "/x" } } : n)) } }),
+  ], [true, ["paragraph", "upload", "paragraph"], MD1, true, true]);
+  const fence4 = "````\n```\n\n![](cms-media:5)\n\n```\n````";
+  expect("P1 (review-1 M1) token inside a 4-backtick fence: no token id, pure check says image (validateBodyPure), never reaches conversion", [tokenMod.extractMediaIds(fence4), bodyMod.validateBodyPure(fence4)], [[], { ok: false, code: "image" }]);
+  const refsMod = await import("../src/lib/hub-author-refs");
+  const lexIds = (ids: unknown[]) => ({ root: { type: "root", children: ids.map((v) => ({ type: "upload", relationTo: "media", value: v })) } });
+  expect("P1 (T8 c) bodyMediaIdsMatch: equal set ⇒ true (order / duplicates free); extra / missing / malformed id ⇒ false", [
+    refsMod.bodyMediaIdsMatch(lexIds([5, 9, 5]), ["9", "5"]), refsMod.bodyMediaIdsMatch(lexIds([5, 9]), ["5"]), refsMod.bodyMediaIdsMatch(lexIds([5]), ["5", "9"]),
+    refsMod.bodyMediaIdsMatch(lexIds([null]), []), refsMod.bodyMediaIdsMatch(lexIds([]), []),
+  ], [true, false, false, false, true]);
 
   // Branch A: does a plain Markdown image with a CMS media URL import as an upload node with an id, without DB?
   let aTypes: unknown = null;
