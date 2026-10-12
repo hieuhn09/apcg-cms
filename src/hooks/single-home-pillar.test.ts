@@ -28,18 +28,22 @@ const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed t
 
 type Doc = Record<string, unknown>;
 // 10 = brief-asia pressroom (single-home), 11 = brief-asia asia, 12 = wad pressroom, 13 = gcv finance,
-// 14 = gcv pressroom (single-home since GCV Pressroom parity)
+// 14 = gcv pressroom (single-home since GCV Pressroom parity), 15 = gtp press-room (single-home),
+// 16 = gtp events-awards (engine-blocked only, NOT single-home)
 const PILLARS: Doc[] = [
   { id: 10, slug: "pressroom", tenant: 1 },
   { id: 11, slug: "asia", tenant: 1 },
   { id: 12, slug: "pressroom", tenant: 2 },
   { id: 13, slug: "finance", tenant: 3 },
   { id: 14, slug: "pressroom", tenant: 3 },
+  { id: 15, slug: "press-room", tenant: 4 },
+  { id: 16, slug: "events-awards", tenant: 4 },
 ];
 const TENANTS: Doc[] = [
   { id: 1, slug: "brief-asia" },
   { id: 2, slug: "wad" },
   { id: 3, slug: "gcv" },
+  { id: 4, slug: "gtp" },
 ];
 
 interface FakeReq {
@@ -366,6 +370,14 @@ describe("Articles author validate (optional only for single-home)", () => {
   it("a gcv Pressroom article may have no author", async () => {
     assert.equal(await validate(null, opts(14)), true);
     assert.equal(await validate(null, opts(14, makeReq(), "data")), true);
+  });
+  it("a gtp press-room article may have no author", async () => {
+    assert.equal(await validate(null, opts(15)), true);
+    assert.equal(await validate(null, opts(15, makeReq(), "data")), true);
+  });
+  it("a gtp events-awards article (engine-blocked, not single-home) requires an author", async () => {
+    assert.equal(await validate(null, opts(16)), REQ);
+    assert.equal(await validate(5, opts(16)), true);
   });
 });
 
