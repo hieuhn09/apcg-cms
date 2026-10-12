@@ -100,6 +100,27 @@ and status.
   UNION ALL SELECT 'v_exclusive', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_exclusive;
   ```
 
+- **GTP rollout (owner-run; GlobalTravelPost, tenant `gtp`):** the rules ship in code
+  (`gtp` in `SINGLE_HOME_PILLARS` (`press-room`) and `ENGINE_BLOCKED_PILLARS`
+  (`press-room`, `events-awards`)) and are inert until the tenant exists. No migration.
+  Steps: (1) merge + deploy; (2) create the tenant in /admin (`docs/07-website-management.md`,
+  `autoPublishEngineDrafts` off, frontend URL empty); (3) print the DB **hostname** (no
+  port) with `node -e 'console.log(new URL(process.env.DATABASE_URL).hostname)'` and pass
+  exactly that to `--confirm-host`; (4) dry run:
+  `npm run audit:add-gtp-taxonomy -- --confirm-host=<hostname>` and review the plan
+  (6 pillars, 20 sub-sections, 2 newsletters, 6 authors, 6 tags = 40 rows, all `create`);
+  (5) apply from an interactive terminal:
+  `npm run audit:add-gtp-taxonomy -- --apply --confirm-host=<hostname> [--authors-file=./gtp-authors.json]`;
+  (6) re-run the dry run: every row must read `exists`. The script is dry-run by default,
+  never overwrites (differences are printed only), refuses unsafe states (and then writes
+  nothing), and keeps a result log under `migration-data/`. Never run it with a tunnelled
+  production DB open. **No violator SQL is needed**: `press-room` is a new pillar with
+  zero articles. **Rollback:** before any article exists, delete in /admin in this order:
+  authors, tags, newsletters, sub-sections, pillars (the result log lists every id),
+  optionally the tenant; afterwards never delete pillars; suspend the tenant instead. Code
+  rollback = revert the PR. **Seed warning:** `npm run db:seed` is local-only; the gtp
+  fixture (`SEED_INCLUDE_GTP=true`) refuses a non-local database.
+
 ## Token rotation
 
 `tsx scripts/mint-token.ts read --tenant <slug>` / `engine --engine "<name>"`.
