@@ -153,8 +153,9 @@ async function main() {
     const bylinePool = i % 11 === 0 ? FOREIGN[i % FOREIGN.length] : BYLINES[i % BYLINES.length];
     const format = i < 5 ? (["guide", "analysis", "review", "interview", "none"][i] as string) : pickWeighted(r, FORMATS);
     const noImage = i % 33 === 7;
-    const broken = i === 37 || i === 38;
-    const evil = i === 39;
+    // Failing images are spread out so no 50-image window exceeds the 2% media failure budget.
+    const broken = i === 37 || (rows > 150 && i === 150);
+    const evil = rows > 260 && i === 260;
     let featured: string | null = null;
     if (!noImage) {
       const p = broken ? `/storage/v1/object/public/media/featured/missing-${i}.jpg` : evil ? "/special/redirect-evil.jpg" : `/storage/v1/object/public/media/featured/${id}.jpg`;

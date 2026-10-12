@@ -75,6 +75,7 @@ async function main(): Promise<number> {
     mediaDeleted: 0,
     mediaKeptReferenced: 0,
     mediaKeptAdopted: 0,
+    mediaAlreadyGone: 0,
     tagsDeleted: 0,
     errors: [] as string[],
   };
@@ -119,15 +120,23 @@ async function main(): Promise<number> {
   const survivingRefs = new Set(media.filter((m) => !deletedLegacy.has(m.articleLegacyId) && m.mediaId !== undefined).map((m) => String(m.mediaId)));
   const mediaToDelete: (number | string)[] = [];
   const seen = new Set<string>();
+  const journaledLegacy = new Set(entries.map((e) => e.legacyId));
   for (const m of media) {
-    if (!deletedLegacy.has(m.articleLegacyId) || m.mediaId === undefined || seen.has(String(m.mediaId))) continue;
+    // Media of deleted/gone articles, and media uploaded for a row that never reached the journal (crash before the journal line).
+    const unjournaled = !journaledLegacy.has(m.articleLegacyId);
+    if ((!deletedLegacy.has(m.articleLegacyId) && !unjournaled) || m.mediaId === undefined || seen.has(String(m.mediaId))) continue;
     seen.add(String(m.mediaId));
     if (m.origin !== "created") {
       rep.mediaKeptAdopted++;
       continue;
     }
-    if (survivingRefs.has(String(m.mediaId))) {
+    if (survivingRefs.has(String(m.mediaId)) && !unjournaled) {
       rep.mediaKeptReferenced++;
+      continue;
+    }
+    const exists = ((await pFind(payload, "media", { where: { and: [{ tenant: { equals: tenantId } }, { id: { equals: m.mediaId } }] }, limit: 1 })) as unknown as { docs: Doc[] }).docs[0];
+    if (!exists) {
+      rep.mediaAlreadyGone++;
       continue;
     }
     const refs = await findAll(payload, "articles", { and: [{ tenant: { equals: tenantId } }, { heroImage: { equals: m.mediaId } }] }, { draft: true });

@@ -92,6 +92,7 @@ async function main(): Promise<number> {
   const subs = new Map((await findAll(payload, "subsections", { tenant: { equals: tenantId } })).map((s) => [String(s.id), String(s.slug)]));
   const bySlug = new Map(art.map((d) => [String(d.slug), d]));
   const entryByLegacy = new Map(slugMap.map((e) => [e.legacyId, e]));
+  const oldToNew = new Map(slugMap.filter((e) => e.oldUrl && e.status === "published").map((e) => [normaliseKey(e.oldUrl as string) ?? "", `/article/${e.slug}`]));
 
   // 1 counts by status
   {
@@ -152,7 +153,17 @@ async function main(): Promise<number> {
         continue;
       }
       const s = sectionsToHtml(r.body_sections);
-      const a1 = plainTextForParity(s.text);
+      // Pass 2 (rewrite-links) legitimately replaced old-site URLs with /article/<slug>: apply the same mapping to the source text.
+      let srcText = s.text;
+      for (const u of e?.textLinks ?? []) {
+        try {
+          const to = oldToNew.get(normaliseKey(new URL(u).pathname) ?? "");
+          if (to && blocks(d.body).some((b) => b.text.includes(to))) srcText = srcText.split(u).join(to);
+        } catch {
+          /* keep */
+        }
+      }
+      const a1 = plainTextForParity(srcText);
       const b1 = plainTextForParity(blocks(d.body).map((b) => b.text).join("\n"));
       const ratio = a1.length ? b1.length / a1.length : b1.length ? 9 : 1;
       const sim = jaccard(a1, b1);

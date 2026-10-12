@@ -4,7 +4,8 @@
  * hostile paths for the G36 hybrid checks:
  *   /special/redirect-evil.jpg  -> 302 to a host that is NOT allow-listed
  *   /special/big.jpg            -> a 25 MB body (cap test)
- *   /special/lying.jpg          -> content-length 10, body 2 MB (streamed cap)
+ *   /special/lying.jpg          -> content-length 10, body 2 MB (the client must not trust it)
+ *   /special/chunked-big.jpg    -> no content-length, 3 MB body (streamed cap)
  *   /special/wrong-magic.jpg    -> text served as image/jpeg
  *   /storage/v1/object/sign/... -> 403 (signed-URL look-alike)
  */
@@ -42,6 +43,12 @@ const server = createServer((req, res) => {
     // body larger than declared; the client must stop at its cap
     res.socket?.write(Buffer.alloc(0));
     return res.end(Buffer.alloc(2 * 1024 * 1024, 0xff));
+  }
+  if (p === "/special/chunked-big.jpg") {
+    // no content-length at all: only the client's streamed byte cap can stop it
+    res.writeHead(200, { "content-type": "image/jpeg" });
+    res.write(Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+    return res.end(Buffer.alloc(3 * 1024 * 1024, 0xff));
   }
   if (p.startsWith("/storage/v1/object/sign/")) {
     res.writeHead(403);

@@ -359,7 +359,7 @@ async function main(): Promise<number> {
     check("G31 the flagged row now carries the new URL", body.includes(`/article/${target}`), target);
     const fl = slugMap("rehearsal").find((e) => e.legacyId === expected.internalLinkFrom);
     const fr = post.find((r) => String(r.id) === flaggedId);
-    check("G31 pass 2 re-recorded the rollback baseline", fl !== undefined && fr !== undefined && new Date(fl.baselineUpdatedAt).toISOString() === new Date(String(fr.updated_at)).toISOString() && Number(fl.baselineVersion) === Number(fr.version));
+    check("G31 pass 2 re-recorded the rollback baseline", fl !== undefined && fr !== undefined && new Date(fl.baselineUpdatedAt).toISOString() === new Date(fr.updated_at as string | Date).toISOString() && Number(fl.baselineVersion) === Number(fr.version));
 
     const sitemap = path.join(OUT, "sitemap-urls.txt");
     const urls = slugMap("rehearsal").filter((e) => e.oldUrl && e.status === "published").map((e) => `https://www.globaltravelpost.com${e.oldUrl}`);
@@ -505,14 +505,14 @@ async function main(): Promise<number> {
     const edited = sm.find((e) => e.kind === "article" && e.status === "published" && e.slug !== facts.g54DeletedSlug && sm.filter((x) => x.legacyId !== e.legacyId).length > 0 && e.legacyId !== expected.internalLinkFrom && e.legacyId !== id(45)) as SlugMapEntry;
     const er = helper("edit-article", { slug: edited.slug });
     check("editor edit bumped the version", Number(er.version) === 2, er);
-    const editedHero = helper("gtp-article", { slug: edited.slug }).heroImage;
+    const editedHero = helper("gtp-article", { slug: edited.slug }).heroImage as number | null;
     const r = rollback("rehearsal", ["--apply"]);
     const rep = JSON.parse(readFileSync(path.join(runDir("rehearsal"), "rollback-report.json"), "utf8")) as Doc & { keptEdited: string[]; alreadyGone: string[]; deleted: number; mediaKeptReferenced: number; mediaKeptAdopted: number };
     check("rollback without --include-edited exits 0", r.code === 0, r.out.slice(-400));
     check("G52/G43 the edited article is kept", rep.keptEdited.length === 1 && (await markerCount()) === 1, { kept: rep.keptEdited, marker: await markerCount() });
     check("E15 rollback tolerates the deleted (already gone) article", rep.alreadyGone.length === 1, rep.alreadyGone);
     check("G43/N-09 SQL-set updatedAt rows were deleted via timestamps-baseline.json", Number(rep.deleted) === sm.length - 2, { deleted: rep.deleted, entries: sm.length });
-    check("G43 media referenced by the kept article is kept", editedHero == null || Number(rep.mediaKeptReferenced) >= 1, rep.mediaKeptReferenced);
+    check("G43 media referenced by the kept article is kept", editedHero !== null && editedHero !== undefined && Boolean(helper("media-exists", { id: editedHero }).exists), editedHero);
     check("G43 adopted media never deleted", Boolean(helper("media-exists", { id: adopted.id }).exists) && Number(rep.mediaKeptAdopted) >= 1, rep.mediaKeptAdopted);
     const r2 = rollback("rehearsal", ["--apply", "--include-edited"]);
     check("G52 --include-edited deletes the edited article", r2.code === 0 && (await markerCount()) === 0, await markerCount());
@@ -536,7 +536,9 @@ async function main(): Promise<number> {
     check("G36 302 to a disallowed host refused", !ev.ok && ev.reason === "mediaRedirectBlocked", ev);
     check("G36 25 MB file refused by the cap", !big.ok && big.reason === "tooLarge", big);
     check("G36 wrong magic bytes refused", !magic.ok && magic.reason === "badMagic", magic);
-    check("G36 lying content-length stopped by the streamed cap", !lying.ok && lying.reason === "tooLarge", lying);
+    const chunked = await fetchImage("https://images.fixture.invalid/special/chunked-big.jpg", { ...opts, maxBytes: 1024 * 1024 });
+    check("G36 lying content-length refused (undici enforces the declared length, the truncated body fails the magic check)", !lying.ok && (lying.reason === "tooLarge" || lying.reason === "badMagic"), lying);
+    check("G36 body without content-length stopped by the streamed cap", !chunked.ok && chunked.reason === "tooLarge", chunked);
     check("signed-URL look-alike answers 403", !signed.ok && signed.reason === "http 403", signed);
     const hits: string[] = [];
     const walk = (d: string) => {
