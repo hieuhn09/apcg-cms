@@ -49,6 +49,12 @@ export interface HubBodyResult {
    * `mediaTokens` is off, so the default response is unchanged.
    */
   tokenFallback?: true;
+  /**
+   * Review-3 N3: the error NAME of the failed token export (never its message), set
+   * only together with `tokenFallback`, for the route's warning log. A token export
+   * that returned a non-string / blank output is reported as "EmptyTokenOutput".
+   */
+  tokenFallbackName?: string;
 }
 
 type EditorConfig = Awaited<ReturnType<typeof editorConfigFactory.default>>;
@@ -129,19 +135,22 @@ export async function hubArticleBodyToMarkdown(
 
   const convert: Convert = opts.convert ?? (convertLexicalToMarkdown as unknown as Convert);
   let markdown: string;
-  let fellBack = false;
-  const withFallback = (r: HubBodyResult): HubBodyResult => (fellBack ? { ...r, tokenFallback: true } : r);
+  let fellBack: string | null = null;
+  const withFallback = (r: HubBodyResult): HubBodyResult => (fellBack !== null ? { ...r, tokenFallback: true, tokenFallbackName: fellBack } : r);
   try {
     const editorConfig = await opts.loadEditorConfig();
     let tokened: string | null = null;
     if (opts.mediaTokens) {
       try {
         tokened = mediaTokenConverters(lexicalConverters(editorConfig as never)).toMarkdown(data);
-        if (typeof tokened !== "string" || tokened.trim() === "") tokened = null;
-      } catch {
+        if (typeof tokened !== "string" || tokened.trim() === "") {
+          tokened = null;
+          fellBack = "EmptyTokenOutput";
+        }
+      } catch (err) {
         tokened = null;
+        fellBack = errorName(err);
       }
-      if (tokened === null) fellBack = true;
     }
     markdown = tokened ?? convert({ data: data as never, editorConfig });
     if (typeof markdown !== "string") throw new TypeError("converter returned a non-string");

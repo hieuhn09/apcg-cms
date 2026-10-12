@@ -9882,7 +9882,20 @@ async function check8Unit(expect: (label: string, actual: unknown, wanted: unkno
   expect("U-13: mediaTokens export throws (upload not media) ⇒ fallback to the default export, REPORTED as tokenFallback (review M2), bodyState ok, no error; without the flag the default converter is used", [
     await mdm.hubArticleBodyToMarkdown(lexV, { loadEditorConfig: async () => ({}) as never, convert: conv, mediaTokens: true }),
     await mdm.hubArticleBodyToMarkdown(lexV, { loadEditorConfig: async () => ({}) as never, convert: conv }),
-  ], [{ bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok", tokenFallback: true }, { bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok" }]);
+  ], [{ bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok", tokenFallback: true, tokenFallbackName: "Error" }, { bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok" }]);
+  {
+    // Review-3 M2: the fence trackers are linear (old `(.*)$` tail: 200,000 backticks + \r = 20 s).
+    const tm = await import("../src/lib/hub-author-media-token");
+    const times: Record<string, number> = {};
+    for (const [n, t] of [["bt+CR", "`"], ["bt+LS", "`"], ["til+PS", "~"]] as const) {
+      const tail = n.endsWith("CR") ? "\r" : n.endsWith("LS") ? "\u2028" : "\u2029";
+      const t0 = performance.now();
+      tm.findMediaTokenLines(`${t.repeat(100_000)}${tail}x\n\n![](cms-media:5)`);
+      times[n] = performance.now() - t0;
+    }
+    console.log(`OBS   U-17 timings (ms): ${JSON.stringify(times)}`);
+    expect("U-17: (review-3 M2) 100,000 backticks/tildes + \\r / U+2028 / U+2029 on one line: fence tracker < 200 ms each", Object.values(times).every((ms) => ms < 200), true);
+  }
   expect("U-14: a body of ONLY one upload node is not empty", mdm.isEmptyBody({ root: { type: "root", children: [up(5)] } }), false);
   // Review M2 (CMS-2): the invariant "bodyEditable:true ⇒ the token export did not fall back".
   const yes = { editable: true, editableReason: "ok", bodyEditable: true, version: 3 } as unknown as Parameters<typeof sel.applyBodyTokenFallback>[0];
@@ -10241,6 +10254,18 @@ async function check8() {
       expect("P2-6b: (review M1) the same response carries NO url / alt / caption / credit of that media anywhere (article.heroImage null; no 'P4 dtw' / 'P2 dtw' alt, no foreign file name)", [
         ((foreign.body.article ?? {}) as Doc).heroImage, foreign.text.includes("P2 dtw"), foreign.text.includes(String((await payload.findByID({ collection: "media", id: dX, depth: 0, overrideAccess: true }) as unknown as Doc).filename)),
       ], [null, false, false]);
+      {
+        // Review-3 M3: the SCHEDULED branch answers article.* from the latest doc too.
+        const sch = await mkDraft("gcv");
+        const when = new Date(Math.ceil((Date.now() + 3 * 3600_000) / 60_000) * 60_000).toISOString();
+        await tamper8(sch, { heroImage: dX, leadImageCaption: "P2 scheduled caption", workflowStatus: "scheduled", scheduledFor: when, publishedAt: when, _status: "draft" });
+        const sr = await getEdit(sch, "gcv");
+        const dxDoc = (await payload.findByID({ collection: "media", id: dX, depth: 0, overrideAccess: true })) as unknown as Doc;
+        expect("P2-6c: (review-3 M3) foreign hero + SCHEDULED hub draft ⇒ editableReason scheduled; article.heroImage null; no url / alt / caption / credit / file name of that media anywhere", [
+          sr.status, ((sr.body.edit ?? {}) as Doc).editableReason, ((sr.body.article ?? {}) as Doc).heroImage, sr.text.includes("P2 dtw"), sr.text.includes(String(dxDoc.filename)),
+          typeof dxDoc.url === "string" && sr.text.includes(String(dxDoc.url)), typeof dxDoc.credit === "string" && dxDoc.credit !== "" && sr.text.includes(String(dxDoc.credit)),
+        ], [200, "scheduled", null, false, false, false, false]);
+      }
       await tamper8(art, { heroImage: gA });
       const m31 = [];
       for (let i = 0; i < 31; i++) m31.push(await localMedia("gcv", `p2 many ${i}`));
@@ -10328,6 +10353,11 @@ async function check8() {
         await imgOf(`See ${tokLine(m1)} here.`), await imgOf(`- ${tokLine(m1)}`), await imgOf(`A.\n\n  ${tokLine(m1)}\n\nB.`), await imgOf(`A.\r\n\r\n${tokLine(m1)}\r\n\r\nB.`),
         await imgOf("````\n```\n\n" + tokLine(m1) + "\n\n```\n````"), await imgOf(`A.\n\n![](cms-media:${m1} "t")`), await imgOf(`A.\n\n![a]b](cms-media:${m1})`),
       ], Array.from({ length: 7 }, () => [422, { bodyMarkdown: "image" }]));
+      const iW = await interr();
+      expect("B-8b: (review-3 M1, real HTTP) neighbour line of only spaces BEFORE / spaces AFTER / a TAB ⇒ 422 image (pure stage, not `node`); strictly empty neighbours ⇒ 200", [
+        await imgOf(`A.\n  \n${tokLine(m1)}\n\nB.`), await imgOf(`A.\n\n${tokLine(m1)}\n   \nB.`), await imgOf(`A.\n\t\n${tokLine(m1)}\n\nB.`),
+        (await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine(m1)}\n\nB.` })).status, (await interr()) - iW,
+      ], [[422, { bodyMarkdown: "image" }], [422, { bodyMarkdown: "image" }], [422, { bodyMarkdown: "image" }], 200, 0]);
       const own21: number[] = [];
       for (let i = 0; i < 21; i++) own21.push(await localMedia("gcv", `B 21 ${i}`));
       const oneUnit = own21.map(tokLine).join("\n");
@@ -10528,7 +10558,14 @@ async function check8P1(expect: (label: string, actual: unknown, wanted: unknown
   };
   const bad = Object.entries(vec).filter(([, md]) => tokenMod.extractMediaIds(md).length !== 0 || !isImg(md)).map(([k]) => k);
   expect(`P1 T8(a): ${Object.keys(vec).length} non-token vectors ⇒ no token id, still \`image\``, bad, []);
-  expect("P1 T8(a): neighbour line of only spaces counts as blank ⇒ token", tokenMod.extractMediaIds("A.\n  \n![](cms-media:5)\n  \nB."), ["5"]);
+  // Review-3 M1: Lexical joins a spaces/tabs-only line to the token's paragraph, so the tracker
+  // must NOT treat it as blank (else: a DB lookup, then a generic 422 node). Real converter shown too.
+  const wsNb = ["A.\n  \n![](cms-media:5)\n\nB.", "A.\n\n![](cms-media:5)\n  \nB.", "A.\n\t\n![](cms-media:5)\n\nB."];
+  expect("P1 T8(a): (review-3 M1) neighbour line of only spaces / tabs (before, after, tab) ⇒ NOT a token, pure check says image; strictly empty neighbours ⇒ token", [
+    wsNb.map((md) => [tokenMod.extractMediaIds(md), bodyMod.validateBodyPure(md)]), tokenMod.extractMediaIds("A.\n\n![](cms-media:5)\n\nB."),
+  ], [wsNb.map(() => [[], { ok: false, code: "image" }]), ["5"]]);
+  const wsLex = bodyMod.runWithHardTimeout((a: { real: typeof real }) => (((a.real.toLexical("A.\n  \n\u0002x\n\nB.") as Doc).root as Doc).children as Doc[]).length, { real }, 5000);
+  obs8("P1 review-3 M1: real importer root paragraphs of `A.\\n  \\n<line>\\n\\nB.` (whitespace line joins the next line)", wsLex);
   expect("P1 T8(a): `!\\[` (escaped) is plain text: no token, no `![`", [tokenMod.extractMediaIds("!\\[](cms-media:5)"), isImg("!\\[](cms-media:5)")], [[], false]);
   const d11 = "1".repeat(11), d20 = "9".repeat(20), d400 = "7".repeat(400);
   expect("P1 ids above int4 (11 / 20 / 400 digits) keep the token shape (pass the image check; refs must report out_of_range at 2.2)", [tokenMod.extractMediaIds(`![](cms-media:${d11})\n\n![](cms-media:${d20})\n\n![](cms-media:${d400})`).map((s) => s.length), isImg(`![](cms-media:${d400})`)], [[11, 20, 400], false]);

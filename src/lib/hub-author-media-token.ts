@@ -7,8 +7,11 @@
  *
  * standing ALONE as a root paragraph: the whole line is exactly the token,
  * starting in column 0 with nothing after it, the lines before and after are blank
- * (empty, or spaces/tabs only) or the start/end of the body, and the line is not
- * inside a ``` / ~~~ fence. Lines are split on `\n` only, so a token followed by
+ * (empty) or the start/end of the body, and the line is not
+ * inside a ``` / ~~~ fence. Review-3 M1: "blank" means a strictly EMPTY line — the
+ * Lexical importer does NOT treat a line of spaces/tabs as a paragraph boundary
+ * (it joins it to the token's paragraph), so a token next to one stays `image`
+ * at the pure stage instead of failing later as `node`. Lines are split on `\n` only, so a token followed by
  * `\r`, U+2028 or U+2029 is NOT a token (it stays `image`). The id shape is
  * `[1-9][0-9]*` with NO int4 bound here: the references step reports a too-large
  * id as `out_of_range` instead of the token silently turning into `image`.
@@ -38,9 +41,38 @@ import type { BodyConverters } from "@/lib/hub-author-convert-core";
 export const MEDIA_TOKEN_RE = /^!\[[^\]\n\r]*\]\(cms-media:([1-9][0-9]*)\)$/;
 
 const PLACEHOLDER_RE = /^\u0001cms-media:([1-9][0-9]*)\u0001$/;
-const BLANK_RE = /^[ \t]*$/;
-/** CommonMark fence line: ≤3 spaces, then ≥3 backticks or ≥3 tildes; group 2 = the rest. */
-const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const BLANK_RE = /^$/;
+/**
+ * CommonMark fence line: ≤3 spaces, then ≥3 backticks or ≥3 tildes (group 1).
+ * Review-3 M2: no `(.*)$` tail (it backtracked quadratically on a long run followed by
+ * \r / U+2028 / U+2029); the rest is read with `slice` in `fenceOf`.
+ */
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
+/** Characters `.` never matched in the old tail: a line holding one after the run was not a fence line. */
+const NON_DOT_RE = /[\r\u2028\u2029]/;
+
+/** `{run, rest}` of a fence line, or null — same result as the old `/^ {0,3}(run)(.*)$/`. */
+function fenceOf(l: string): { run: string; rest: string } | null {
+  const m = FENCE_RE.exec(l);
+  if (!m) return null;
+  const rest = l.slice(m[0].length);
+  return NON_DOT_RE.test(rest) ? null : { run: m[1]!, rest };
+}
+
+type Fence = { ch: string; len: number } | null;
+/**
+ * One fence-tracking step (shared by both line scanners). Returns the new fence state
+ * and whether the line is a fence line or inside a fence (⇒ skip it).
+ */
+function fenceStep(l: string, fence: Fence): { fence: Fence; skip: boolean } {
+  const f = fenceOf(l);
+  if (fence !== null) {
+    if (f && f.run[0] === fence.ch && f.run.length >= fence.len && /^[ \t]*$/.test(f.rest)) return { fence: null, skip: true };
+    return { fence, skip: true };
+  }
+  if (f && !(f.run[0] === "`" && f.rest.includes("`"))) return { fence: { ch: f.run[0]!, len: f.run.length }, skip: true };
+  return { fence: null, skip: false };
+}
 
 type Node = Record<string, unknown>;
 const isNode = (v: unknown): v is Node => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -58,18 +90,12 @@ export function findMediaTokenLines(md: string): { line: number; id: string }[] 
   // info string has no backtick); only a run of the SAME char, at least as long, with
   // nothing but spaces/tabs after it, closes. So ```` … ``` … ```` is ONE block and a
   // token on a line inside it is not a token. An unclosed fence runs to the end.
-  let fence: { ch: string; len: number } | null = null;
+  let fence: Fence = null;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i]!;
-    const f = FENCE_RE.exec(l);
-    if (fence !== null) {
-      if (f && f[1]![0] === fence.ch && f[1]!.length >= fence.len && /^[ \t]*$/.test(f[2]!)) fence = null;
-      continue;
-    }
-    if (f && !(f[1]![0] === "`" && f[2]!.includes("`"))) {
-      fence = { ch: f[1]![0]!, len: f[1]!.length };
-      continue;
-    }
+    const st = fenceStep(l, fence);
+    fence = st.fence;
+    if (st.skip) continue;
     const m = MEDIA_TOKEN_RE.exec(l);
     if (!m) continue;
     const prevBlank = i === 0 || BLANK_RE.test(lines[i - 1]!);
@@ -222,6 +248,10 @@ function countUploadNodes(lex: unknown): number {
 
 /** Does any text value of a tree hold the placeholder character U+0001? Iterative. */
 export function treeHasPlaceholderChar(lex: unknown): boolean {
+  // Review-3 N1: only the strings of the editor tree count. An `upload` node's `value`
+  // is reduced to nothing (it is a media id or a POPULATED media doc whose alt /
+  // caption / tenant name are not body text), so U+0001 in media metadata never
+  // forces the fallback; U+0001 in any text / url / other node field still does.
   const stack: unknown[] = [lex];
   while (stack.length) {
     const n = stack.pop();
@@ -230,7 +260,13 @@ export function treeHasPlaceholderChar(lex: unknown): boolean {
       continue;
     }
     if (Array.isArray(n)) stack.push(...n);
-    else if (isNode(n)) for (const v of Object.values(n)) if (typeof v === "string" || typeof v === "object") stack.push(v);
+    else if (isNode(n)) {
+      const upload = n.type === "upload";
+      for (const [k, v] of Object.entries(n)) {
+        if (upload && k === "value") continue;
+        if (typeof v === "string" || typeof v === "object") stack.push(v);
+      }
+    }
   }
   return false;
 }
@@ -276,18 +312,12 @@ export function mediaTokenConverters(base: BodyConverters): BodyConverters {
 function findPlaceholderLines(md: string): string[] {
   const lines = md.split("\n");
   const out: string[] = [];
-  let fence: { ch: string; len: number } | null = null;
+  let fence: Fence = null;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i]!;
-    const f = FENCE_RE.exec(l);
-    if (fence !== null) {
-      if (f && f[1]![0] === fence.ch && f[1]!.length >= fence.len && /^[ \t]*$/.test(f[2]!)) fence = null;
-      continue;
-    }
-    if (f && !(f[1]![0] === "`" && f[2]!.includes("`"))) {
-      fence = { ch: f[1]![0]!, len: f[1]!.length };
-      continue;
-    }
+    const st = fenceStep(l, fence);
+    fence = st.fence;
+    if (st.skip) continue;
     const m = PLACEHOLDER_RE.exec(l);
     if (!m) continue;
     const prevBlank = i === 0 || BLANK_RE.test(lines[i - 1]!);

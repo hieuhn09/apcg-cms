@@ -21,6 +21,7 @@ import {
   tokensToPlaceholders,
   uploadIdsInTree,
   uploadNodesToPlaceholders,
+  treeHasPlaceholderChar,
   uploadValueId,
   withoutMediaTokenLines,
 } from "./hub-author-media-token";
@@ -104,8 +105,14 @@ describe("token shape (T8 a)", () => {
     assert.deepEqual(ids("![](cms-media:5) "), []);
     assert.deepEqual(ids("A.\n\n![](cms-media:5) \n\nB."), []);
   });
-  it("a neighbouring line with only spaces or tabs counts as blank (same rule as the hub)", () => {
-    assert.deepEqual(ids("A.\n  \n![](cms-media:5)\n\t\nB."), ["5"]);
+  it("(review-3 M1) a neighbouring line of only spaces/tabs is NOT blank (Lexical joins it to the paragraph) ⇒ no token, `image`", () => {
+    for (const md of ["A.\n  \n![](cms-media:5)\n\nB.", "A.\n\n![](cms-media:5)\n  \nB.", "A.\n\t\n![](cms-media:5)\n\nB.", "A.\n\n![](cms-media:5)\n\t\nB.", "  \n![](cms-media:5)"]) {
+      assert.deepEqual(ids(md), [], JSON.stringify(md));
+      assert.equal(isImage(md), true, JSON.stringify(md));
+    }
+  });
+  it("(review-3 M1 control) strictly empty neighbour lines ⇒ token", () => {
+    assert.deepEqual(ids("A.\n\n![](cms-media:5)\n\nB."), ["5"]);
   });
 });
 
@@ -235,5 +242,39 @@ describe("placeholder discipline (no U+0001 except where the wrapper put it)", (
     const conv = mediaTokenConverters(fake);
     const md = "A.\n\n![](cms-media:5)\n\n![](cms-media:6)\n\nB.";
     assert.equal(conv.toMarkdown(conv.toLexical(md)), md);
+  });
+});
+
+describe("fence regex is linear (review-3 M2)", () => {
+  for (const [name, tail] of [["\\r", "\r"], ["U+2028", "\u2028"], ["U+2029", "\u2029"]] as const) {
+    for (const ch of ["`", "~"]) {
+      it(`100,000 × ${ch} + ${name} scans in < 200 ms (both trackers)`, () => {
+        const line = ch.repeat(100_000) + tail + "x";
+        const t0 = performance.now();
+        findMediaTokenLines(`${line}\n\n![](cms-media:5)`);
+        // export side: the long line is a stored paragraph text, scanned by the placeholder tracker.
+        assert.equal(mediaTokenConverters(fake).toMarkdown(root(para(text(line)), upload(5))), `${line}\n\n![](cms-media:5)`);
+        const ms = performance.now() - t0;
+        assert.ok(ms < 200, `${ms} ms`);
+      });
+    }
+  }
+  it("a fence-looking line holding \\r / U+2028 / U+2029 after the run is still NOT a fence line (old behaviour kept)", () => {
+    assert.deepEqual(ids("```\r\n\n![](cms-media:5)"), ["5"]);
+    assert.deepEqual(ids("~~~ a\u2028\n\n![](cms-media:5)"), ["5"]);
+    assert.deepEqual(ids("```\n\n```\r\n\n![](cms-media:5)"), []);
+  });
+});
+
+describe("placeholder scan only reads the editor tree (review-3 N1)", () => {
+  it("U+0001 in a POPULATED media's alt/caption ⇒ not a placeholder char; export works", () => {
+    const pop = { id: 5, alt: "a\u0001b", caption: "c\u0001", tenant: { id: 1, name: "t\u0001" } };
+    const lex = root(para(text("A.")), upload(pop), para(text("B.")));
+    assert.equal(treeHasPlaceholderChar(lex), false);
+    assert.equal(mediaTokenConverters(fake).toMarkdown(lex), "A.\n\n![](cms-media:5)\n\nB.");
+  });
+  it("U+0001 in a text node still counts (fail closed)", () => {
+    assert.equal(treeHasPlaceholderChar(root(para(text("a\u0001b")), upload(5))), true);
+    assert.equal(treeHasPlaceholderChar(root(para({ type: "link", fields: { url: "https://x\u0001" }, children: [text("l")] }))), true);
   });
 });

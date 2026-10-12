@@ -49,7 +49,7 @@ import { json } from "@/lib/http";
 import { isHubArticleId } from "@/lib/hub-article-id";
 import { logActivity } from "@/lib/activity";
 import { toId } from "@/access/helpers";
-import { HUB_ARTICLE_EDIT_MAIN_SELECT, applyBodyTokenFallback, loadHubArticleEdit, type HubArticleEdit } from "@/lib/hub-article-edit-select";
+import { HUB_ARTICLE_EDIT_MAIN_SELECT, applyBodyTokenFallback, loadHubArticleEdit, withholdForeignHero, type HubArticleEdit } from "@/lib/hub-article-edit-select";
 import { handleHubDraftUpdate } from "@/lib/hub-author-handlers";
 
 /** Two conversions at most per PATCH (stored body round trip + new body), each ≤ T. */
@@ -136,7 +136,9 @@ export async function GET(
     try {
       const r = await loadHubArticleEdit({ payload, mainDoc: doc, tenantId: tenant.id });
       edit = r.edit;
-      if (r.latest) doc = r.latest;
+      // Review-3 M3: whichever row answers `article.*` (latest or main), a hero that is
+      // not THIS tenant's media is withheld (the default read is not touched).
+      doc = withholdForeignHero(r.latest ?? doc, tenant.id);
     } catch (err) {
       payload.logger.error(`[${SCOPE}] edit read failed: ${(err as Error).name}`);
       await logActivity({
@@ -160,7 +162,7 @@ export async function GET(
   // gets has lost its images; never offer it as editable Markdown (warning, no PII).
   if (body.tokenFallback && edit) {
     edit = applyBodyTokenFallback(edit, true);
-    payload.logger.warn(`[${SCOPE}] media token export fell back: article=${String(doc.id)} tenant=${tenant.slug}`);
+    payload.logger.warn(`[${SCOPE}] media token export fell back: article=${String(doc.id)} tenant=${tenant.slug} error=${body.tokenFallbackName ?? "unknown"}`);
   }
   if (body.error) {
     payload.logger.warn(

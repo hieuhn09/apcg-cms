@@ -269,7 +269,7 @@ export async function loadHubArticleEdit(args: {
         scheduledFor: at && !Number.isNaN(at.getTime()) ? at.toISOString() : null,
         version: typeof latest.version === "number" ? latest.version : null,
       },
-      latest,
+      latest: withholdForeignHero(latest, tenantId),
     };
   }
   if (latestReason) return { edit: { editable: false, editableReason: latestReason }, latest: null };
@@ -284,8 +284,17 @@ export async function loadHubArticleEdit(args: {
   const edit = sanitizeHubArticleEdit(latest, { bodyEditable, editable: true, editableReason: "ok" }) as HubArticleEditYes;
   // Review M1 (CMS-2): `article.heroImage` comes from the same latest doc; a hero that is
   // not THIS tenant's media (edit.hero null) is withheld there too — never only in `edit`.
-  const latestOut = media.hero === null && latest.heroImage != null ? { ...latest, heroImage: null } : latest;
-  return { edit: { ...edit, hero: media.hero, leadImageCaption: media.leadImageCaption, bodyMedia: media.bodyMedia }, latest: latestOut };
+  return { edit: { ...edit, hero: media.hero, leadImageCaption: media.leadImageCaption, bodyMedia: media.bodyMedia }, latest: withholdForeignHero(latest, tenantId) };
+}
+
+/**
+ * Review M1 (CMS-2) + review-3 M3: the ONE withhold rule for `article.heroImage` in
+ * `view=edit` — every branch (editable, scheduled, and the main row of the
+ * not-editable branches). A hero that is not a populated media of THIS tenant is
+ * replaced by null; an own hero, or no hero, returns the SAME object.
+ */
+export function withholdForeignHero<T extends Doc>(doc: T, tenantId: number | string): T {
+  return doc.heroImage != null && ownMedia(doc.heroImage, tenantId) === null ? { ...doc, heroImage: null } : doc;
 }
 
 /**
