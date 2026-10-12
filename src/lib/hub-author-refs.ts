@@ -26,6 +26,20 @@ import type { HubFieldCode, HubFieldErrors } from "@/lib/hub-author-limits";
 import type { HubDraftFields } from "@/lib/hub-author-input";
 
 type Id = number | string;
+
+/** P5.3 T5: CMS-only limits (NOT in HUB_AUTHOR_LIMITS — G-C3 / the 23 field codes stay as they are). */
+export const MEDIA_LEAD_CAPTION_MAX = 500;
+export const MEDIA_BODY_MAX = 30;
+
+/**
+ * P5.3 T5: the hero media id must be a media row of THIS tenant. A miss and a
+ * row of another tenant are the same `unknown_ref` (the real tenant is never
+ * revealed). The id is already int4 (checked at parse time), so the query is safe.
+ */
+async function resolveHeroMedia(payload: Payload, tenantId: Id, id: number): Promise<boolean> {
+  const res = await scopedFind({ payload, collection: "media", tenantId, where: { id: { equals: id } }, depth: 0, limit: 2, page: 1 });
+  return res.docs.some((d) => String((d as unknown as Doc).id) === String(id));
+}
 type Doc = { id: Id; [k: string]: unknown };
 
 async function findIds(
@@ -120,6 +134,8 @@ export interface ResolvedRefs {
   cities?: Id[];
   author?: Id;
   coAuthors?: Id[];
+  /** P5.3 T5: resolved hero media id (null = clear). */
+  heroImage?: Id | null;
 }
 
 /**
@@ -211,6 +227,12 @@ export async function resolveDraftRefs(args: {
     const r = await resolveAuthors(payload, tenant.id, input.coAuthorIds);
     if (r.ok) refs.coAuthors = r.ids;
     else fields.coAuthorIds = r.code;
+  }
+
+  if (input.heroImageId !== undefined) {
+    if (input.heroImageId === null) refs.heroImage = null;
+    else if (await resolveHeroMedia(payload, tenant.id, input.heroImageId)) refs.heroImage = input.heroImageId;
+    else fields.heroImageId = "unknown_ref";
   }
 
   return Object.keys(fields).length ? { ok: false, fields } : { ok: true, refs };

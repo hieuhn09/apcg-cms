@@ -153,6 +153,8 @@ export async function GET(
   // 6. Body → Markdown. Never throws; a body problem never fails the request.
   const body = await hubArticleBodyToMarkdown(doc.body, {
     loadEditorConfig: () => loadHubEditorConfig(payload.config),
+    // P5.3 T9: canonical media tokens only on the editable view=edit branch.
+    ...(edit && edit.editable ? { mediaTokens: true } : {}),
   });
   if (body.error) {
     payload.logger.warn(

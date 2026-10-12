@@ -318,6 +318,8 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     if (refs.coAuthors) data.coAuthors = refs.coAuthors;
     for (const [k, b] of Object.entries(v.flags ?? {})) data[k] = b;
     if (v.sponsor != null) data.sponsor = v.sponsor;
+    if (refs.heroImage != null) data.heroImage = refs.heroImage;
+    if (v.leadImageCaption != null) data.leadImageCaption = v.leadImageCaption;
 
     // CMS-A (M5): the slug lock, the slug check again and the create run in ONE transaction.
     return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data }));
@@ -604,6 +606,18 @@ export async function handleHubDraftUpdateWith(
         case "sponsor":
           if ((v.sponsor ?? null) !== ((latest.sponsor as string | null | undefined) ?? null)) {
             data.sponsor = v.sponsor ?? null;
+            mark(k);
+          }
+          break;
+        case "heroImageId":
+          if (idOrNull(refs.heroImage) !== idOrNull(latest.heroImage)) {
+            data.heroImage = refs.heroImage ?? null;
+            mark(k);
+          }
+          break;
+        case "leadImageCaption":
+          if ((v.leadImageCaption ?? null) !== ((latest.leadImageCaption as string | null | undefined) || null)) {
+            data.leadImageCaption = v.leadImageCaption ?? null;
             mark(k);
           }
           break;

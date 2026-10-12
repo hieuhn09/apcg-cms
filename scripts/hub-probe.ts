@@ -9829,6 +9829,61 @@ async function check8Unit(expect: (label: string, actual: unknown, wanted: unkno
   ], [{ ok: true, width: 4096, height: 4096 }, { ok: false }, { ok: true, width: 5000, height: 5000 }, { ok: false }, { ok: false }]);
   const h = await import("../src/lib/hub-author-handlers");
   expect("U-5: the editable-article helper is exported (shared by PATCH and the media route)", typeof h.loadHubEditableArticle, "function");
+
+  // ── 1.7 (T5 / E8): hero id + lead caption parsing (pure) ──
+  const inp = await import("../src/lib/hub-author-input");
+  const lim = await import("../src/lib/hub-author-limits");
+  const refs = await import("../src/lib/hub-author-refs");
+  expect("U-6: heroImageId / leadImageCaption are draft field keys; CMS-only limits 500 / 30 live in hub-author-refs (not HUB_AUTHOR_LIMITS)", [
+    (inp.HUB_DRAFT_FIELD_KEYS as readonly string[]).slice(-2), refs.MEDIA_LEAD_CAPTION_MAX, refs.MEDIA_BODY_MAX,
+    "leadImageCaption" in lim.HUB_AUTHOR_LIMITS,
+  ], [["heroImageId", "leadImageCaption"], 500, 30, false]);
+  const mid = (v: unknown) => { const r = inp.checkMediaId(v); return r.ok ? r.value : r.code; };
+  expect("U-7: (E8) checkMediaId: 1 / int4 max ok; 2147483648, 2^53+2, Infinity (1e400) ⇒ out_of_range; 0, -1, 1.5, NaN, \"5\", null-less types ⇒ type", [
+    mid(1), mid(2147483647), mid(2147483648), mid(9007199254740994), mid(JSON.parse("1e400")), mid(0), mid(-1), mid(1.5), mid(NaN), mid("5"), mid(true), mid(-Infinity),
+  ], [1, 2147483647, "out_of_range", "out_of_range", "out_of_range", "type", "type", "type", "type", "type", "type", "type"]);
+  const cr = (extra: Record<string, unknown>) => {
+    const r = inp.parseCreateBody({ tenant: "gcv", title: "T", actor: { email: "a@b.c", role: "editor" }, ...extra });
+    return r.ok ? { heroImageId: r.value.heroImageId, leadImageCaption: r.value.leadImageCaption } : [r.status, (r.body as Doc).fields ?? (r.body as Doc).reason];
+  };
+  expect("U-8: parse: hero null / id kept; caption trimmed, \"\" ⇒ null, 501 ⇒ too_long, C0 ⇒ c0, bidi ⇒ bidi, number ⇒ type; heroImageId 0 ⇒ type", [
+    cr({ heroImageId: null, leadImageCaption: "  cap  " }), cr({ heroImageId: 7, leadImageCaption: "" }), cr({ leadImageCaption: "x".repeat(501) }),
+    cr({ leadImageCaption: "a\u0001b" }), cr({ leadImageCaption: "a\u202eb" }), cr({ leadImageCaption: 5 }), cr({ heroImageId: 0 }), cr({ heroImageId: "7" }),
+  ], [
+    { heroImageId: null, leadImageCaption: "cap" }, { heroImageId: 7, leadImageCaption: null }, [422, { leadImageCaption: "too_long" }],
+    [422, { leadImageCaption: "c0" }], [422, { leadImageCaption: "bidi" }], [422, { leadImageCaption: "type" }], [422, { heroImageId: "type" }], [422, { heroImageId: "type" }],
+  ]);
+  expect("U-9: HUB_FIELD_CODES still 23 (no code added by P5.3)", lim.HUB_FIELD_CODES.length, 23);
+
+  // ── 1.8 (T9): the view=edit media block (pure) ──
+  const sel = await import("../src/lib/hub-article-edit-select");
+  const md = (id: number, tenant: unknown, extra: Doc = {}) => ({ id, tenant, url: `/api/media/file/m${id}.png`, alt: `alt ${id}`, width: 10, height: 20, credit: "c", filename: "SECRET", ...extra });
+  const up = (value: unknown, relationTo = "media") => ({ type: "upload", relationTo, value, version: 3, format: "", fields: null });
+  const doc = (kids: unknown[], extra: Doc = {}) => ({ body: { root: { type: "root", children: kids } }, ...extra });
+  expect("U-10: media block: hero of this tenant {id,url,alt,width,height,credit}; other tenant ⇒ null; caption \"\" ⇒ null; body ids distinct in tree order, other tenant / unpopulated / non-media dropped, keys {id,url,alt,width,height}", [
+    sel.hubEditMediaBlock(doc([], { heroImage: md(1, { id: 7 }), leadImageCaption: "" }), 7),
+    sel.hubEditMediaBlock(doc([], { heroImage: md(1, 8), leadImageCaption: "Cap" }), 7).hero,
+    sel.hubEditMediaBlock(doc([up(md(3, 7)), { type: "paragraph", children: [up(md(4, { id: 7 }))] }, up(md(3, 7)), up(md(5, 9)), up(6), up(md(8, 7), "videoMedia"), up(null)]), 7).bodyMedia.map((m) => [m.id, Object.keys(m)]),
+  ], [
+    { hero: { id: 1, url: "/api/media/file/m1.png", alt: "alt 1", width: 10, height: 20, credit: "c" }, leadImageCaption: null, bodyMedia: [], tooMany: false },
+    null,
+    [[3, ["id", "url", "alt", "width", "height"]], [4, ["id", "url", "alt", "width", "height"]]],
+  ]);
+  const many = (n: number) => doc(Array.from({ length: n }, (_, i) => up(md(100 + i, 7))));
+  expect("U-11: 30 distinct body ids ⇒ listed; 31 ⇒ tooMany (body locked, list empty, nothing cut); duplicates count once", [
+    sel.hubEditMediaBlock(many(30), 7).bodyMedia.length, sel.hubEditMediaBlock(many(30), 7).tooMany,
+    sel.hubEditMediaBlock(many(31), 7).tooMany, sel.hubEditMediaBlock(many(31), 7).bodyMedia.length,
+    sel.hubEditMediaBlock(doc([...many(30).body.root.children, up(md(100, 7))]), 7).tooMany,
+  ], [30, false, true, 0, false]);
+  expect("U-12: HUB_ARTICLE_EDIT_SELECT adds leadImageCaption (heroImage from the detail select)", [(sel.HUB_ARTICLE_EDIT_SELECT as Doc).leadImageCaption, (sel.HUB_ARTICLE_EDIT_SELECT as Doc).heroImage], [true, true]);
+  const mdm = await import("../src/lib/hub-article-markdown");
+  const conv = () => "DEFAULT EXPORT";
+  const lexV = { root: { type: "root", children: [up(5, "videoMedia")] } };
+  expect("U-13: mediaTokens export throws (upload not media) ⇒ silent fallback to the default export, bodyState ok, no error; without the flag the default converter is used", [
+    await mdm.hubArticleBodyToMarkdown(lexV, { loadEditorConfig: async () => ({}) as never, convert: conv, mediaTokens: true }),
+    await mdm.hubArticleBodyToMarkdown(lexV, { loadEditorConfig: async () => ({}) as never, convert: conv }),
+  ], [{ bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok" }, { bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok" }]);
+  expect("U-14: a body of ONLY one upload node is not empty", mdm.isEmptyBody({ root: { type: "root", children: [up(5)] } }), false);
 }
 
 // ── --check8 ─────────────────────────────────────────────────────────────────
@@ -10008,7 +10063,7 @@ async function check8() {
       exact(await upload("gcv", base(pngFile).map(([k, v]) => (k === "actorRole" ? [k, "viewer"] : [k, v])) as [string, string][])),
     ], [BAD, BAD, BAD, BAD]);
     const before16 = await snap8();
-    expect("C-16: articleId 'abc'', 20 digits, 400 digits, another tenant's draft, a non-existent id ⇒ 404 (frozen, = PATCH body)", [
+    expect("C-16: articleId 'abc', 20 digits, 400 digits, another tenant's draft, a non-existent id ⇒ 404 (frozen, = PATCH body)", [
       exact(await upload("gcv", base(pngFile, "abc"))), exact(await upload("gcv", base(pngFile, "9".repeat(20)))), exact(await upload("gcv", base(pngFile, "9".repeat(400)))),
       exact(await upload("gcv", base(pngFile, dtwDraft))), exact(await upload("gcv", base(pngFile, 2147483646))),
     ], [NF, NF, NF, NF, NF]);
@@ -10055,6 +10110,153 @@ async function check8() {
     const wb = await sharp({ create: { width: 1700, height: 900, channels: 3, background: "#123456" } }).webp({ quality: 80 }).toBuffer();
     const wr = await upload("gcv", base({ data: wb, type: "image/webp" }));
     expect("P3-5: WebP accepted, stays WebP, ≥1600 wide ⇒ hero size", [wr.status, ((wr.body.media ?? {}) as Doc).mimeType, Object.keys((((wr.body.media ?? {}) as Doc).sizes ?? {}) as Doc)], [201, "image/webp", ["thumbnail", "card", "hero"]]);
+  }
+
+  // ── shared by P2 / P4 / P7 / E8 (steps 1.7 / 1.8) ──
+  const getEdit = async (id: number, tenant: string, view = "&view=edit") => send(`/api/hub/articles/${id}?tenant=${tenant}${view}`, { method: "GET" });
+  const versionOf = async (id: number, tenant: string) => ((await getEdit(id, tenant)).body.edit as Doc | undefined)?.version as number;
+  const patchRaw = async (id: number, tenant: string, json: string) => send(`/api/hub/articles/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: json });
+  const patch = async (id: number, tenant: string, fields: Doc) =>
+    patchRaw(id, tenant, JSON.stringify({ tenant, expectedVersion: await versionOf(id, tenant), actor: P8_HUMAN, ...fields }));
+  const interr = async () => Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'integration_error'`))[0]?.n);
+  const latestDoc = async (id: number) => (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true })) as unknown as Doc;
+  const uploadCount = (body: unknown): number => {
+    let n = 0;
+    const st: unknown[] = [((body ?? {}) as Doc).root];
+    while (st.length) {
+      const x = st.pop() as Doc | undefined;
+      if (!x || typeof x !== "object") continue;
+      if (x.type === "upload") n++;
+      if (Array.isArray(x.children)) st.push(...(x.children as unknown[]));
+    }
+    return n;
+  };
+  const upNode = (id: number, i: number) => ({ type: "upload", version: 3, format: "", id: (0x2000000 + i).toString(16).padStart(24, "0"), fields: null, relationTo: "media", value: id });
+  const paraNode = (t: string) => ({ type: "paragraph", version: 1, direction: null, format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: t, format: 0, detail: 0, mode: "normal", style: "" }] });
+  const lexOf = (kids: unknown[]) => ({ root: { type: "root", version: 1, direction: null, format: "", indent: 0, children: kids } });
+  const tamper8 = (id: number, data: Doc) => payload.update({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, data: data as never, context: { disableRevalidate: true } });
+  const localMedia = async (tenantSlug: string, alt: string) => {
+    const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: "#aa3355" } }).png().toBuffer();
+    const d = (await payload.create({
+      collection: "media", overrideAccess: true, depth: 0, context: { disableRevalidate: true },
+      data: { tenant: s6.tenants[tenantSlug]!.id, prefix: tenantSlug, alt } as never,
+      file: { data: png, mimetype: "image/png", name: `p8-local-${run}-${seq++}.png`, size: png.length },
+    })) as unknown as Doc;
+    return d.id as number;
+  };
+  const uploaded = async (tenant: string, draft: number, alt = "P8 alt") => {
+    const r = await upload(tenant, base({ data: smallPng, type: "image/png" }, draft).map(([k, v]) => (k === "alt" ? [k, alt] : [k, v])) as [string, string | { data: Buffer; type: string }][]);
+    if (r.status !== 201) throw new Error(`upload ${tenant} ⇒ ${r.status} ${r.text.slice(0, 200)}`);
+    return (r.body.media as Doc).id as number;
+  };
+
+  if (want("P4") || want("E8")) {
+    const gMedia = await uploaded("gcv", gcvDraft, "P4 gcv hero");
+    const dMedia = await uploaded("dtw", dtwDraft, "P4 dtw media");
+    const fields = (r: Reply) => [r.status, (r.body.fields ?? r.body.status) as unknown];
+    if (want("P4")) {
+      expect("P4-1: (AC6) PATCH heroImageId = a media of ANOTHER tenant ⇒ 422 fields.heroImageId unknown_ref (tenant not revealed)", fields(await patch(gcvDraft, "gcv", { heroImageId: dMedia })), [422, { heroImageId: "unknown_ref" }]);
+      expect("P4-2: PATCH heroImageId = a non-existent id (int4) ⇒ 422 unknown_ref", fields(await patch(gcvDraft, "gcv", { heroImageId: 2147483646 })), [422, { heroImageId: "unknown_ref" }]);
+      const t = `p8-${run}-${seq++}`;
+      const cr = await send("/api/hub/articles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", title: `P8 ${t}`, slug: t, actor: P8_HUMAN, heroImageId: dMedia }) });
+      expect("P4-3: POST with another tenant's heroImageId ⇒ 422 unknown_ref, no article created", [fields(cr), (await payload.find({ collection: "articles", draft: true, where: { slug: { equals: t } }, depth: 0, limit: 1, overrideAccess: true })).totalDocs], [[422, { heroImageId: "unknown_ref" }], 0]);
+      const ok = await patch(gcvDraft, "gcv", { heroImageId: gMedia, leadImageCaption: "  P4 caption  " });
+      const lt = await latestDoc(gcvDraft);
+      expect("P4-4: PATCH own-tenant hero + caption ⇒ 200, changed [heroImageId, leadImageCaption]; latest draft holds them (caption trimmed)", [ok.status, ok.body.changed, lt.heroImage, lt.leadImageCaption], [200, ["heroImageId", "leadImageCaption"], gMedia, "P4 caption"]);
+      const again = await patch(gcvDraft, "gcv", { heroImageId: gMedia, leadImageCaption: "P4 caption" });
+      expect("P4-5: same values again ⇒ 200 changed [] (no write)", [again.status, again.body.changed], [200, []]);
+      const clr = await patch(gcvDraft, "gcv", { heroImageId: null, leadImageCaption: null });
+      const lc = await latestDoc(gcvDraft);
+      expect("P4-6: heroImageId null + caption null ⇒ 200, hero and caption cleared", [clr.status, clr.body.changed, lc.heroImage ?? null, lc.leadImageCaption ?? null], [200, ["heroImageId", "leadImageCaption"], null, null]);
+      const t2 = `p8-${run}-${seq++}`;
+      const cr2 = await send("/api/hub/articles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", title: `P8 ${t2}`, slug: t2, actor: P8_HUMAN, heroImageId: gMedia, leadImageCaption: "Cap" }) });
+      const l2 = cr2.status === 201 ? await latestDoc(cr2.body.id as number) : {};
+      expect("P4-7: POST with own-tenant hero + caption ⇒ 201, stored", [cr2.status, l2.heroImage, l2.leadImageCaption], [201, gMedia, "Cap"]);
+      expect("P4-8: (AC7, articleId part) media route with another tenant's article ⇒ 404 (frozen)", exact(await upload("gcv", base({ data: smallPng, type: "image/png" }, dtwDraft))), NF);
+      // R12 (read-only measurement): anonymous REST read of media lists other tenants' rows.
+      const anon = await send("/api/media?limit=200&depth=0", { method: "GET" }, null);
+      const docs = ((anon.body.docs ?? []) as Doc[]);
+      const tenantsSeen = [...new Set(docs.map((d) => String(d.tenant)))].length;
+      console.log(`OBS   P4 R12: anonymous GET /api/media ⇒ ${anon.status}, ${docs.length} rows visible (totalDocs ${String(anon.body.totalDocs)}), ${tenantsSeen} distinct tenants, hub-uploaded rows visible: ${docs.filter((d) => /^hub-/.test(String(d.filename))).length} (gap hub-p5-3-media-public-read; Media.ts not changed)`);
+    }
+    if (want("E8")) {
+      const i0 = await interr();
+      const v = await versionOf(gcvDraft, "gcv");
+      const head = `{"tenant":"gcv","expectedVersion":${v},"actor":${JSON.stringify(P8_HUMAN)},`;
+      const codeOf = async (json: string) => { const r = await patchRaw(gcvDraft, "gcv", json); return [r.status, ((r.body.fields ?? {}) as Doc).heroImageId ?? r.body.status]; };
+      expect("E8-1: heroImageId 2147483648 / 9007199254740994 (2^53+2) / 1e400 (Infinity) / 20 / 400 digits ⇒ 422 out_of_range", [
+        await codeOf(`${head}"heroImageId":2147483648}`), await codeOf(`${head}"heroImageId":9007199254740994}`), await codeOf(`${head}"heroImageId":1e400}`),
+        await codeOf(`${head}"heroImageId":${"9".repeat(20)}}`), await codeOf(`${head}"heroImageId":${"9".repeat(400)}}`),
+      ], [[422, "out_of_range"], [422, "out_of_range"], [422, "out_of_range"], [422, "out_of_range"], [422, "out_of_range"]]);
+      expect("E8-2: heroImageId 0 / -1 / 1.5 / \"5\" ⇒ 422 type (0 is type, unlike authorId)", [
+        await codeOf(`${head}"heroImageId":0}`), await codeOf(`${head}"heroImageId":-1}`), await codeOf(`${head}"heroImageId":1.5}`), await codeOf(`${head}"heroImageId":"5"}`),
+      ], [[422, "type"], [422, "type"], [422, "type"], [422, "type"]]);
+      const capCode = async (c: unknown) => { const r = await patch(gcvDraft, "gcv", { leadImageCaption: c }); return [r.status, ((r.body.fields ?? {}) as Doc).leadImageCaption ?? r.body.status]; };
+      expect("E8-3: leadImageCaption 501 chars ⇒ too_long; C0 ⇒ c0; bidi ⇒ bidi; number ⇒ type", [await capCode("x".repeat(501)), await capCode("a\u0001b"), await capCode("a\u202eb"), await capCode(5)], [[422, "too_long"], [422, "c0"], [422, "bidi"], [422, "type"]]);
+      expect("E8-4: (gap hub-id-over-int4-returns-500) none of the E8 requests wrote an integration_error row", (await interr()) - i0, 0);
+    }
+  }
+
+  if (want("P2") || want("P7")) {
+    const gA = await uploaded("gcv", gcvDraft, "P2 alt A");
+    const gB = await uploaded("gcv", gcvDraft, "P2 alt B");
+    const dX = await uploaded("dtw", dtwDraft, "P2 dtw");
+    const inj = await localMedia("gcv", "a](https://x.test/i.png)\n\n![b");
+    const art = await mkDraft("gcv");
+    const kids = [paraNode("Intro paragraph."), upNode(gA, 0), paraNode("Middle paragraph."), upNode(gB, 1), upNode(dX, 2), upNode(gA, 3), upNode(inj, 4), paraNode("Outro paragraph.")];
+    await tamper8(art, { body: lexOf(kids) });
+    const okHero = await patch(art, "gcv", { heroImageId: gA, leadImageCaption: "P2 caption" });
+    if (okHero.status !== 200) throw new Error(`P2 hero patch ⇒ ${okHero.status} ${okHero.text.slice(0, 200)}`);
+    if (want("P2")) {
+      const i0 = await interr();
+      const e = await getEdit(art, "gcv");
+      const ed = (e.body.edit ?? {}) as Doc;
+      const bm = String(((e.body.article ?? {}) as Doc).bodyMarkdown ?? "");
+      const hero = ed.hero as Doc | null;
+      expect("P2-1: (AC9) view=edit editable: 15 sanitizer keys + hero, leadImageCaption, bodyMedia", [e.status, ed.editable, Object.keys(ed).length, Object.keys(ed).slice(-3)], [200, true, 18, ["hero", "leadImageCaption", "bodyMedia"]]);
+      expect("P2-2: edit.hero = own media {id,url,alt,width,height,credit} with the RAW url; leadImageCaption", [hero && Object.keys(hero), hero?.id, typeof hero?.url === "string" && (hero.url as string).startsWith("/api/media/file/hub-"), hero?.alt, ed.leadImageCaption], [["id", "url", "alt", "width", "height", "credit"], gA, true, "P2 alt A", "P2 caption"]);
+      const bmi = ((ed.bodyMedia ?? []) as Doc[]);
+      expect("P2-3: edit.bodyMedia = distinct own-tenant ids in tree order (other tenant dropped), keys {id,url,alt,width,height}", [bmi.map((m) => m.id), bmi.every((m) => Object.keys(m).join() === "id,url,alt,width,height")], [[gA, gB, inj], true]);
+      expect("P2-4: article.bodyMarkdown carries canonical tokens (alt never re-emitted; no placeholder, no \"relation to\"); the injected alt does not leak", [
+        bm.split("\n").filter((l) => l.startsWith("![")), bm.includes("\u0001"), /relation to/.test(bm), bm.includes("x.test"),
+      ], [[`![](cms-media:${gA})`, `![](cms-media:${gB})`, `![](cms-media:${dX})`, `![](cms-media:${gA})`, `![](cms-media:${inj})`], false, false, false]);
+      console.log(`OBS   P2 alt-injection vector (measurement): media ${inj} alt ${JSON.stringify("a](https://x.test/i.png)\n\n![b")} ⇒ bodyMedia alt ${JSON.stringify(bmi.find((m) => m.id === inj)?.alt)} (raw; the hub must escape it)`);
+      const plain = await getEdit(art, "gcv", "");
+      const pbm = String(((plain.body.article ?? {}) as Doc).bodyMarkdown ?? "");
+      expect("P2-5: default read (no view) unchanged: no edit key, no cms-media token, article from the MAIN row (a draft's hero lives in the latest version ⇒ heroImage null)", [
+        "edit" in plain.body, pbm.includes("cms-media:"), ((plain.body.article ?? {}) as Doc).heroImage,
+      ], [false, false, null]);
+      await tamper8(art, { heroImage: dX });
+      expect("P2-6: hero stored as another tenant's media (written outside the hub) ⇒ edit.hero null", ((await getEdit(art, "gcv")).body.edit as Doc).hero, null);
+      await tamper8(art, { heroImage: gA });
+      const m31 = [];
+      for (let i = 0; i < 31; i++) m31.push(await localMedia("gcv", `p2 many ${i}`));
+      const big = await mkDraft("gcv");
+      await tamper8(big, { body: lexOf(m31.map((id, i) => upNode(id, i))) });
+      const be = ((await getEdit(big, "gcv")).body.edit ?? {}) as Doc;
+      expect("P2-7: 31 distinct body media ⇒ bodyEditable false, bodyMedia [] (locked, not cut)", [be.editable, be.bodyEditable, be.bodyMedia], [true, false, []]);
+      const rel = await getEdit(s6.articles.manualDraftRelationBody.id, "dtw");
+      const re = (rel.body.edit ?? {}) as Doc;
+      expect("P2-8: relationship-node body (no upload) ⇒ editable, bodyEditable false as before, hero null, bodyMedia [], body still exported", [re.editable, re.bodyEditable, re.hero, re.bodyMedia, String(((rel.body.article ?? {}) as Doc).bodyMarkdown ?? "").length > 0], [true, false, null, [], true]);
+      expect("P2-9: the view=edit reads above wrote 0 integration_error rows", (await interr()) - i0, 0);
+      // Public read (depth 2) of the 0.1 baseline fixture (published dtw article with hero + body upload).
+      const pubTok = readFileSync(f8.publicReadTokenFile.dtw!, "utf8").trim();
+      const fx = ((await payload.find({ collection: "articles", depth: 0, limit: 1, sort: "-id", overrideAccess: true, where: { and: [{ tenant: { equals: s6.tenants.dtw!.id } }, { workflowStatus: { equals: "published" } }, { heroImage: { exists: true } }] } })).docs[0] as unknown as Doc | undefined);
+      if (fx) {
+        const pub = await send(`/api/public/articles/${encodeURIComponent(String(fx.slug))}`, { method: "GET" }, pubTok);
+        const pa = ((pub.body.article ?? pub.body.doc ?? pub.body) as Doc);
+        expect("P2-10: (AC10) public read: heroImage has a media url; the body text carries a populated media url", [pub.status, typeof ((pa.heroImage ?? {}) as Doc).url === "string", pub.text.includes("/api/media/file/")], [200, true, true]);
+      } else console.log("OBS   P2-10 skipped: no published dtw article with a hero (run scripts/p53-baseline-fixture.ts first)");
+    }
+    if (want("P7")) {
+      const e = await getEdit(art, "gcv");
+      const ed = (e.body.edit ?? {}) as Doc;
+      expect("P7-1: (part, 1.8) saved body with upload nodes ⇒ view=edit editable, tokens in bodyMarkdown, bodyMedia listed", [ed.editable, String(((e.body.article ?? {}) as Doc).bodyMarkdown).includes(`![](cms-media:${gA})`), ((ed.bodyMedia ?? []) as Doc[]).length], [true, true, 3]);
+      console.log(`OBS   P7 bodyEditable before 2.2 = ${String(ed.bodyEditable)} (2.2 wires the token round-trip; AC25 is proven there)`);
+      const n0 = uploadCount((await latestDoc(art)).body);
+      const t = await patch(art, "gcv", { title: `P7 text-only ${run}` });
+      expect("P7-2: PATCH a text field only (no bodyMarkdown) ⇒ 200; the stored upload nodes are kept", [t.status, t.body.changed, uploadCount((await latestDoc(art)).body), n0], [200, ["title"], n0, 5]);
+    }
   }
 
   if (want("P1")) await check8P1(expect, payload);

@@ -54,6 +54,7 @@ export const HUB_ARTICLE_EDIT_SELECT = {
   exclusive: true,
   sponsor: true,
   scheduledFor: true, // K10 (P5.2): the hour of a hub-scheduled latest version
+  leadImageCaption: true, // P5.3 T9 (heroImage already comes from the detail select)
 } as const;
 
 export type HubEditableReason = "ok" | "origin" | "status" | "not_hub_authored" | "scheduled";
@@ -119,7 +120,74 @@ export interface HubArticleEditYes {
   sponsor: string | null;
 }
 
-export type HubArticleEdit = HubArticleEditNo | HubArticleEditYes | HubArticleEditScheduled;
+/** P5.3 T9 / D6: one media of THIS tenant, raw `url` (the hub filters + absolutises it). */
+export interface HubEditMedia {
+  id: number | string;
+  url: string | null;
+  alt: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+/** P5.3 T9: the keys attached AFTER `sanitizeHubArticleEdit` (editable branch only). */
+export interface HubArticleEditMedia {
+  hero: (HubEditMedia & { credit: string | null }) | null;
+  leadImageCaption: string | null;
+  bodyMedia: HubEditMedia[];
+}
+
+export type HubArticleEdit = HubArticleEditNo | (HubArticleEditYes & Partial<HubArticleEditMedia>) | HubArticleEditScheduled;
+
+/** P5.3: distinct media ids allowed in one hub body (= `too_many` of T5). */
+export const HUB_EDIT_BODY_MEDIA_MAX = 30;
+
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** A populated media doc of THIS tenant (depth 2 read), else null — another tenant's media is never shown. */
+function ownMedia(v: unknown, tenantId: number | string): Doc | null {
+  const m = obj(v);
+  if (!m || toId(m) == null) return null;
+  if (String(toId(m.tenant) ?? "") !== String(tenantId)) return null;
+  return m;
+}
+
+function editMedia(m: Doc): HubEditMedia {
+  return { id: toId(m) as number | string, url: str(m.url), alt: str(m.alt), width: num(m.width), height: num(m.height) };
+}
+
+/**
+ * P5.3 T9: `edit.hero`, `edit.leadImageCaption`, `edit.bodyMedia` from the LATEST
+ * doc read at depth 2. Body ids = `upload` nodes with `relationTo: "media"`
+ * anywhere in the tree (never the Markdown); distinct ids in tree order; only
+ * media of this tenant, populated, are listed. `tooMany` = more than 30 distinct
+ * ids ⇒ the caller locks the body (bodyEditable false) instead of cutting.
+ */
+export function hubEditMediaBlock(latest: Doc, tenantId: number | string): HubArticleEditMedia & { tooMany: boolean } {
+  const h = ownMedia(latest.heroImage, tenantId);
+  const hero = h ? { ...editMedia(h), credit: str(h.credit) } : null;
+  const seen = new Map<string, unknown>();
+  const root = obj(obj(latest.body)?.root);
+  const stack: unknown[] = root ? [root] : [];
+  while (stack.length) {
+    const n = obj(stack.pop());
+    if (!n) continue;
+    if (n.type === "upload" && n.relationTo === "media") {
+      const id = toId(n.value);
+      if (id != null && !seen.has(String(id))) seen.set(String(id), n.value);
+    }
+    if (Array.isArray(n.children)) for (let i = n.children.length - 1; i >= 0; i--) stack.push(n.children[i]);
+  }
+  const tooMany = seen.size > HUB_EDIT_BODY_MEDIA_MAX;
+  const bodyMedia: HubEditMedia[] = [];
+  if (!tooMany) {
+    for (const v of seen.values()) {
+      const m = ownMedia(v, tenantId);
+      if (m) bodyMedia.push(editMedia(m));
+    }
+  }
+  const cap = str(latest.leadImageCaption);
+  return { hero, leadImageCaption: cap === "" ? null : cap, bodyMedia, tooMany };
+}
 
 export function sanitizeHubArticleEdit(
   doc: Doc,
@@ -210,6 +278,9 @@ export async function loadHubArticleEdit(args: {
   }
 
   const editorConfig = (await loadHubEditorConfig(payload.config)) as HubEditorConfig;
-  const bodyEditable = isRoundTripSafeBody(editorConfig, latest.body);
-  return { edit: sanitizeHubArticleEdit(latest, { bodyEditable, editable: true, editableReason: "ok" }), latest };
+  const media = hubEditMediaBlock(latest, tenantId);
+  const bodyEditable = !media.tooMany && isRoundTripSafeBody(editorConfig, latest.body);
+  // P5.3 T9: the media keys are attached AFTER the sanitizer (its 15 keys stay pinned by --check6).
+  const edit = sanitizeHubArticleEdit(latest, { bodyEditable, editable: true, editableReason: "ok" }) as HubArticleEditYes;
+  return { edit: { ...edit, hero: media.hero, leadImageCaption: media.leadImageCaption, bodyMedia: media.bodyMedia }, latest };
 }

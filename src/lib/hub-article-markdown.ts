@@ -32,6 +32,8 @@
 
 import type { SanitizedConfig } from "payload";
 import { convertLexicalToMarkdown, editorConfigFactory } from "@payloadcms/richtext-lexical";
+import { lexicalConverters } from "@/lib/hub-author-convert-core";
+import { mediaTokenConverters } from "@/lib/hub-author-media-token";
 
 export type HubBodyState = "ok" | "empty" | "error";
 
@@ -104,6 +106,15 @@ export async function hubArticleBodyToMarkdown(
     loadEditorConfig: () => Promise<EditorConfig>;
     /** Injectable for tests (forced throw / forced dangerous output). */
     convert?: Convert;
+    /**
+     * P5.3 T9 (`view=edit`, editable branch only): export through the ONE token
+     * wrapper (`mediaTokenConverters(lexicalConverters(cfg)).toMarkdown`, the path
+     * the round-trip checks). If that export throws (an upload node that is not
+     * a media with an id, or a nested one), fall back SILENTLY to the default
+     * export — such a body is already bodyEditable:false; no integration_error
+     * comes from this branch.
+     */
+    mediaTokens?: boolean;
   },
 ): Promise<HubBodyResult> {
   if (isEmptyBody(data)) return { bodyMarkdown: "", bodyState: "empty" };
@@ -112,7 +123,16 @@ export async function hubArticleBodyToMarkdown(
   let markdown: string;
   try {
     const editorConfig = await opts.loadEditorConfig();
-    markdown = convert({ data: data as never, editorConfig });
+    let tokened: string | null = null;
+    if (opts.mediaTokens) {
+      try {
+        tokened = mediaTokenConverters(lexicalConverters(editorConfig as never)).toMarkdown(data);
+        if (typeof tokened !== "string" || tokened.trim() === "") tokened = null;
+      } catch {
+        tokened = null;
+      }
+    }
+    markdown = tokened ?? convert({ data: data as never, editorConfig });
     if (typeof markdown !== "string") throw new TypeError("converter returned a non-string");
     // `convertLexicalToMarkdown` does not always throw: an editor state Lexical
     // cannot parse (e.g. an unregistered node type) is reported through the
