@@ -173,13 +173,14 @@ function render(id: BuilderId, a: BuilderArgs): string {
       const spec: TableSpec = ALLOWED_TABLES[t];
       const cols = (a.columns ?? []).map((c) => col(t, c));
       if (!cols.length) throw new LegacySqlError(SQL_MESSAGES.badIdentifier);
-      // $1 site, $2 epoch, $3.. cursor values, last = limit
+      // $1 site, [$2 epoch when hasCreatedAt], then cursor values, last = limit
+      const first = spec.hasCreatedAt ? 3 : 2;
       const ord = orderExprs(t, "$2");
       const n = ord.length;
       const cursor = a.withCursor
-        ? ` WHERE (${ord.join(", ")}) > (${ord.map((_, i) => (spec.hasCreatedAt && i === 0 ? `$${3 + i}::timestamptz` : `$${3 + i}`)).join(", ")})`
+        ? ` WHERE (${ord.join(", ")}) > (${ord.map((_, i) => (spec.hasCreatedAt && i === 0 ? `$${first + i}::timestamptz` : `$${first + i}`)).join(", ")})`
         : "";
-      const limitParam = a.withCursor ? `$${3 + n}` : "$3";
+      const limitParam = a.withCursor ? `$${first + n}` : `$${first}`;
       return `SELECT ${cols.join(", ")} FROM ${scoped(schema, t)}${cursor} ORDER BY ${ord.join(", ")} LIMIT ${limitParam}`;
     }
     case "sampleRows": {
@@ -249,7 +250,7 @@ export function keysetPage(
   const n = spec.keyColumns.length + (spec.hasCreatedAt ? 1 : 0);
   if (cursor && cursor.length !== n) throw new LegacySqlError(SQL_MESSAGES.badIdentifier);
   if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) throw new LegacySqlError(SQL_MESSAGES.refused);
-  const params: unknown[] = [siteId, EPOCH, ...(cursor ?? []), limit];
+  const params: unknown[] = [siteId, ...(spec.hasCreatedAt ? [EPOCH] : []), ...(cursor ?? []), limit];
   return issue("keysetPage", { schema, table, columns, withCursor: cursor !== null, allow }, params);
 }
 /** Keyset ordering BY created_at on a table without it is refused (A12-N03). */
