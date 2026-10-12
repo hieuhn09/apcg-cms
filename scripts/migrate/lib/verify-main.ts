@@ -132,8 +132,10 @@ async function main(): Promise<number> {
       const k = `${str(r.status)}|${str(r.section)}`;
       strata.set(k, [...(strata.get(k) ?? []), r]);
     }
-    const sample: Doc[] = [];
-    for (let i = 0; sample.length < 100; i++) {
+    // Every imported row when the population is small enough (fixture 300, real 1,637); else a stratified sample of 100.
+    const importedRows = src.filter((r) => entryByLegacy.has(String(r.id)));
+    const sample: Doc[] = importedRows.length <= 2000 ? importedRows : [];
+    for (let i = 0; importedRows.length > 2000 && sample.length < 100; i++) {
       let added = false;
       for (const list of strata.values()) if (list[i] && sample.length < 100) {
         sample.push(list[i] as Doc);
@@ -160,7 +162,7 @@ async function main(): Promise<number> {
       const types = nodeTypes(d.body);
       for (const t of types) if (!["root", "paragraph", "heading", "text"].includes(t)) fails.push(`${String(r.id)} unexpected node type ${t}`);
     }
-    add("4", "body text parity (sample)", fails.filter((f) => !f.includes("headings") && !f.includes("node type")));
+    add("4", importedRows.length <= 2000 ? "body text parity (all imported rows)" : "body text parity (sample)", fails.filter((f) => !f.includes("headings") && !f.includes("node type")));
     add("5", "body structure (headings, node types)", fails.filter((f) => f.includes("headings") || f.includes("node type")));
   }
   // 6 relationships

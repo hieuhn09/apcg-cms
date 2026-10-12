@@ -145,11 +145,12 @@ export function resolveMappingPath(command: Command, a: ParsedArgs): string | un
 
 export const HOOK_MESSAGE = "test hooks: MIGRATE_TEST_KILL_* are honoured only against a LOCAL Central database; refusing.";
 /** A13-R08: MIGRATE_TEST_KILL_* only when the Central target is local. Returns the parsed hooks. */
-export function resolveTestHooks(env: Record<string, string | undefined>, centralLocal: boolean): { killAfter?: number; killBeforeJournal?: number } {
+export function resolveTestHooks(env: Record<string, string | undefined>, centralLocal: boolean): { killAfter?: number; killBeforeJournal?: number; killAfterMediaUpload?: number } {
   const ka = env.MIGRATE_TEST_KILL_AFTER;
   const kb = env.MIGRATE_TEST_KILL_BEFORE_JOURNAL;
-  if (!ka && !kb) return {};
+  const km = env.MIGRATE_TEST_KILL_AFTER_MEDIA_UPLOAD; // N-12 rehearsal: crash between media upload and its resolution line
+  if (!ka && !kb && !km) return {};
   if (!centralLocal) throw new CliError(HOOK_MESSAGE);
   const n = (v: string | undefined) => (v ? Number(v) : undefined);
-  return { killAfter: n(ka), killBeforeJournal: n(kb) };
+  return { ...(ka ? { killAfter: n(ka) } : {}), ...(kb ? { killBeforeJournal: n(kb) } : {}), ...(km ? { killAfterMediaUpload: n(km) } : {}) };
 }

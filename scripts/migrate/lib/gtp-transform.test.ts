@@ -5,7 +5,7 @@ import { loadMapping } from "./gtp-mapping";
 import { repoRoot } from "./out-dir";
 import {
   enText, formatTag, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveAuthor, resolveCountries, resolveTaxonomy,
-  sanitizeLegacyHtml, sectionsToHtml, sniffBodyFormat, statusWrite, stripPhotoLabel, takeawaysText, tagSlugify, stableFilename,
+  sanitizeLegacyHtml, sectionsToHtml, sniffBodyFormat, statusWrite, stripPhotoLabel, takeawaysText, tagSlugify, stableFilename, storedFilenameMatches,
   canonicalSourceUrl, oldArticleUrl, plainTextForParity, jaccard, rewriteInternalLinks,
 } from "./gtp-transform";
 import { buildSlugPlan, planEventSlugs } from "./slug-plan";
@@ -97,6 +97,12 @@ test("C4: generic sanitizer removes script/iframe/on* and javascript: URLs, stri
 
 test("misc pure helpers", () => {
   assert.match(stableFilename("https://h/media/featured/My Slug.JPG"), /^gtp-[0-9a-f]{8}-my-slug\.jpg$/);
+  const f = stableFilename("https://h/featured/aaaaaaaa-0000-4000-8000-000000000001.jpg");
+  assert.match(f, /-img\.jpg$/); // never ends in -<digits> (Payload's renamer would increment it)
+  assert.equal(storedFilenameMatches(f, f), true);
+  assert.equal(storedFilenameMatches(f.replace(/\.jpg$/, "-3.jpg"), f), true);
+  assert.equal(storedFilenameMatches(`x${f}`, f), false);
+  assert.equal(storedFilenameMatches(f.replace(/\.jpg$/, "-a.jpg"), f), false);
   assert.equal(canonicalSourceUrl("https://Example.com/a?utm_x=1&b=2#f"), "https://example.com/a?b=2");
   assert.equal(oldArticleUrl("/{section}/{slug}", { section: "news", sub: "", slug: "s", id: "1" }), "/news/s");
   assert.equal(plainTextForParity("<p>Hello&nbsp;World</p>"), "hello&nbsp;world");

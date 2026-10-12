@@ -80,10 +80,12 @@ async function main(): Promise<number> {
   };
 
   const deleteIds: (number | string)[] = [];
+  const goneArticleIds: string[] = [];
   for (const e of entries) {
     const doc = ((await pFind(payload, "articles", { where: { id: { equals: e.articleId } }, limit: 1, draft: true })) as unknown as { docs: Doc[] }).docs[0];
     if (!doc) {
       rep.alreadyGone.push(`${e.legacyId} (${e.slug})`);
+      goneArticleIds.push(String(e.articleId));
       continue;
     }
     if (!isMarker(doc) || relId(doc.tenant) !== String(tenantId)) {
@@ -111,7 +113,9 @@ async function main(): Promise<number> {
 
   // Media decision.
   const deleting = new Set(deleteIds.map(String));
-  const deletedLegacy = new Set(entries.filter((e) => deleting.has(String(e.articleId))).map((e) => e.legacyId));
+  const goneIds = new Set(goneArticleIds);
+  // Articles already gone (deleted by someone else) no longer reference their media either (E15).
+  const deletedLegacy = new Set(entries.filter((e) => deleting.has(String(e.articleId)) || goneIds.has(String(e.articleId))).map((e) => e.legacyId));
   const survivingRefs = new Set(media.filter((m) => !deletedLegacy.has(m.articleLegacyId) && m.mediaId !== undefined).map((m) => String(m.mediaId)));
   const mediaToDelete: (number | string)[] = [];
   const seen = new Set<string>();

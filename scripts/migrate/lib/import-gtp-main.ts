@@ -41,7 +41,7 @@ import { formatProvisional, mappingFingerprint, type Mapping } from "./gtp-mappi
 import { generateTimestampsFix } from "./gtp-timestamps";
 import {
   enText, formatTag, isoOrNull, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveAuthor, resolveCountries,
-  resolveTaxonomy, sectionsToHtml, statusWrite, str, stripPhotoLabel, takeawaysText, stableFilename, oldArticleUrl, wordCount, canonicalSourceUrl,
+  resolveTaxonomy, sectionsToHtml, statusWrite, str, stripPhotoLabel, takeawaysText, stableFilename, storedFilenameMatches, oldArticleUrl, wordCount, canonicalSourceUrl,
   type CountryRef, type TagRef,
 } from "./gtp-transform";
 import { FailureControls } from "./failure-controls";
@@ -51,7 +51,7 @@ import { effectiveAllowList } from "./legacy-sql";
 import { fetchImageWithRetry } from "./media-fetch";
 import { normaliseKey } from "./normalise-path";
 import { assertOutDirSafe, writeFileSafe } from "./out-dir";
-import { RunDir, RunDirError, RUN_MESSAGES, checkRunId, type MediaMapEntry, type RunState, type SlugMapEntry } from "./run-dir";
+import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId, type MediaMapEntry, type RunState, type SlugMapEntry } from "./run-dir";
 import { buildSlugPlan, planEventSlugs, type SlugPlanEntry } from "./slug-plan";
 
 type Doc = Record<string, unknown>;
@@ -76,6 +76,7 @@ function newReport() {
     importedByStatus: {} as Record<string, number>,
     skippedExisting: 0,
     baselineReconstructed: 0,
+    ownedByOtherRun: 0,
     orphanUnknown: [] as string[],
     slugConflictForeign: [] as string[],
     rejects: {} as Record<string, number>,
@@ -209,6 +210,12 @@ async function main(): Promise<number> {
   const countries: CountryRef[] = (await findAll(payload, "countries", {})).map((c) => ({ id: c.id as number | string, code: str(c.code), name: str(c.name) }));
   const tagId = new Map<string, number | string>();
   for (const t of await findAll(payload, "tags", { tenant: { equals: tenantId } })) tagId.set(String(t.slug), t.id as number | string);
+  /** Tenant media doc for a stable filename, accepting Payload's `-<n>` upload rename (lowest id wins). */
+  const findMediaByStable = async (stable: string): Promise<Doc | undefined> => {
+    const stem = stable.slice(0, stable.lastIndexOf("."));
+    const r = (await pFind(payload, "media", { where: { and: [{ tenant: { equals: tenantId } }, { filename: { like: stem } }] }, limit: 50, sort: "id" })) as unknown as { docs: Doc[] };
+    return r.docs.find((d) => storedFilenameMatches(String(d.filename), stable));
+  };
   console.log(`[import] preflight OK: tenant ${tenantSlug}, ${pillarId.size} pillars, ${subId.size} sub-sections, ${authorId.size} authors, ${countries.length} countries, ${tagId.size} tags`);
 
   // ── Slug plan over the WHOLE population (before any filter) ──
@@ -245,12 +252,15 @@ async function main(): Promise<number> {
   const slugJ = a.apply ? run.slugJournal() : undefined;
   const mediaJ = a.apply ? run.mediaJournal() : undefined;
   const journaled = new Map(run.slugMap().map((e) => [e.legacyId, e]));
+  // Marker rows journaled by ANOTHER run directory are owned by that run: never adopted here (A13-R05).
+  const otherRuns = new Set<string>();
+  for (const r of allRunDirs(out)) if (path.resolve(r.dir) !== path.resolve(run.dir)) for (const e of r.slugMap()) if (e.articleId !== undefined) otherRuns.add(String(e.articleId));
   const mediaMap = run.mediaMap();
 
   // N-12: resolve pending media entries left by a crash.
   if (a.apply && mediaJ && state) {
     for (const e of mediaMap.filter((x) => x.origin === "created-pending")) {
-      const doc = await findOne(payload, "media", { and: [{ tenant: { equals: tenantId } }, { filename: { equals: e.filename } }] });
+      const doc = await findMediaByStable(e.filename);
       const resolved: MediaMapEntry = doc
         ? { ...e, mediaId: doc.id as number | string, origin: String(doc.createdAt) >= state.startedAt ? "created" : "adopted" }
         : { ...e, origin: "pending-absent" };
@@ -264,6 +274,7 @@ async function main(): Promise<number> {
   const rejectsLines: string[] = [];
   const oldOrigin = m.urls.oldOrigin.replace(/\/$/, "");
   let createdCount = 0;
+  let mediaUploads = 0;
   let journaledCount = 0;
 
   const ensureTag = async (t: TagRef): Promise<number | string | undefined> => {
@@ -283,7 +294,7 @@ async function main(): Promise<number> {
   const ensureHero = async (legacyId: string, rawUrl: string, alt: string, credit: string): Promise<number | string | undefined> => {
     const filename = stableFilename(rawUrl);
     if (mediaCache.has(filename)) return mediaCache.get(filename)?.id;
-    const existing = await findOne(payload, "media", { and: [{ tenant: { equals: tenantId } }, { filename: { equals: filename } }] });
+    const existing = await findMediaByStable(filename);
     if (existing) {
       const origin = mediaCreatedThisRun.has(filename) ? "created" : "adopted";
       mediaCache.set(filename, { id: existing.id as number | string, origin });
@@ -301,6 +312,11 @@ async function main(): Promise<number> {
     }
     mediaJ?.append({ articleLegacyId: legacyId, role: "hero", filename, origin: "created-pending", startedAt: new Date().toISOString() } satisfies MediaMapEntry);
     const created = (await pCreate(payload, "media", { tenant: tenantId, alt: alt || filename, ...(credit ? { credit } : {}) }, { file: { data: res.bytes, mimetype: res.mime, name: filename, size: res.bytes.length }, context: ctx, locale: "en" })) as unknown as Doc;
+    mediaUploads++;
+    if (hooks.killAfterMediaUpload !== undefined && mediaUploads >= hooks.killAfterMediaUpload) {
+      console.error(`[import] MIGRATE_TEST_KILL_AFTER_MEDIA_UPLOAD=${hooks.killAfterMediaUpload}: exiting before the media resolution line (test hook)`);
+      process.exit(137);
+    }
     const sha = (await import("node:crypto")).createHash("sha256").update(res.bytes).digest("hex");
     mediaJ?.append({ articleLegacyId: legacyId, role: "hero", mediaId: created.id as number | string, filename, sha256: sha, origin: "created" } satisfies MediaMapEntry);
     mediaCreatedThisRun.set(filename, created.id as number | string);
@@ -315,6 +331,11 @@ async function main(): Promise<number> {
     if (!existing) return false;
     if (!isMarker(existing)) {
       report.slugConflictForeign.push(`${legacyId} -> ${slug}`);
+      return true;
+    }
+    if (otherRuns.has(String(existing.id))) {
+      report.ownedByOtherRun++;
+      report.skippedExisting++;
       return true;
     }
     if (Number(existing.version) === 1) {
@@ -687,7 +708,7 @@ ${kv(r.rejects)}
 ${list(r.failed)}
 - slugConflictForeign: ${r.slugConflictForeign.length}
 ${list(r.slugConflictForeign)}
-- baselineReconstructed: ${r.baselineReconstructed}; orphanUnknown: ${r.orphanUnknown.length}
+- baselineReconstructed: ${r.baselineReconstructed}; orphanUnknown: ${r.orphanUnknown.length}; owned by another run (not adopted): ${r.ownedByOtherRun}
 - per pillar:
 ${kv(r.perPillar)}
 - per pillar/sub-section:

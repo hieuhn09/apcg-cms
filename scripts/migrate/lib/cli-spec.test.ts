@@ -107,6 +107,7 @@ test("E17: --mapping defaults to the committed structural file for discover, red
 test("C3/G48 (A13-R08): MIGRATE_TEST_KILL_* refused for a non-local Central and honoured locally", () => {
   assert.throws(() => resolveTestHooks({ MIGRATE_TEST_KILL_AFTER: "3" }, false), { message: HOOK_MESSAGE });
   assert.throws(() => resolveTestHooks({ MIGRATE_TEST_KILL_BEFORE_JOURNAL: "3" }, false), (e: unknown) => e instanceof CliError && e.exitCode === 2);
-  assert.deepEqual(resolveTestHooks({ MIGRATE_TEST_KILL_AFTER: "37" }, true), { killAfter: 37, killBeforeJournal: undefined });
+  assert.deepEqual(resolveTestHooks({ MIGRATE_TEST_KILL_AFTER: "37" }, true), { killAfter: 37 });
+  assert.throws(() => resolveTestHooks({ MIGRATE_TEST_KILL_AFTER_MEDIA_UPLOAD: "1" }, false), { message: HOOK_MESSAGE });
   assert.deepEqual(resolveTestHooks({}, false), {});
 });
