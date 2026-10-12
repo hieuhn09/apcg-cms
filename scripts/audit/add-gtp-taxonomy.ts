@@ -120,7 +120,7 @@ async function pCount(payload: Payload, collection: string, where: Record<string
 
 async function findAll(payload: Payload, collection: string, tenantId: unknown): Promise<Doc[]> {
   const r = await pFind(payload, collection, { where: { tenant: { equals: tenantId } }, limit: 0, pagination: false });
-  return (r as { docs: Doc[] }).docs;
+  return (r as unknown as { docs: Doc[] }).docs;
 }
 
 function writeResultLog(result: Record<string, unknown>): string {
@@ -159,7 +159,7 @@ async function main(): Promise<void> {
   const payload = await getPayload({ config: payloadConfig });
 
   /* Tenant preflight (read-only). */
-  const tenant = (await pFind(payload, "tenants", { where: { slug: { equals: GTP_TENANT_SLUG } }, limit: 1 })).docs[0] as Doc | undefined;
+  const tenant = (await pFind(payload, "tenants", { where: { slug: { equals: GTP_TENANT_SLUG } }, limit: 1 })).docs[0] as unknown as Doc | undefined;
   if (!tenant) {
     console.error(`${TAG} tenant "${GTP_TENANT_SLUG}" not found: create it in /admin first (plan section 7). Nothing done.`);
     process.exit(1);
@@ -250,7 +250,7 @@ async function main(): Promise<void> {
         "pillars",
         { tenant: tenant.id, slug: p.slug, title: p.title, heading: p.heading, description: p.description, order: p.order, color: p.color, icon: p.icon },
         ctx,
-      )) as Doc;
+      )) as unknown as Doc;
       pillarId.set(p.slug, doc.id);
       created.push({ entity: i.entity, key: i.key, id: doc.id });
     }
@@ -258,7 +258,7 @@ async function main(): Promise<void> {
       const s = i.row as GtpSubSection;
       const pid = pillarId.get(s.pillarSlug);
       if (pid === undefined) throw new Error(`pillar ${s.pillarSlug} has no id`);
-      const doc = (await pCreate(payload, "subsections", { tenant: tenant.id, pillar: pid, slug: s.slug, title: s.title, order: s.order }, ctx)) as Doc;
+      const doc = (await pCreate(payload, "subsections", { tenant: tenant.id, pillar: pid, slug: s.slug, title: s.title, order: s.order }, ctx)) as unknown as Doc;
       created.push({ entity: i.entity, key: i.key, id: doc.id });
     }
     for (const i of toCreate("newsletters")) {
@@ -268,7 +268,7 @@ async function main(): Promise<void> {
         "newsletters",
         { tenant: tenant.id, slug: n.slug, name: n.name, cadence: n.cadence, description: n.description, order: n.order, active: n.active },
         ctx,
-      )) as Doc;
+      )) as unknown as Doc;
       created.push({ entity: i.entity, key: i.key, id: doc.id });
     }
     for (const i of toCreate("authors")) {
@@ -277,12 +277,12 @@ async function main(): Promise<void> {
       if (a.rank !== undefined) data.rank = a.rank;
       if (a.bio) data.bio = a.bio;
       if (a.city) data.city = a.city;
-      const doc = (await pCreate(payload, "authors", data, ctx)) as Doc;
+      const doc = (await pCreate(payload, "authors", data, ctx)) as unknown as Doc;
       created.push({ entity: i.entity, key: i.key, id: doc.id });
     }
     for (const i of toCreate("tags")) {
       const t = i.row as GtpTag;
-      const doc = (await pCreate(payload, "tags", { tenant: tenant.id, slug: t.slug, title: t.title }, ctx)) as Doc;
+      const doc = (await pCreate(payload, "tags", { tenant: tenant.id, slug: t.slug, title: t.title }, ctx)) as unknown as Doc;
       created.push({ entity: i.entity, key: i.key, id: doc.id });
     }
   } catch (err) {
