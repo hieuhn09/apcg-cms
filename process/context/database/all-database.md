@@ -10,7 +10,7 @@ metadata:
 
 # Database Context
 
-Last updated: 2026-10-06 (APCGHub P5.1: new `content_engines.hub_author` boolean column, migration `20260930_000000_add_content_engines_hub_author`, flag `ContentEngines.hubAuthor`; see §ContentEngines and §Migrations). Previously: 2026-10-05 (taxonomy hook + FK facts section for the single-home pillar rule). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
+Last updated: 2026-10-12 (gtp tenant `gtp` groundwork on branch `claude/clever-gates-h5xyd8`: NO migration and no schema change; `SINGLE_HOME_PILLARS`/`ENGINE_BLOCKED_PILLARS` gain `gtp` entries in code only; production rows come from the owner script `audit:add-gtp-taxonomy`; see `integrations/all-integrations.md` §GTP tenant rules). Previously: 2026-10-06 (APCGHub P5.1: new `content_engines.hub_author` boolean column, migration `20260930_000000_add_content_engines_hub_author`, flag `ContentEngines.hubAuthor`; see §ContentEngines and §Migrations). Previously: 2026-10-05 (taxonomy hook + FK facts section for the single-home pillar rule). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
 
 This is the canonical database context entrypoint for **apcg-cms** (Central CMS).
 
