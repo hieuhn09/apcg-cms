@@ -20,10 +20,10 @@ export class FailureControls {
     this.mediaAttempts++;
     if (!ok) this.mediaFailures++;
   }
-  /** Returns a stop message or null. `final` evaluates the budget without the minimum sample. */
-  stopReason(final = false): string | null {
+  /** Returns a stop message or null. The budget is judged once at least `minMediaSample` unique images were attempted. */
+  stopReason(): string | null {
     if (this.consecutive >= this.stopAfter) return FAILURE_MESSAGES.consecutive(this.stopAfter);
-    if ((final || this.mediaAttempts >= this.minMediaSample) && this.mediaAttempts > 0) {
+    if (this.mediaAttempts >= this.minMediaSample && this.mediaAttempts > 0) {
       if ((this.mediaFailures / this.mediaAttempts) * 100 > this.budgetPercent) {
         return FAILURE_MESSAGES.mediaBudget(this.budgetPercent, this.mediaFailures, this.mediaAttempts);
       }

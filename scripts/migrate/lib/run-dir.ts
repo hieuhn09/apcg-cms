@@ -29,6 +29,8 @@ export interface SlugMapEntry {
   rehomed?: boolean;
   duplicateOf?: string;
   internalLinkRewritable?: boolean;
+  /** Old-site URLs found in the body text at import (pass 1 input). */
+  textLinks?: string[];
   baselineReconstructed?: boolean;
   adopted?: boolean;
   createdAtRun?: string;

@@ -85,7 +85,7 @@ test("C3/C4/G51: --stop-after-failures and the media failure budget stop the run
   assert.equal(m.stopReason(), FAILURE_MESSAGES.mediaBudget(2, 1, 10));
   const ok = new FailureControls(100, 2, 10);
   for (let i = 0; i < 100; i++) ok.recordMedia(i !== 0);
-  assert.equal(ok.stopReason(true), null); // 1% < 2%
+  assert.equal(ok.stopReason(), null); // 1% < 2%
 });
 
 test("C3/G48: the legacy banner never prints credentials or the query string", () => {

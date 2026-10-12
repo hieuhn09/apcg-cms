@@ -22,11 +22,12 @@ export const DEFAULT_RESERVED_SLUGS = [
 ];
 
 export interface PlanRow {
-  id: unknown;
-  created_at: unknown;
-  status: unknown;
-  slug: unknown;
-  title: unknown;
+  [k: string]: unknown;
+  id?: unknown;
+  created_at?: unknown;
+  status?: unknown;
+  slug?: unknown;
+  title?: unknown;
   section?: unknown;
   subsection?: unknown;
 }
