@@ -58,13 +58,13 @@ interface Run {
 }
 /** Run a tool with node --import tsx; retries the known load stall (exit 75). */
 function tool(script: string, args: string[], env: Record<string, string> = {}): Run {
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 10; i++) {
     const r = spawnSync(process.execPath, ["--import", "tsx", path.join(ROOT, script), ...args], { cwd: ROOT, env: { ...process.env, ...env }, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     const code = r.status ?? (r.signal ? 128 : 1);
     if (code !== 75) return { code, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
     console.log(`  (load stall in ${script}, retry ${i + 1})`);
   }
-  return { code: 75, out: "load stall x4" };
+  return { code: 75, out: "load stall x10" };
 }
 const T = (n: string) => `scripts/migrate/${n}`;
 const OV = ["--mapping-overlay", OVERLAY];
