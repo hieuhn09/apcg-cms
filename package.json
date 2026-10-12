@@ -12,6 +12,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test:media-redirect": "tsx --test src/lib/media-redirect.test.ts",
+    "audit:add-gtp-taxonomy": "tsx scripts/audit/add-gtp-taxonomy.ts",
+    "probe:gtp": "tsx scripts/gtp-probe.ts",
     "test:single-home": "tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts scripts/lib/local-db-guard.test.ts scripts/lib/gtp-taxonomy.test.ts",
     "payload": "payload",
     "payload:generate-types": "payload generate:types",
