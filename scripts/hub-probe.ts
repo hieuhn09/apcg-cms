@@ -9879,11 +9879,20 @@ async function check8Unit(expect: (label: string, actual: unknown, wanted: unkno
   const mdm = await import("../src/lib/hub-article-markdown");
   const conv = () => "DEFAULT EXPORT";
   const lexV = { root: { type: "root", children: [up(5, "videoMedia")] } };
-  expect("U-13: mediaTokens export throws (upload not media) ⇒ silent fallback to the default export, bodyState ok, no error; without the flag the default converter is used", [
+  expect("U-13: mediaTokens export throws (upload not media) ⇒ fallback to the default export, REPORTED as tokenFallback (review M2), bodyState ok, no error; without the flag the default converter is used", [
     await mdm.hubArticleBodyToMarkdown(lexV, { loadEditorConfig: async () => ({}) as never, convert: conv, mediaTokens: true }),
     await mdm.hubArticleBodyToMarkdown(lexV, { loadEditorConfig: async () => ({}) as never, convert: conv }),
-  ], [{ bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok" }, { bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok" }]);
+  ], [{ bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok", tokenFallback: true }, { bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok" }]);
   expect("U-14: a body of ONLY one upload node is not empty", mdm.isEmptyBody({ root: { type: "root", children: [up(5)] } }), false);
+  // Review M2 (CMS-2): the invariant "bodyEditable:true ⇒ the token export did not fall back".
+  const yes = { editable: true, editableReason: "ok", bodyEditable: true, version: 3 } as unknown as Parameters<typeof sel.applyBodyTokenFallback>[0];
+  expect("U-15: (review M2) applyBodyTokenFallback: fallback ⇒ bodyEditable false (other keys kept); no fallback ⇒ same object; not-editable edit untouched", [
+    sel.applyBodyTokenFallback(yes, true), sel.applyBodyTokenFallback(yes, false) === yes,
+    sel.applyBodyTokenFallback({ editable: false, editableReason: "status" }, true),
+  ], [{ editable: true, editableReason: "ok", bodyEditable: false, version: 3 }, true, { editable: false, editableReason: "status" }]);
+  expect("U-16: (review NIT 5) mapWriteError: ValidationError path heroImage ⇒ key heroImageId (other paths unchanged)",
+    h.mapWriteError({ name: "ValidationError", data: { errors: [{ path: "heroImage" }, { path: "title" }] } }),
+    { kind: "invalid", status: 422, fields: { heroImageId: "invalid", title: "invalid" } });
 }
 
 // ── --check8 ─────────────────────────────────────────────────────────────────
@@ -10227,7 +10236,11 @@ async function check8() {
         "edit" in plain.body, pbm.includes("cms-media:"), ((plain.body.article ?? {}) as Doc).heroImage,
       ], [false, false, null]);
       await tamper8(art, { heroImage: dX });
-      expect("P2-6: hero stored as another tenant's media (written outside the hub) ⇒ edit.hero null", ((await getEdit(art, "gcv")).body.edit as Doc).hero, null);
+      const foreign = await getEdit(art, "gcv");
+      expect("P2-6: hero stored as another tenant's media (written outside the hub) ⇒ edit.hero null", (foreign.body.edit as Doc).hero, null);
+      expect("P2-6b: (review M1) the same response carries NO url / alt / caption / credit of that media anywhere (article.heroImage null; no 'P4 dtw' / 'P2 dtw' alt, no foreign file name)", [
+        ((foreign.body.article ?? {}) as Doc).heroImage, foreign.text.includes("P2 dtw"), foreign.text.includes(String((await payload.findByID({ collection: "media", id: dX, depth: 0, overrideAccess: true }) as unknown as Doc).filename)),
+      ], [null, false, false]);
       await tamper8(art, { heroImage: gA });
       const m31 = [];
       for (let i = 0; i < 31; i++) m31.push(await localMedia("gcv", `p2 many ${i}`));
@@ -10252,7 +10265,7 @@ async function check8() {
       const e = await getEdit(art, "gcv");
       const ed = (e.body.edit ?? {}) as Doc;
       expect("P7-1: (part, 1.8) saved body with upload nodes ⇒ view=edit editable, tokens in bodyMarkdown, bodyMedia listed", [ed.editable, String(((e.body.article ?? {}) as Doc).bodyMarkdown).includes(`![](cms-media:${gA})`), ((ed.bodyMedia ?? []) as Doc[]).length], [true, true, 3]);
-      console.log(`OBS   P7 bodyEditable before 2.2 = ${String(ed.bodyEditable)} (2.2 wires the token round-trip; AC25 is proven there)`);
+      expect("P7-0: (review NIT 6) before 2.2 a saved body with upload nodes is NOT bodyEditable (old hubs keep the old answer)", ed.bodyEditable, false);
       const n0 = uploadCount((await latestDoc(art)).body);
       const t = await patch(art, "gcv", { title: `P7 text-only ${run}` });
       expect("P7-2: PATCH a text field only (no bodyMarkdown) ⇒ 200; the stored upload nodes are kept", [t.status, t.body.changed, uploadCount((await latestDoc(art)).body), n0], [200, ["title"], n0, 5]);

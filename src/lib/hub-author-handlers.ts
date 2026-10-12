@@ -138,7 +138,8 @@ export function mapWriteError(err: unknown): MappedWriteError {
   if (name === "ValidationError" && Array.isArray(data?.errors)) {
     const fields: HubFieldErrors = {};
     for (const e of data.errors as { path?: unknown }[]) {
-      if (typeof e?.path === "string" && e.path !== "") fields[e.path] = "invalid";
+      // P5.3 (review NIT 5): the hub sends `heroImageId`; Payload reports the field path `heroImage`.
+      if (typeof e?.path === "string" && e.path !== "") fields[e.path === "heroImage" ? "heroImageId" : e.path] = "invalid";
     }
     return { kind: "invalid", status: 422, fields };
   }

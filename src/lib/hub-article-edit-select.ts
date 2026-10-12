@@ -282,5 +282,18 @@ export async function loadHubArticleEdit(args: {
   const bodyEditable = !media.tooMany && isRoundTripSafeBody(editorConfig, latest.body);
   // P5.3 T9: the media keys are attached AFTER the sanitizer (its 15 keys stay pinned by --check6).
   const edit = sanitizeHubArticleEdit(latest, { bodyEditable, editable: true, editableReason: "ok" }) as HubArticleEditYes;
-  return { edit: { ...edit, hero: media.hero, leadImageCaption: media.leadImageCaption, bodyMedia: media.bodyMedia }, latest };
+  // Review M1 (CMS-2): `article.heroImage` comes from the same latest doc; a hero that is
+  // not THIS tenant's media (edit.hero null) is withheld there too — never only in `edit`.
+  const latestOut = media.hero === null && latest.heroImage != null ? { ...latest, heroImage: null } : latest;
+  return { edit: { ...edit, hero: media.hero, leadImageCaption: media.leadImageCaption, bodyMedia: media.bodyMedia }, latest: latestOut };
+}
+
+/**
+ * Review M2 (CMS-2): the invariant "bodyEditable:true ⇒ the token export did NOT fall
+ * back". When `hubArticleBodyToMarkdown` reports `tokenFallback`, the body the hub
+ * receives has lost its images, so it must never be offered as editable Markdown.
+ */
+export function applyBodyTokenFallback(edit: HubArticleEdit, tokenFallback: boolean): HubArticleEdit {
+  if (!tokenFallback || edit.editable !== true || edit.bodyEditable !== true) return edit;
+  return { ...edit, bodyEditable: false };
 }

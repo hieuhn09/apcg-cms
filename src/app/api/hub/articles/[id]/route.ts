@@ -49,7 +49,7 @@ import { json } from "@/lib/http";
 import { isHubArticleId } from "@/lib/hub-article-id";
 import { logActivity } from "@/lib/activity";
 import { toId } from "@/access/helpers";
-import { HUB_ARTICLE_EDIT_MAIN_SELECT, loadHubArticleEdit, type HubArticleEdit } from "@/lib/hub-article-edit-select";
+import { HUB_ARTICLE_EDIT_MAIN_SELECT, applyBodyTokenFallback, loadHubArticleEdit, type HubArticleEdit } from "@/lib/hub-article-edit-select";
 import { handleHubDraftUpdate } from "@/lib/hub-author-handlers";
 
 /** Two conversions at most per PATCH (stored body round trip + new body), each ≤ T. */
@@ -156,6 +156,12 @@ export async function GET(
     // P5.3 T9: canonical media tokens only on the editable view=edit branch.
     ...(edit && edit.editable ? { mediaTokens: true } : {}),
   });
+  // P5.3 review M2: the token export fell back to the default export ⇒ the body the hub
+  // gets has lost its images; never offer it as editable Markdown (warning, no PII).
+  if (body.tokenFallback && edit) {
+    edit = applyBodyTokenFallback(edit, true);
+    payload.logger.warn(`[${SCOPE}] media token export fell back: article=${String(doc.id)} tenant=${tenant.slug}`);
+  }
   if (body.error) {
     payload.logger.warn(
       `[${SCOPE}] body withheld: article=${String(doc.id)} tenant=${tenant.slug} kind=${body.error.kind} error=${body.error.name}`,

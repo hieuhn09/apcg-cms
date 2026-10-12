@@ -26,8 +26,9 @@
  *           Any other relationTo, a missing id, or an upload node that is not a
  *           direct child of root ⇒ throw (the caller treats that as not safe).
  *
- * Step 1.6: written and unit-tested BEFORE the syntax decision (plan §5.1); it is
- * NOT yet used by the write path, the round-trip check or the edit view.
+ * Step 1.6: written and unit-tested BEFORE the syntax decision (plan §5.1). Since
+ * step 1.8 the `view=edit` export uses it; step 2.2 wires the write path and the
+ * round-trip check to the SAME wrapper (`mediaTokenConverters`).
  * Pure: no I/O, no deferred work; does not import the read-path module.
  */
 
