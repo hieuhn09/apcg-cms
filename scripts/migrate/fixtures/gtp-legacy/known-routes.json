@@ -1,0 +1,13 @@
+{
+  "static": ["/about", "/team", "/contact", "/advertise", "/licensing", "/privacy", "/terms", "/newsletters", "/editorial-standards", "/press-room-submit", "/search"],
+  "sections": ["news", "destinations", "business-of-travel", "experiences-luxury", "press-room", "events-awards"],
+  "subsections": {
+    "news": ["aviation", "hotels", "visa-entry", "destinations-news", "travel-tech"],
+    "destinations": ["guides", "asia", "world", "trip-planning"],
+    "business-of-travel": ["hospitality-business", "aviation-business", "data-insights", "destination-marketing", "people"],
+    "experiences-luxury": ["luxury-stays", "food-drink", "style", "journeys", "wellness"],
+    "press-room": [],
+    "events-awards": ["industry-calendar"]
+  },
+  "articlePrefix": "/article/"
+}
