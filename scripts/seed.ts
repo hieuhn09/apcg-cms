@@ -26,6 +26,7 @@ import config from "../payload.config";
 import { hashToken } from "../src/lib/crypto";
 import { LOCALE_CODES, type LocaleCode } from "../src/lib/locales";
 import { assertLocalDb, LocalDbGuardError } from "./lib/local-db-guard";
+import { GTP_AUTHORS, GTP_NEWSLETTERS, GTP_PILLARS, GTP_TENANT_FIELDS, GTP_TENANT_SLUG, gtpSubSections } from "./lib/gtp-taxonomy";
 
 /**
  * Opt-in BriefAsia `pressroom` (single-home) pillar fixture for local/probe
@@ -35,6 +36,17 @@ import { assertLocalDb, LocalDbGuardError } from "./lib/local-db-guard";
  * re-seed. When ON, main() refuses any non-local DATABASE_URL before any write.
  */
 const SEED_INCLUDE_PRESSROOM = process.env.SEED_INCLUDE_PRESSROOM === "true";
+
+/**
+ * Opt-in GlobalTravelPost (tenant `gtp`) fixture for LOCAL use only (gtp-launch
+ * P1). OFF by default. When ON, main() refuses any non-local DATABASE_URL
+ * before any write. Production gtp data is created ONLY by the owner: the
+ * tenant by hand in /admin, the taxonomy by `npm run audit:add-gtp-taxonomy`.
+ * Never run this seed against production (it re-upserts fixture rows).
+ * Creates the tenant, 6 pillars, 20 base sub-sections, 2 newsletters and 6
+ * authors (34 rows); it creates NO tags (the owner script does).
+ */
+const SEED_INCLUDE_GTP = process.env.SEED_INCLUDE_GTP === "true";
 
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL || "admin@example.com";
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD || "change-me-now";
@@ -297,6 +309,22 @@ const TENANTS: TenantFixture[] = [
     ],
     sectors: [],
   },
+  // GlobalTravelPost: only with SEED_INCLUDE_GTP=true (local DB only, see above).
+  ...(SEED_INCLUDE_GTP
+    ? [
+        {
+          slug: GTP_TENANT_SLUG,
+          name: GTP_TENANT_FIELDS.name,
+          defaultLanguage: "en" as LocaleCode,
+          supportedLanguages: ["en"] as LocaleCode[],
+          features: { ...GTP_TENANT_FIELDS.features },
+          autoPublishEngineDrafts: false,
+          pillars: GTP_PILLARS.map((p) => ({ slug: p.slug, title: p.title, heading: p.heading, color: p.color, icon: p.icon, order: p.order, description: p.description })),
+          sectors: [],
+          subsections: gtpSubSections().map((x) => ({ slug: x.slug, title: x.title, pillarSlug: x.pillarSlug, order: x.order })),
+        },
+      ]
+    : []),
 ];
 
 // DTW modules — ported from dtw-web/apps/web/src/lib/data.ts (static fixtures
@@ -389,6 +417,15 @@ async function localeUpdate(payload: P, collection: Coll, id: number | string, l
 async function main() {
   // FIRST statement, before getPayload: the config is imported statically above,
   // so this is the earliest point a refusal can stop every fixture write.
+  if (SEED_INCLUDE_GTP) {
+    try {
+      console.log(`[seed] SEED_INCLUDE_GTP=true — local database ${assertLocalDb(process.env.DATABASE_URL).banner}`);
+    } catch (err) {
+      console.error(err instanceof LocalDbGuardError ? err.message : "local-db guard: refusing.");
+      console.error("[seed] SEED_INCLUDE_GTP=true is for a LOCAL database only; nothing was written.");
+      process.exit(1);
+    }
+  }
   if (SEED_INCLUDE_PRESSROOM) {
     try {
       console.log(`[seed] SEED_INCLUDE_PRESSROOM=true — local database ${assertLocalDb(process.env.DATABASE_URL).banner}`);
@@ -553,6 +590,27 @@ async function main() {
         );
       }
       console.log(`[seed] gcv newsletters ready (${GCV_NEWSLETTERS.length})`);
+    }
+
+    // ── GTP newsletters + authors (local fixture only; SEED_INCLUDE_GTP) ──
+    if (t.slug === GTP_TENANT_SLUG) {
+      for (const n of GTP_NEWSLETTERS) {
+        await upsert(
+          payload,
+          "newsletters",
+          { and: [{ tenant: { equals: tenant.id } }, { slug: { equals: n.slug } }] },
+          { tenant: tenant.id, slug: n.slug, name: n.name, cadence: n.cadence, description: n.description, active: n.active, order: n.order },
+        );
+      }
+      for (const a of GTP_AUTHORS) {
+        await upsert(
+          payload,
+          "authors",
+          { and: [{ tenant: { equals: tenant.id } }, { name: { equals: a.name } }] },
+          { tenant: tenant.id, name: a.name, slug: a.slug, role: a.role, ...(a.rank !== undefined ? { rank: a.rank } : {}) },
+        );
+      }
+      console.log(`[seed] gtp newsletters + authors ready (${GTP_NEWSLETTERS.length} newsletters, ${GTP_AUTHORS.length} authors)`);
     }
   }
 
