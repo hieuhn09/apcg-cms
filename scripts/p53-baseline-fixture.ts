@@ -30,6 +30,16 @@ try {
   throw err;
 }
 
+// Review M2: never reach the real R2 bucket (payload.config.ts enables storage-s3
+// when the R2_* credentials are set; scripts/lib/env.ts may load them from .env.local).
+const R2_SET = ["R2_BUCKET", "R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_PUBLIC_BASE_URL"].filter(
+  (n) => (process.env[n] ?? "").trim() !== "",
+);
+if (R2_SET.length > 0) {
+  console.error(`[p53-fixture] refusing: R2 storage env must be unset for a local fixture (set: ${R2_SET.join(", ")})`);
+  process.exit(2);
+}
+
 // 1×1 PNG (same bytes as the CMS-4 probe fixture).
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",

@@ -9706,8 +9706,25 @@ interface Setup8 {
 const P8_ACTOR = { role: "editor", id: "hub-user-8" } as const;
 const P8_HUMAN = { email: "p8@example.invalid", role: "editor", id: "hub-user-8" } as const;
 
+/**
+ * Review M2: the probe and the fixture must never reach the real R2 bucket.
+ * `payload.config.ts` turns on storage-s3 when the R2_* credentials are set (and
+ * `scripts/lib/env.ts` may load them from `.env.local`), so any non-empty R2_*
+ * variable is refused — exit 2, "refusing" — before Payload is built.
+ */
+const R2_ENV_NAMES = ["R2_BUCKET", "R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_PUBLIC_BASE_URL"] as const;
+
+function assertNoR2(tag: string): void {
+  const set = R2_ENV_NAMES.filter((n) => (process.env[n] ?? "").trim() !== "");
+  if (set.length > 0) {
+    console.error(`[${tag}] refusing: R2 storage env must be unset for a local probe (set: ${set.join(", ")})`);
+    process.exit(2);
+  }
+}
+
 function guard8(): void {
   assertLocalTargets();
+  assertNoR2("probe8");
   try {
     assertLocalDb(process.env.DATABASE_URL);
   } catch (e) {
@@ -9924,6 +9941,16 @@ async function check8() {
       dtext.includes("@"), dtext.includes(author),
     ], [1, 1, s6.tenants.gcv!.id, "engine", s6.engines.author.id, "media", ["actor", "articleId", "via"], "hub", { id: "hub-user-8", role: "editor" }, gcvDraft, false, false]);
 
+    // Review M3: the rejected requests C-4..C-17 must create NO media row, NO
+    // media_uploaded row and NO integration_error row (C-1 is counted above).
+    const snap8 = async () => {
+      const r = (await rows(sql`SELECT
+        (SELECT count(*)::int FROM media WHERE filename LIKE 'hub-%') AS media,
+        (SELECT count(*)::int FROM activity_log WHERE event_type = 'media_uploaded') AS uploaded,
+        (SELECT count(*)::int FROM activity_log WHERE event_type = 'integration_error') AS interr`))[0] ?? {};
+      return { media: Number(r.media), uploaded: Number(r.uploaded), interr: Number(r.interr) };
+    };
+    const beforeRejections = await snap8();
     expect("C-4: no token ⇒ 401", exact(await upload("gcv", base({ data: smallPng, type: "image/png" }), { token: null })), frozen(401, { ok: false, status: "unauthorized" }));
     const ks = await upload("gcv", base({ data: smallPng, type: "image/png" }), { token: noauthor });
     expect("C-5: (kill-switch) hubAuthor off ⇒ 403 frozen body", exact(ks), frozen(403, { ok: false, status: "forbidden", reason: "hub author not allowed for this engine" }));
@@ -9980,17 +10007,18 @@ async function check8() {
       exact(await upload("gcv", base(pngFile).filter(([k]) => k !== "articleId"))),
       exact(await upload("gcv", base(pngFile).map(([k, v]) => (k === "actorRole" ? [k, "viewer"] : [k, v])) as [string, string][])),
     ], [BAD, BAD, BAD, BAD]);
-    expect("C-16: articleId 'abc', 20 digits, 400 digits, another tenant's draft, a non-existent id ⇒ 404 (frozen, = PATCH body)", [
+    const before16 = await snap8();
+    expect("C-16: articleId 'abc'', 20 digits, 400 digits, another tenant's draft, a non-existent id ⇒ 404 (frozen, = PATCH body)", [
       exact(await upload("gcv", base(pngFile, "abc"))), exact(await upload("gcv", base(pngFile, "9".repeat(20)))), exact(await upload("gcv", base(pngFile, "9".repeat(400)))),
       exact(await upload("gcv", base(pngFile, dtwDraft))), exact(await upload("gcv", base(pngFile, 2147483646))),
     ], [NF, NF, NF, NF, NF]);
+    expect("C-16b: (gap hub-id-over-int4-returns-500) the 20 / 400-digit articleId cases wrote 0 integration_error rows", (await snap8()).interr - before16.interr, 0);
     const ne = async (id: number) => (await upload("dtw", base(pngFile, id))).body.reason;
     expect("C-17: not editable: engine article ⇒ origin; main published (hub draft re-saved) ⇒ status; manual draft by a CMS user ⇒ not_hub_authored (422)", [
       await ne(s6.articles.engine.id), await ne(s6.articles.hubDraftPublishedThenSavedDraft.id), await ne(s6.articles.manualDraftByCmsUser.id),
       (await upload("dtw", base(pngFile, s6.articles.engine.id))).status,
     ], ["origin", "status", "not_hub_authored", 422]);
-    const nRows = Number((await rows(sql`SELECT count(*)::int AS n FROM media WHERE filename LIKE 'hub-%'`))[0]?.n);
-    expect("C-18: only the accepted uploads created media rows so far (C-1 only)", nRows >= 1, true);
+    expect("C-18: (review M3) the rejected requests C-4..C-17 created 0 media rows, 0 media_uploaded rows, 0 integration_error rows", await snap8(), beforeRejections);
   }
 
   if (want("P3")) {

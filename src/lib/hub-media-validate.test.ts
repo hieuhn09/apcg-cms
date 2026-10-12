@@ -58,7 +58,7 @@ function sof(w: number, h: number, marker = 0xc0): Buffer {
   return seg(marker, Buffer.concat([Buffer.from([8]), u16be(h), u16be(w), Buffer.from([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1])]));
 }
 const SOS_PAYLOAD = Buffer.from([3, 1, 0, 2, 0x11, 3, 0x11, 0, 0x3f, 0]);
-function jpeg(o: { w?: number; h?: number; scans?: number; fill?: boolean; thumb?: boolean; pre?: Buffer[] } = {}): Buffer {
+function jpeg(o: { w?: number; h?: number; scans?: number; fill?: boolean; fill1?: boolean; thumb?: boolean; pre?: Buffer[] } = {}): Buffer {
   const parts: Buffer[] = [Buffer.from([0xff, 0xd8])];
   parts.push(seg(0xe0, Buffer.from("JFIF\0\x01\x01\0\0\x01\0\x01\0\0", "latin1")));
   if (o.thumb) {
@@ -72,6 +72,7 @@ function jpeg(o: { w?: number; h?: number; scans?: number; fill?: boolean; thumb
   const scans = o.scans ?? 1;
   for (let i = 0; i < scans; i++) {
     if (o.fill) parts.push(Buffer.from([0xff, 0xff]));
+    if (o.fill1) parts.push(Buffer.from([0xff])); // one fill byte ⇒ FF FF DA (EVL N2)
     parts.push(seg(0xda, SOS_PAYLOAD));
     parts.push(Buffer.from([0x12, 0xff, 0x00, 0x34, 0xff, 0xd0, 0x56]));
   }
@@ -142,6 +143,14 @@ test("JPEG with 65 SOS markers each preceded by FF fill bytes is rejected 415; S
   assert.deepEqual(await validateMediaFile(fileLike(many, "image/jpeg"), "alt", undefined), { ok: false, code: "media_type" });
   assert.deepEqual(readImageSize(jpeg({ w: 0, h: 480 }), "image/jpeg"), { ok: false });
   assert.deepEqual(await validateMediaFile(fileLike(jpeg({ w: 640, h: 0 }), "image/jpeg"), "alt", undefined), { ok: false, code: "media_type" });
+});
+
+test("(EVL N2) JPEG with 65 SOS markers each preceded by ONE FF fill byte (FF FF DA) is counted 65 and rejected 415", async () => {
+  const many = jpeg({ scans: 65, fill1: true });
+  assert.ok(many.includes(Buffer.from([0x56, 0xff, 0xff, 0xda])));
+  assert.equal(countJpegScans(many), 65);
+  assert.equal(countJpegScans(jpeg({ scans: 64, fill1: true })), 64);
+  assert.deepEqual(await validateMediaFile(fileLike(many, "image/jpeg"), "alt", undefined), { ok: false, code: "media_type" });
 });
 
 // ── Magic bytes / mime ───────────────────────────────────────────────────────
