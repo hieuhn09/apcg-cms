@@ -1,0 +1,23 @@
+# Synthetic legacy GTP database for the gtp-launch P4 rehearsal ONLY (fake data).
+#   docker compose -f scripts/migrate/fixtures/gtp-legacy/docker-compose.legacy.yml up -d
+#   docker compose -f scripts/migrate/fixtures/gtp-legacy/docker-compose.legacy.yml down -v
+services:
+  gtp-legacy-postgres:
+    image: postgres:16-alpine
+    container_name: gtp-legacy-postgres
+    environment:
+      POSTGRES_DB: gtp_legacy
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "54327:5432"
+    volumes:
+      - gtp_legacy_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gtp_legacy"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  gtp_legacy_pgdata:
