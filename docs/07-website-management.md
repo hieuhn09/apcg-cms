@@ -49,6 +49,31 @@ Owner-run, systemAdmin only (gtp-launch P1 plan section 7 is the full sheet):
   fixture rows. The gtp seed fixture is behind `SEED_INCLUDE_GTP=true` and refuses a
   non-local database.
 
+### Example: VowAsia (`vowasia`)
+
+Owner-run, systemAdmin only. Status 13-10-26: **code only**; the tenant does NOT exist yet
+and nothing has been run against any database. Field sheet as data:
+`VOWASIA_TENANT_FIELDS` in `scripts/lib/vowasia-taxonomy.ts`.
+
+- Name `VowAsia`, slug `vowasia`, status `active`, default language `en`, supported
+  languages `[en]`, timezone `Asia/Singapore`. Contact: editorial `editor@vowasia.com`,
+  general `info@vowasia.com`, advertising/partnerships `info@asiapresscentre.com`.
+- Domain, additional domains and **frontend URL: EMPTY at creation** (same staging as gtp;
+  the live domain is `vowasia.com`, set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` on; everything else off.
+- **Auto publish engine drafts: OFF** (`audit:add-vowasia-taxonomy` refuses `--apply`
+  while it is on).
+- `press-room` is single-home and engine-blocked in code (`src/lib/constants.ts`);
+  `real-weddings` and `directory` are engine-blocked only (not single-home), inert
+  until the tenant exists. No migration.
+- Then create the taxonomy (8 pillars, 27 sub-sections, 2 newsletters, 6 authors, 6 tags
+  = 49 rows) with `npm run audit:add-vowasia-taxonomy`: see `docs/11-operations.md`
+  "VowAsia rollout". Unlike the gtp script, it also refuses any non-local database whose
+  name is not exactly `/neondb`, in dry run as well as `--apply`.
+- No vowasia seed fixture and no vowasia probe exist (the press-room rule is the same
+  tenant-keyed code path the gtp probe already exercises; unit tests cover the vowasia
+  entry).
+
 ## Configure domain & languages
 
 - **Domain**: `domain` + `additionalDomains` are informational/CORS hints; the
