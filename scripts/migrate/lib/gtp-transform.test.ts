@@ -64,6 +64,7 @@ test("G37: takeaways, readMin 230 wpm min 1, publishedAt fallback, author map + 
   assert.deepEqual(readMinFor(0, 3, 230), { readMin: 1, computed: true });
   assert.deepEqual(publishedAtFor(null, "2026-08-01T00:00:00Z"), { iso: "2026-08-01T00:00:00.000Z", fellBack: true });
   assert.deepEqual(resolveAuthor("Daniel Cheong", M), { name: "Daniel Cheong", fallback: false });
+  assert.deepEqual(resolveAuthor("Clara Widjaja", M), { name: "Natalie Ong", fallback: false });
   for (const b of ["Simon Ng", "Ryan Ng", "Valerie Nguyen", "BriefAsia", "", null]) assert.deepEqual(resolveAuthor(b, M), { name: "GTP Newsroom", fallback: true });
   assert.equal(stripPhotoLabel("Photo: Jimmy Liao / Pexels"), "Jimmy Liao / Pexels");
   assert.equal(stripPhotoLabel("PHOTO:Ana / Pexels"), "Ana / Pexels");
