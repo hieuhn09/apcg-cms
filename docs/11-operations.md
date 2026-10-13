@@ -131,6 +131,33 @@ and status.
   nothing. `--confirm-host` checks only the HOST, so it cannot catch a wrong database
   name: always print `.pathname` and confirm `/neondb` before any `--apply`. Proposal (not
   done): make `scripts/lib/local-db-guard.ts` show the database name in its confirmation.
+  **Follow-up (13-10-26, vowasia launch P1):** the new `scripts/lib/central-db-name-guard.ts`
+  hard-checks the name for the vowasia script (below); `local-db-guard.ts` and the gtp
+  script are unchanged.
+
+- **VowAsia rollout (owner-run; tenant `vowasia`):** the rules ship in code (`vowasia` in
+  `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS`, both `["press-room"]`) and are inert
+  until the tenant exists. No migration. **Status 13-10-26: code only, nothing applied.**
+  Steps: (1) merge + deploy; (2) create the tenant by hand in /admin
+  (`docs/07-website-management.md`, `autoPublishEngineDrafts` off, frontend URL empty);
+  (3) print host and database name:
+  `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-vowasia-taxonomy -- --confirm-host=<hostname>` and review the plan
+  (8 pillars, 27 sub-sections, 2 newsletters, 6 authors, 6 tags = 49 rows, all `create`);
+  (5) apply from an interactive terminal:
+  `npm run audit:add-vowasia-taxonomy -- --apply --confirm-host=<hostname> [--authors-file=./vowasia-authors.json]`;
+  (6) re-run the dry run: every row must read `exists`. Safety, before Payload loads: the
+  script FIRST prints `database name (new URL(DATABASE_URL).pathname): "<name>"`, then runs
+  the host guard (`--confirm-host`, TTY for `--apply`), then the name guard
+  (`scripts/lib/central-db-name-guard.ts`): a non-local database must be exactly `/neondb`
+  by both the URL path and the Postgres driver's parse, otherwise it refuses (dry run
+  included) and writes nothing; local disposable databases stay allowed. A missing tenant
+  fails harmlessly at the lookup ("tenant "vowasia" not found ... Nothing done.").
+  Same never-overwrite / refuse / result-log behaviour and the same rollback order as the
+  gtp script. The six author names come from the design team page and are PENDING owner
+  confirmation (no bio, no city); fix names BEFORE `--apply` (renaming later touches every
+  mirror, see the playbook).
 
 ## Token rotation
 
