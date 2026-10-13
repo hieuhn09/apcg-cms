@@ -11215,6 +11215,19 @@ async function check9() {
       expect("P3c-ii: [ca cô lập D12 — lockRow no-op] a NON-draft write without ctx changes the title (status still published, version leg passes on the translation tenant) ⇒ ONLY the field leg catches it ⇒ 409; main = the slipped write, not the live dek", [
         ...pair(r3), String(zm.title), zm.dek === `P9 3c live dek ii ${run}`, zm._status,
       ], [...DIVERGED, `P9 3c NONDRAFT ${run}`, false, "published"]);
+      // MINOR-1: a sent-but-UNCHANGED flag (longHaul:false = stored) must stay in the D12 comparison.
+      const f = await mkPublished(t);
+      const fm0 = await mainOf(f.id);
+      const r4 = await inproc(f.id, t, f.version, { flags: { deepDive: fm0.deepDive !== true, longHaul: fm0.longHaul === true } }, {
+        ...noLock,
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: f.id, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { longHaul: fm0.longHaul !== true } as never });
+        },
+      });
+      const fm = await mainOf(f.id);
+      expect("P3c-ii(flags): [ca cô lập D12 — lockRow no-op] request flips deepDive and re-sends longHaul UNCHANGED; a NON-draft write flips longHaul in the window ⇒ the field leg still compares longHaul ⇒ 409; main = the slipped write, deepDive not applied", [
+        ...pair(r4), fm.longHaul === (fm0.longHaul !== true), fm.deepDive === fm0.deepDive,
+      ], [...DIVERGED, true, true]);
       const w = await mkPublished(t);
       expect("P3c control: translation tenant, no interleaving, REAL lockRow ⇒ 200", (await inproc(w.id, t, w.version, { dek: "P9 3c control" })).status, 200);
     });

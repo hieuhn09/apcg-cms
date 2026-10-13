@@ -87,8 +87,9 @@ type Id = number | string;
 
 /**
  * D12 (CMS3-1): the stored column(s) of every live key — the columns `buildDraftUpdateData`
- * writes for it. `flags` lists the two editable flag columns; only the flags actually SENT
- * are left out of the post-write comparison.
+ * writes for it. `flags` lists the two editable flag columns; only the flag columns actually
+ * WRITTEN (present in the update data — sent AND different from the stored value) are left out
+ * of the post-write comparison, so an unchanged sent flag is still compared.
  */
 export const LIVE_KEY_COLUMNS: Record<HubLiveFieldKey, readonly string[]> = {
   title: ["title"],
@@ -109,12 +110,12 @@ export const LIVE_KEY_COLUMNS: Record<HubLiveFieldKey, readonly string[]> = {
 };
 
 /** The columns left out of D12 (1) for this write: the mapped columns of every CHANGED key. */
-export function liveChangedColumns(changed: readonly HubDraftFieldKey[], v: Pick<HubDraftInput, "flags">): string[] {
+export function liveChangedColumns(changed: readonly HubDraftFieldKey[], data: Record<string, unknown>): string[] {
   const out: string[] = [];
   for (const k of changed) {
     if (!isLiveFieldKey(k)) continue;
     if (k === "flags") {
-      for (const f of Object.keys(v.flags ?? {})) if ((HUB_LIVE_EDITABLE_FLAGS as readonly string[]).includes(f)) out.push(f);
+      for (const f of HUB_LIVE_EDITABLE_FLAGS) if (Object.prototype.hasOwnProperty.call(data, f)) out.push(f);
       continue;
     }
     out.push(...LIVE_KEY_COLUMNS[k]);
@@ -193,7 +194,11 @@ const defaultGetPayload = () => getPayload({ config });
 type GateOk = { ok: true; main: Doc; latest: Doc };
 type GateFail = { ok: false; response: Response };
 
-/** latest (draft) + FULL main of THIS tenant (404) → `liveGateReason`. `req` = the transaction (gate 2) or none (gate 1). */
+/**
+ * latest (draft) + FULL main of THIS tenant (404) → `liveGateReason`. `req` = the transaction (gate 2) or none (gate 1).
+ * Gate 2 reads `main` via `findMain` OUTSIDE the transaction; that is correct ONLY because the
+ * row lock (D16) is already held when gate 2 runs. Do not "fix" this by reading before the lock.
+ */
 async function readGate(
   payload: Payload,
   articleId: number,
@@ -358,7 +363,7 @@ export async function handleHubLiveUpdateWith(
       pre,
       post,
       latest: latestAfter,
-      changedColumns: liveChangedColumns(changed, v),
+      changedColumns: liveChangedColumns(changed, data),
       currentVersion,
       translationsActive: post ? liveTranslationsActive(tenant, post) : false,
     });

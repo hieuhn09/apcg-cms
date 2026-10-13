@@ -281,6 +281,24 @@ test("post-write assertion turns an interleaved draft into 409 draft_diverged wi
   assert.equal((await call(world({ translations: true, doubleBump: true }), { dek: "New dek" })).status, 200);
 });
 
+test("D12 excludes only the flag columns actually written: an unchanged sent flag flipped by an interleaved draft is 409", async () => {
+  // MINOR-1: {deepDive:true (changes), longHaul:false (= stored)}; a Save-Draft turns longHaul on in the window.
+  const w = world();
+  const r = await call(w, { flags: { deepDive: true, longHaul: false } }, {
+    lockRow: async () => {},
+    beforeWrite: async () => {
+      // No version bump, so only the D12 field leg can catch it (the version leg would mask the bug).
+      w.st.latest = { ...w.st.latest, longHaul: true };
+    },
+  });
+  assert.deepEqual([r.status, r.body.status], [409, "draft_diverged"]);
+  assert.equal(w.log.events.at(-1), "kill");
+  // Control: same request, no interleaving ⇒ 200, only deepDive written.
+  const wc = world();
+  const rc = await call(wc, { flags: { deepDive: true, longHaul: false } });
+  assert.deepEqual([rc.status, Object.keys(wc.log.updates[0]!.data as Doc)], [200, ["deepDive"]]);
+});
+
 test("post-write reads use findMainTx with lk.req, never defaultFindMain", async () => {
   const w = world();
   const seen: Doc[] = [];
@@ -462,7 +480,9 @@ test("LIVE_KEY_COLUMNS maps every HUB_LIVE_FIELD_KEYS key including readMin and 
   assert.deepEqual(Object.keys(core.LIVE_KEY_COLUMNS).sort(), [...pure.HUB_LIVE_FIELD_KEYS].sort());
   assert.deepEqual(core.LIVE_KEY_COLUMNS.readMin, ["readMin"]);
   assert.deepEqual(core.LIVE_KEY_COLUMNS.countrySlugs, ["countries", "country"]);
-  assert.deepEqual(core.liveChangedColumns(["flags"], { flags: { deepDive: true } }), ["deepDive"]);
+  assert.deepEqual(core.liveChangedColumns(["flags"], { deepDive: true }), ["deepDive"]);
+  assert.deepEqual(core.liveChangedColumns(["flags"], { deepDive: true, longHaul: false }), ["deepDive", "longHaul"]);
+  assert.deepEqual(core.liveChangedColumns(["flags"], { deepDive: true }), ["deepDive"], "a sent-but-unchanged flag is not in data, so it stays compared");
   const w = world();
   const r = await call(w, { readMin: 7 });
   assert.deepEqual([r.status, r.body.changed, w.st.main.readMin], [200, ["readMin"], 7]);
@@ -472,7 +492,7 @@ test("LIVE_KEY_COLUMNS maps every HUB_LIVE_FIELD_KEYS key including readMin and 
     const rk = await call(wk, { [k]: value });
     assert.equal(rk.status, 200, k);
     const cols = Object.keys(wk.log.updates[0]!.data as Doc).sort();
-    assert.deepEqual(cols, [...core.liveChangedColumns([k as never], { flags: k === "flags" ? (value as never) : undefined })].sort(), k);
+    assert.deepEqual(cols, [...core.liveChangedColumns([k as never], wk.log.updates[0]!.data as Doc)].sort(), k);
   }
   // The localized-field list is the config's (pin).
   const articles = (CONFIG as unknown as { collections: { slug: string; flattenedFields: { name: string; localized?: boolean }[] }[] }).collections.find((c) => c.slug === "articles")!;
