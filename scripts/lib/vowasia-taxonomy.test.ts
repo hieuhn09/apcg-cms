@@ -170,7 +170,7 @@ describe("vowasia fixture: slug contract (design pillars.ts)", () => {
       ],
     );
   });
-  it("authors: exactly the six design bylines, kebab-case slugs, ranks 1..6, general roles, no bio, no city", () => {
+  it("authors: exactly the six design bylines, kebab-case slugs, ranks 1..6, general roles, short plain bios, no city", () => {
     assert.deepEqual(VOWASIA_AUTHORS.map((a) => a.name), BYLINES);
     assert.deepEqual(VOWASIA_AUTHORS.map((a) => a.slug), BYLINES.map(kebab));
     assert.deepEqual(VOWASIA_AUTHORS.map((a) => a.rank), [1, 2, 3, 4, 5, 6]);
@@ -178,7 +178,9 @@ describe("vowasia fixture: slug contract (design pillars.ts)", () => {
     const GENERAL = new Set(["Editor", "Senior Reporter", "Reporter", "Senior Writer", "Contributing Writer", "Contributing Editor"]);
     for (const a of VOWASIA_AUTHORS) {
       assert.ok(GENERAL.has(a.role), `${a.name}: role ${a.role} is not a general role`);
-      assert.equal(a.bio, undefined, `${a.name} must have no bio (never invent facts about people)`);
+      assert.ok(a.bio && a.bio.length > 20 && a.bio.length < 300, `${a.name} must have a short bio`);
+      assert.ok(a.bio!.startsWith(a.name.split(" ")[0]!), `${a.name}: bio must open with the first name`);
+      assert.doesNotMatch(a.bio!, /[\u2013\u2014]|\d/, `${a.name}: bio has a dash or a number`);
       assert.equal(a.city, undefined, `${a.name} must have no city`);
     }
     assert.equal(VOWASIA_AUTHORS.find((a) => a.name === "Serene Chia")?.role, "Editor");

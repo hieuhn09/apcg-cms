@@ -235,9 +235,9 @@ async function main(): Promise<void> {
       for (const d of a.diffs) console.log(`          ${d.field}: current ${JSON.stringify(d.current)}  fixture ${JSON.stringify(d.fixture)}`);
     }
   }
-  const missing = fixture.authors.filter((a) => !a.bio || !a.city).map((a) => a.name);
-  if (missing.length) console.log(`  WARN: authors still lacking bio/city (owner inputs, set in /admin or --authors-file): ${missing.join(", ")}`);
-  console.log("  NOTE: the six author names are from the design team page and are PENDING OWNER confirmation (real people or placeholders).");
+  const missing = fixture.authors.filter((a) => !a.bio).map((a) => a.name);
+  if (missing.length) console.log(`  WARN: authors lacking a bio (set in /admin or --authors-file): ${missing.join(", ")}`);
+  console.log("  NOTE: the six author names are confirmed by the owner; roles and bios are editable in /admin or with --authors-file.");
 
   if (!APPLY) {
     if (fails.length || counts.refuse) console.log(`${TAG} DRY RUN: --apply would REFUSE (preflight FAIL or refused rows).`);

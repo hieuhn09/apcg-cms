@@ -215,19 +215,19 @@ export const VOWASIA_NEWSLETTERS: readonly VowasiaNewsletter[] = [
  * (intake matches `authors.name` with `equals`). Slugs are the kebab-case of the
  * name; the owner may override slug/role/bio/city with `--authors-file`.
  *
- * PENDING OWNER: the six names come from the design's team page
- * (vowasia-web `src/content/docs.ts`); whether they are real people or
- * placeholders is not confirmed. No bio and no city on purpose (never invent
- * facts about people). Roles are GENERAL (playbook trap g: the engine assigns
- * bylines by daily cap, not by topic); the design's topic role is noted per row.
+ * Names confirmed by the owner for use on 13-10-26. Roles and bios were written
+ * by us in the gtp style (short, general, no invented facts: no employers,
+ * careers, awards, cities or numbers) and stay editable by the owner (in /admin
+ * or with `--authors-file`). No city on purpose. Roles are GENERAL (playbook
+ * trap g: the engine assigns bylines by daily cap, not by topic).
  */
 export const VOWASIA_AUTHORS: readonly VowasiaAuthor[] = [
-  { name: "Serene Chia", slug: "serene-chia", rank: 1, role: "Editor" }, // PENDING OWNER (design: Editor)
-  { name: "Aarti Menon", slug: "aarti-menon", rank: 2, role: "Senior Writer" }, // PENDING OWNER (design: Senior Writer)
-  { name: "Danish Iskandar", slug: "danish-iskandar", rank: 3, role: "Senior Reporter" }, // PENDING OWNER (design: Venues Editor)
-  { name: "Hanna Pang", slug: "hanna-pang", rank: 4, role: "Senior Writer" }, // PENDING OWNER (design: Planning Editor)
-  { name: "Yumi Nakagawa", slug: "yumi-nakagawa", rank: 5, role: "Contributing Editor" }, // PENDING OWNER (design: Contributing Editor)
-  { name: "Ishaan Bhatt", slug: "ishaan-bhatt", rank: 6, role: "Senior Reporter" }, // PENDING OWNER (design: Wedding Business Editor)
+  { name: "Serene Chia", slug: "serene-chia", rank: 1, role: "Editor", bio: "Serene edits VowAsia, overseeing its coverage of weddings across Asia and the editorial calendar." },
+  { name: "Aarti Menon", slug: "aarti-menon", rank: 2, role: "Senior Writer", bio: "Aarti writes about weddings across Asia, from the celebrations themselves to the ideas and traditions couples bring to them." },
+  { name: "Danish Iskandar", slug: "danish-iskandar", rank: 3, role: "Senior Reporter", bio: "Danish reports on weddings across Asia, from the places couples choose to celebrate to the people who make the day happen." },
+  { name: "Hanna Pang", slug: "hanna-pang", rank: 4, role: "Senior Writer", bio: "Hanna writes about wedding planning and style, with practical ideas for couples getting ready for the day." },
+  { name: "Yumi Nakagawa", slug: "yumi-nakagawa", rank: 5, role: "Contributing Editor", bio: "Yumi is a contributing editor covering weddings, style and celebrations across Asia." },
+  { name: "Ishaan Bhatt", slug: "ishaan-bhatt", rank: 6, role: "Senior Reporter", bio: "Ishaan reports on weddings and the wedding industry across Asia, from new trends to the businesses behind them." },
 ];
 
 /** Six simple topic tags (owner decision 13-10-26). No probe tag: the owner creates probe data by hand. */

@@ -155,8 +155,8 @@ and status.
   included) and writes nothing; local disposable databases stay allowed. A missing tenant
   fails harmlessly at the lookup ("tenant "vowasia" not found ... Nothing done.").
   Same never-overwrite / refuse / result-log behaviour and the same rollback order as the
-  gtp script. The six author names come from the design team page and are PENDING owner
-  confirmation (no bio, no city); fix names BEFORE `--apply` (renaming later touches every
+  gtp script. The six author names are confirmed by the owner (13-10-26); roles and short
+  bios are in the fixture (no city), editable later; fix names BEFORE `--apply` (renaming later touches every
   mirror, see the playbook).
 
 ## Token rotation
