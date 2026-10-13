@@ -36,6 +36,9 @@ Owner-run, systemAdmin only (gtp-launch P1 plan section 7 is the full sheet):
   `translations`).
 - **Auto publish engine drafts: OFF.** `npm run audit:add-gtp-taxonomy` refuses `--apply`
   while it is on.
+- Status 13-10-26: tenant, taxonomy, read token and `content-engine-gtp` exist; frontend URL
+  is the gtp-web preview (`https://gtp-web-lac.vercel.app`). The Console engine form has
+  no hub-flag checkboxes (hub flags are Payload /admin only); leave them off for intake.
 - Then create the taxonomy with `npm run audit:add-gtp-taxonomy` (dry run first; see
   `docs/11-operations.md` "GTP rollout"), and mint tokens with environment-named labels:
   `frontend-preview` first, `frontend-prod` at cutover, so they can be revoked
