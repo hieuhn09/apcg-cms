@@ -81,7 +81,7 @@ Content-Type: application/json
   accepted and ignored). Recommended for gtp: one primary pillar plus an optional
   sub-section, no secondary sections.
 - `byline` must equal a gtp `authors.name` exactly (`Daniel Cheong`, `Priya Nair`,
-  `Marcus Tan`, `Clara Widjaja`, `Yuki Hamada`, `GTP Newsroom`); an unmatched byline
+  `Marcus Tan`, `Natalie Ong`, `Yuki Hamada`, `GTP Newsroom`); an unmatched byline
   silently creates a "ghost" author (role Staff Writer, no slug, no rank).
 - The tenant is created with `autoPublishEngineDrafts=false`, so gtp intake lands
   `pending_review`.

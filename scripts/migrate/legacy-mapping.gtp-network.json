@@ -65,11 +65,11 @@
       "Daniel Cheong": "Daniel Cheong",
       "Priya Nair": "Priya Nair",
       "Marcus Tan": "Marcus Tan",
-      "Clara Widjaja": "Clara Widjaja",
+      "Natalie Ong": "Natalie Ong",
       "Yuki Hamada": "Yuki Hamada"
     },
     "fallbackName": "GTP Newsroom",
-    "staff": ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Clara Widjaja", "Yuki Hamada", "GTP Newsroom"],
+    "staff": ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada", "GTP Newsroom"],
     "createMissing": false
   },
   "formatTags": { "enabled": true, "include": ["guide", "analysis", "review", "interview"] },

@@ -111,7 +111,7 @@ export const MappingSchema = z
         resolve: z.enum(["byColumn", "byJoin", "fixed"]).default("byColumn"),
         map: z.record(z.string(), z.string()).default({}),
         fallbackName: z.string().default("GTP Newsroom"),
-        staff: z.array(z.string()).default(["Daniel Cheong", "Priya Nair", "Marcus Tan", "Clara Widjaja", "Yuki Hamada", "GTP Newsroom"]),
+        staff: z.array(z.string()).default(["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada", "GTP Newsroom"]),
         createMissing: z.boolean().default(false),
       })
       .strict()

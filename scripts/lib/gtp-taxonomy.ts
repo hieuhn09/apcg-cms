@@ -196,11 +196,11 @@ export const GTP_NEWSLETTERS: readonly GtpNewsletter[] = [
  * `site_authors` view with `--authors-file`.
  */
 export const GTP_AUTHORS: readonly GtpAuthor[] = [
-  { name: "Daniel Cheong", slug: "daniel-cheong", rank: 1, role: "Staff Writer" },
-  { name: "Priya Nair", slug: "priya-nair", rank: 2, role: "Staff Writer" },
-  { name: "Marcus Tan", slug: "marcus-tan", rank: 3, role: "Staff Writer" },
-  { name: "Clara Widjaja", slug: "clara-widjaja", rank: 4, role: "Staff Writer" },
-  { name: "Yuki Hamada", slug: "yuki-hamada", rank: 5, role: "Japan Correspondent" },
+  { name: "Daniel Cheong", slug: "daniel-cheong", rank: 1, role: "News Editor", city: "Singapore" },
+  { name: "Priya Nair", slug: "priya-nair", rank: 2, role: "Hospitality Correspondent", city: "Singapore" },
+  { name: "Marcus Tan", slug: "marcus-tan", rank: 3, role: "Business of Travel Correspondent", city: "Singapore" },
+  { name: "Natalie Ong", slug: "natalie-ong", rank: 4, role: "Features Writer", city: "Singapore" },
+  { name: "Yuki Hamada", slug: "yuki-hamada", rank: 5, role: "Japan Correspondent", city: "Tokyo" },
   { name: "GTP Newsroom", slug: "gtp-newsroom", role: "Newsroom" },
 ];
 

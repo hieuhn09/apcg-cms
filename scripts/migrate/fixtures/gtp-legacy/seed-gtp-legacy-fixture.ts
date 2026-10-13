@@ -46,7 +46,7 @@ const SUBS: [string, string, number][] = [
   ["experiences-luxury", "luxury-stays", 54], ["experiences-luxury", "food-drink", 28], ["experiences-luxury", "style", 26], ["experiences-luxury", "journeys", 24], ["experiences-luxury", "wellness", 13],
   ["destinations", "guides", 29], ["destinations", "asia", 24], ["destinations", "world", 17], ["destinations", "trip-planning", 14],
 ];
-const BYLINES = ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Clara Widjaja", "Yuki Hamada"];
+const BYLINES = ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada"];
 const FOREIGN = ["Simon Ng", "Ryan Ng", "Valerie Nguyen", "BriefAsia", ""];
 const FORMATS: [string, number][] = [["news", 1497], ["guide", 80], ["analysis", 35], ["review", 13], ["interview", 4], ["none", 8]];
 const WORDS = ["harbour", "runway", "lounge", "visa", "island", "summit", "rail", "market", "season", "resort", "skyline", "festival", "corridor", "monsoon", "atelier"];
