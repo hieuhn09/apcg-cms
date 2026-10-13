@@ -49,7 +49,7 @@ describe("constants", () => {
       gcv: ["exclusive", "pressroom"],
       "brief-asia": ["pressroom"],
       gtp: ["press-room", "events-awards"],
-      vowasia: ["press-room"],
+      vowasia: ["press-room", "real-weddings", "directory"],
     });
     assert.deepEqual(singleHomeSlugUnion(), ["pressroom", "press-room"]);
   });
@@ -116,20 +116,22 @@ describe("gtp (GlobalTravelPost): press-room single-home + engine-blocked, event
   });
 });
 
-describe("vowasia (VowAsia): press-room single-home + engine-blocked; no events-awards", () => {
+describe("vowasia (VowAsia): press-room single-home + engine-blocked; real-weddings, directory engine-blocked only; no events-awards", () => {
   const VA_V1 = 'pillar rule: "press-room" is a single-home pillar: an article filed there cannot also have secondary sections.';
   const VA_V2 = 'pillar rule: "press-room" is a single-home pillar: an article filed there cannot have a sub-section.';
   const VA_V3 = 'pillar rule: "press-room" is a single-home pillar: it cannot be added as a secondary section to another article.';
-  const WRITABLE = ["real-weddings", "venues", "directory", "destination-weddings", "style", "planning", "wedding-business"];
+  const WRITABLE = ["venues", "destination-weddings", "style", "planning", "wedding-business"];
   it("isSingleHomePillar: exact slug, vowasia press-room only", () => {
     assert.equal(isSingleHomePillar("vowasia", "press-room"), true);
     assert.equal(isSingleHomePillar("vowasia", "pressroom"), false);
     assert.equal(isSingleHomePillar("vowasia", "Press-Room"), false);
     for (const s of WRITABLE) assert.equal(isSingleHomePillar("vowasia", s), false, s);
   });
-  it("isEngineBlockedPillar: press-room blocked (case/whitespace-insensitive); the seven other pillars and events-awards are not", () => {
+  it("isEngineBlockedPillar: press-room blocked (case/whitespace-insensitive); real-weddings and directory blocked; the five other pillars and events-awards are not", () => {
     assert.equal(isEngineBlockedPillar("vowasia", "press-room"), true);
     assert.equal(isEngineBlockedPillar("vowasia", " PRESS-ROOM "), true);
+    assert.equal(isEngineBlockedPillar("vowasia", "real-weddings"), true);
+    assert.equal(isEngineBlockedPillar("vowasia", " Directory "), true);
     for (const s of WRITABLE) assert.equal(isEngineBlockedPillar("vowasia", s), false, s);
     assert.equal(isEngineBlockedPillar("vowasia", "events-awards"), false);
     assert.equal(isEngineBlockedPillar("vowasia", "pressroom"), false);

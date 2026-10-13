@@ -30,7 +30,8 @@
  *
  * `engineWritable` and `singleHome` are DERIVED from ENGINE_BLOCKED_PILLARS.vowasia /
  * SINGLE_HOME_PILLARS.vowasia, never hand-typed, so the fixture cannot drift from
- * the constants. `press-room` is the only single-home + engine-blocked pillar.
+ * the constants. `press-room` is the only single-home pillar; engine-blocked
+ * pillars are `press-room`, `real-weddings` and `directory` (owner 13-10-26).
  */
 import { ENGINE_BLOCKED_PILLARS, SINGLE_HOME_PILLARS } from "../../src/lib/constants";
 

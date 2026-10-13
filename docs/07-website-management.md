@@ -63,7 +63,8 @@ and nothing has been run against any database. Field sheet as data:
 - Features: `articles`, `newsletters`, `corrections` on; everything else off.
 - **Auto publish engine drafts: OFF** (`audit:add-vowasia-taxonomy` refuses `--apply`
   while it is on).
-- `press-room` is single-home and engine-blocked in code (`src/lib/constants.ts`), inert
+- `press-room` is single-home and engine-blocked in code (`src/lib/constants.ts`);
+  `real-weddings` and `directory` are engine-blocked only (not single-home), inert
   until the tenant exists. No migration.
 - Then create the taxonomy (8 pillars, 27 sub-sections, 2 newsletters, 6 authors, 6 tags
   = 49 rows) with `npm run audit:add-vowasia-taxonomy`: see `docs/11-operations.md`

@@ -136,7 +136,8 @@ and status.
   script are unchanged.
 
 - **VowAsia rollout (owner-run; tenant `vowasia`):** the rules ship in code (`vowasia` in
-  `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS`, both `["press-room"]`) and are inert
+  `SINGLE_HOME_PILLARS` as `["press-room"]` and `ENGINE_BLOCKED_PILLARS` as
+  `["press-room", "real-weddings", "directory"]`) and are inert
   until the tenant exists. No migration. **Status 13-10-26: code only, nothing applied.**
   Steps: (1) merge + deploy; (2) create the tenant by hand in /admin
   (`docs/07-website-management.md`, `autoPublishEngineDrafts` off, frontend URL empty);

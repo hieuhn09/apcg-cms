@@ -46,13 +46,15 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 //
 // VowAsia (tenant `vowasia`, vowasia launch P1, owner decision 13-10-26):
 // `press-room` (hyphenated slug, like gtp; single-home too, see below) is
-// editor-only. VowAsia has no `events-awards` pillar; its seven other pillars
-// stay engine-writable.
+// editor-only. Owner decision 13-10-26: `real-weddings` and `directory` are
+// also engine-blocked (editor-only) but NOT single-home (like gtp
+// `events-awards`). VowAsia has no `events-awards` pillar; its five other
+// pillars stay engine-writable.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   gcv: ["exclusive", "pressroom"],
   "brief-asia": ["pressroom"],
   gtp: ["press-room", "events-awards"],
-  vowasia: ["press-room"],
+  vowasia: ["press-room", "real-weddings", "directory"],
 };
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */

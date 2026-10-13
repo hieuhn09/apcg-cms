@@ -218,16 +218,20 @@ describe("vowasia fixture: slug contract (design pillars.ts)", () => {
 });
 
 describe("vowasia fixture: parity with the constants", () => {
-  it("SINGLE_HOME_PILLARS.vowasia and ENGINE_BLOCKED_PILLARS.vowasia are exactly [press-room]", () => {
+  it("SINGLE_HOME_PILLARS.vowasia is [press-room]; ENGINE_BLOCKED_PILLARS.vowasia is [press-room, real-weddings, directory]", () => {
     assert.deepEqual(SINGLE_HOME_PILLARS.vowasia, ["press-room"]);
-    assert.deepEqual(ENGINE_BLOCKED_PILLARS.vowasia, ["press-room"]);
+    assert.deepEqual(ENGINE_BLOCKED_PILLARS.vowasia, ["press-room", "real-weddings", "directory"]);
   });
-  it("exactly 7 engine-writable pillars (press-room is editor-only)", () => {
+  it("exactly 5 engine-writable pillars (press-room, real-weddings, directory are editor-only)", () => {
     assert.deepEqual(
       VOWASIA_PILLARS.filter((p) => p.engineWritable).map((p) => p.slug),
-      ["real-weddings", "venues", "directory", "destination-weddings", "style", "planning", "wedding-business"],
+      ["venues", "destination-weddings", "style", "planning", "wedding-business"],
     );
-    assert.deepEqual(VOWASIA_PILLARS.filter((p) => !p.engineWritable).map((p) => p.slug), ["press-room"]);
+    assert.deepEqual(VOWASIA_PILLARS.filter((p) => !p.engineWritable).map((p) => p.slug), ["real-weddings", "directory", "press-room"]);
+  });
+  it("engineWritable agrees with ENGINE_BLOCKED_PILLARS.vowasia for every pillar", () => {
+    const blocked = new Set(ENGINE_BLOCKED_PILLARS.vowasia ?? []);
+    for (const p of VOWASIA_PILLARS) assert.equal(p.engineWritable, !blocked.has(p.slug), p.slug);
   });
   it("every SINGLE_HOME_PILLARS.vowasia / ENGINE_BLOCKED_PILLARS.vowasia slug exists in the fixture", () => {
     const slugs = new Set(VOWASIA_PILLARS.map((p) => p.slug));
