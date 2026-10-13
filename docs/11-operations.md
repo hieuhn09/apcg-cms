@@ -105,8 +105,10 @@ and status.
   (`press-room`, `events-awards`)) and are inert until the tenant exists. No migration.
   Steps: (1) merge + deploy; (2) create the tenant in /admin (`docs/07-website-management.md`,
   `autoPublishEngineDrafts` off, frontend URL empty); (3) print the DB **hostname** (no
-  port) with `node -e 'console.log(new URL(process.env.DATABASE_URL).hostname)'` and pass
-  exactly that to `--confirm-host`; (4) dry run:
+  port) AND the database name with
+  `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb` (see the precaution below); pass the hostname exactly to
+  `--confirm-host`; (4) dry run:
   `npm run audit:add-gtp-taxonomy -- --confirm-host=<hostname>` and review the plan
   (6 pillars, 20 sub-sections, 2 newsletters, 6 authors, 6 tags = 40 rows, all `create`);
   (5) apply from an interactive terminal:
@@ -120,6 +122,15 @@ and status.
   optionally the tenant; afterwards never delete pillars; suspend the tenant instead. Code
   rollback = revert the PR. **Seed warning:** `npm run db:seed` is local-only; the gtp
   fixture (`SEED_INCLUDE_GTP=true`) refuses a non-local database.
+  **Status 13-10-26:** steps (1)-(5) done by the owner against Neon production (40 rows
+  created); step (6) re-run not yet done.
+  **Precaution (incident 13-10-26):** the Neon server holds TWO databases: `neondb` (the
+  real Central CMS database) and `gcv_payload_disabled` (old, EMPTY, 0 tables). The first
+  attempt used a DATABASE_URL ending in `/gcv_payload_disabled`; the script aborted at the
+  tenant lookup ("Failed query: select count(*) from tenants ... params: gtp") and wrote
+  nothing. `--confirm-host` checks only the HOST, so it cannot catch a wrong database
+  name: always print `.pathname` and confirm `/neondb` before any `--apply`. Proposal (not
+  done): make `scripts/lib/local-db-guard.ts` show the database name in its confirmation.
 
 ## Token rotation
 
