@@ -134,7 +134,7 @@ export async function GET(
   let edit: HubArticleEdit | null = null;
   if (wantEdit) {
     try {
-      const r = await loadHubArticleEdit({ payload, mainDoc: doc, tenantId: tenant.id });
+      const r = await loadHubArticleEdit({ payload, mainDoc: doc, tenantId: tenant.id, tenantSlug: tenant.slug });
       edit = r.edit;
       // Review-3 M3: whichever row answers `article.*` (latest or main), a hero that is
       // not THIS tenant's media is withheld (the default read is not touched).
@@ -156,7 +156,8 @@ export async function GET(
   const body = await hubArticleBodyToMarkdown(doc.body, {
     loadEditorConfig: () => loadHubEditorConfig(payload.config),
     // P5.3 T9: canonical media tokens only on the editable view=edit branch.
-    ...(edit && edit.editable ? { mediaTokens: true } : {}),
+    // P5.4 (D6): …and on the live-editable branch of a published article.
+    ...(edit && (edit.editable || ("live" in edit && edit.live?.editable === true)) ? { mediaTokens: true } : {}),
   });
   // P5.3 review M2: the token export fell back to the default export ⇒ the body the hub
   // gets has lost its images; never offer it as editable Markdown (warning, no PII).

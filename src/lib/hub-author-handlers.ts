@@ -451,6 +451,178 @@ export async function loadHubEditableArticle(
   return { ok: true, articleId, latest, main };
 }
 
+/** The result of `buildDraftUpdateData`: the update `data` + the changed REQUEST keys, or the frozen error Response. */
+export type DraftUpdateBuild = { ok: true; data: Doc; changed: HubDraftFieldKey[] } | { ok: false; response: Response };
+
+/**
+ * APCGHub P5.4 (D3): the PATCH pipeline after the `expectedVersion` check, moved here
+ * VERBATIM so the live-edit route runs exactly the same rules — (with bodyMarkdown) the
+ * stored body round-trip check (422 body_not_editable) → references (422) → merge rules
+ * (422) → (with a non-empty body) conversion + body media ids (422) → the field map
+ * against `latest` (what changes, by REQUEST key). `editorConfig` is a LOADER, called only
+ * when `bodyMarkdown` is present (as PATCH always did).
+ */
+export async function buildDraftUpdateData(
+  payload: Payload,
+  args: {
+    v: HubDraftInput;
+    tenant: TenantDoc;
+    latest: Doc;
+    editorConfig: () => Promise<HubEditorConfig>;
+    deps?: { convert?: (payload: Payload, md: string) => Promise<ConvertResult> };
+  },
+): Promise<DraftUpdateBuild> {
+  const { v, tenant, latest } = args;
+  if (v.bodyMarkdown !== undefined) {
+    const editorConfig = await args.editorConfig();
+    if (!isRoundTripSafeBody(editorConfig, latest.body)) return { ok: false, response: bodyNotEditable() };
+  }
+
+  const refsR = await resolveDraftRefs({ payload, tenant, input: v, currentPillarId: toId(latest.pillar) ?? null });
+  if (!refsR.ok) return { ok: false, response: invalid(refsR.fields) };
+  const refs = refsR.refs;
+
+  const merge = mergeRules(v, refs, latest);
+  if (Object.keys(merge).length) return { ok: false, response: invalid(merge) };
+
+  let lexical: unknown = undefined;
+  if (v.bodyMarkdown) {
+    const c = await (args.deps?.convert ?? defaultConvert)(payload, v.bodyMarkdown);
+    if (!c.ok) return { ok: false, response: conversionRejected(payload, c) };
+    // P5.3 T8 (c): the stored tree's media ids must be exactly the tenant-checked ids.
+    if (!bodyMediaIdsMatch(c.lexical, refs.bodyMediaIds ?? [])) return { ok: false, response: invalid({ bodyMarkdown: "unknown_ref" }) };
+    lexical = c.lexical;
+  }
+
+  // What changes, by REQUEST key name (E11 c), against the latest version.
+  const data: Doc = {};
+  const changed: HubDraftFieldKey[] = [];
+  const mark = (k: HubDraftFieldKey) => {
+    if (!changed.includes(k)) changed.push(k);
+  };
+  for (const k of v.present) {
+    switch (k) {
+      case "title":
+        if (v.title !== latest.title) {
+          data.title = v.title;
+          mark(k);
+        }
+        break;
+      case "slug":
+        if (v.slug !== latest.slug) {
+          data.slug = v.slug;
+          mark(k);
+        }
+        break;
+      case "dek":
+        if ((v.dek ?? null) !== ((latest.dek as string | null | undefined) ?? null)) {
+          data.dek = v.dek ?? null;
+          mark(k);
+        }
+        break;
+      case "bodyMarkdown": {
+        const nowEmpty = isEmptyBody(latest.body);
+        const differs = lexical === undefined ? !nowEmpty : nowEmpty || !lexicalTreesEqual(lexical, latest.body);
+        if (differs) {
+          data.body = lexical ?? null;
+          mark(k);
+        }
+        break;
+      }
+      case "takeaways": {
+        const joined = v.takeaways && v.takeaways.length ? v.takeaways.join("\n") : null;
+        if (joined !== ((latest.takeaways as string | null | undefined) || null)) {
+          data.takeaways = joined;
+          mark(k);
+        }
+        break;
+      }
+      case "readMin":
+        if (v.readMin !== latest.readMin) {
+          data.readMin = v.readMin;
+          mark(k);
+        }
+        break;
+      case "pillarSlug":
+        if (idOrNull(refs.pillar) !== idOrNull(latest.pillar)) {
+          data.pillar = refs.pillar;
+          mark(k);
+        }
+        break;
+      case "subSectionSlug":
+        if (idOrNull(refs.subSection) !== idOrNull(latest.subSection)) {
+          data.subSection = refs.subSection ?? null;
+          mark(k);
+        }
+        break;
+      case "secondary":
+        if (secondaryKey(refs.secondarySections) !== secondaryKey(latest.secondarySections)) {
+          data.secondarySections = refs.secondarySections;
+          mark(k);
+        }
+        break;
+      case "tagSlugs":
+        if (!sameIds(refs.tags, latest.tags)) {
+          data.tags = refs.tags;
+          mark(k);
+        }
+        break;
+      case "countrySlugs":
+        if (!sameIds(refs.countries, latest.countries)) {
+          data.countries = refs.countries;
+          data.country = refs.countries?.[0] ?? null;
+          mark(k);
+        }
+        break;
+      case "citySlugs":
+        if (!sameIds(refs.cities, latest.cities)) {
+          data.cities = refs.cities;
+          mark(k);
+        }
+        break;
+      case "authorId":
+        if (idOrNull(refs.author) !== idOrNull(latest.author)) {
+          data.author = refs.author;
+          mark(k);
+        }
+        break;
+      case "coAuthorIds":
+        if (!sameIds(refs.coAuthors, latest.coAuthors)) {
+          data.coAuthors = refs.coAuthors;
+          mark(k);
+        }
+        break;
+      case "flags":
+        for (const [fk, b] of Object.entries(v.flags ?? {})) {
+          if ((latest[fk] === true) !== b) {
+            data[fk] = b;
+            mark(k);
+          }
+        }
+        break;
+      case "sponsor":
+        if ((v.sponsor ?? null) !== ((latest.sponsor as string | null | undefined) ?? null)) {
+          data.sponsor = v.sponsor ?? null;
+          mark(k);
+        }
+        break;
+      case "heroImageId":
+        if (idOrNull(refs.heroImage) !== idOrNull(latest.heroImage)) {
+          data.heroImage = refs.heroImage ?? null;
+          mark(k);
+        }
+        break;
+      case "leadImageCaption":
+        if ((v.leadImageCaption ?? null) !== ((latest.leadImageCaption as string | null | undefined) || null)) {
+          data.leadImageCaption = v.leadImageCaption ?? null;
+          mark(k);
+        }
+        break;
+    }
+  }
+  return { ok: true, data, changed };
+}
+
 export async function handleHubDraftUpdateWith(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -481,153 +653,15 @@ export async function handleHubDraftUpdateWith(
     const currentVersion = typeof latest.version === "number" ? latest.version : 0;
     if (v.expectedVersion !== currentVersion) return versionConflict(currentVersion);
 
-    if (v.bodyMarkdown !== undefined) {
-      const editorConfig = (await loadHubEditorConfig(payload.config)) as HubEditorConfig;
-      if (!isRoundTripSafeBody(editorConfig, latest.body)) return bodyNotEditable();
-    }
-
-    const refsR = await resolveDraftRefs({ payload, tenant, input: v, currentPillarId: toId(latest.pillar) ?? null });
-    if (!refsR.ok) return invalid(refsR.fields);
-    const refs = refsR.refs;
-
-    const merge = mergeRules(v, refs, latest);
-    if (Object.keys(merge).length) return invalid(merge);
-
-    let lexical: unknown = undefined;
-    if (v.bodyMarkdown) {
-      const c = await (deps?.convert ?? defaultConvert)(payload, v.bodyMarkdown);
-      if (!c.ok) return conversionRejected(payload, c);
-      // P5.3 T8 (c): the stored tree's media ids must be exactly the tenant-checked ids.
-      if (!bodyMediaIdsMatch(c.lexical, refs.bodyMediaIds ?? [])) return invalid({ bodyMarkdown: "unknown_ref" });
-      lexical = c.lexical;
-    }
-
-    // What changes, by REQUEST key name (E11 c), against the latest version.
-    const data: Doc = {};
-    const changed: HubDraftFieldKey[] = [];
-    const mark = (k: HubDraftFieldKey) => {
-      if (!changed.includes(k)) changed.push(k);
-    };
-    for (const k of v.present) {
-      switch (k) {
-        case "title":
-          if (v.title !== latest.title) {
-            data.title = v.title;
-            mark(k);
-          }
-          break;
-        case "slug":
-          if (v.slug !== latest.slug) {
-            data.slug = v.slug;
-            mark(k);
-          }
-          break;
-        case "dek":
-          if ((v.dek ?? null) !== ((latest.dek as string | null | undefined) ?? null)) {
-            data.dek = v.dek ?? null;
-            mark(k);
-          }
-          break;
-        case "bodyMarkdown": {
-          const nowEmpty = isEmptyBody(latest.body);
-          const differs = lexical === undefined ? !nowEmpty : nowEmpty || !lexicalTreesEqual(lexical, latest.body);
-          if (differs) {
-            data.body = lexical ?? null;
-            mark(k);
-          }
-          break;
-        }
-        case "takeaways": {
-          const joined = v.takeaways && v.takeaways.length ? v.takeaways.join("\n") : null;
-          if (joined !== ((latest.takeaways as string | null | undefined) || null)) {
-            data.takeaways = joined;
-            mark(k);
-          }
-          break;
-        }
-        case "readMin":
-          if (v.readMin !== latest.readMin) {
-            data.readMin = v.readMin;
-            mark(k);
-          }
-          break;
-        case "pillarSlug":
-          if (idOrNull(refs.pillar) !== idOrNull(latest.pillar)) {
-            data.pillar = refs.pillar;
-            mark(k);
-          }
-          break;
-        case "subSectionSlug":
-          if (idOrNull(refs.subSection) !== idOrNull(latest.subSection)) {
-            data.subSection = refs.subSection ?? null;
-            mark(k);
-          }
-          break;
-        case "secondary":
-          if (secondaryKey(refs.secondarySections) !== secondaryKey(latest.secondarySections)) {
-            data.secondarySections = refs.secondarySections;
-            mark(k);
-          }
-          break;
-        case "tagSlugs":
-          if (!sameIds(refs.tags, latest.tags)) {
-            data.tags = refs.tags;
-            mark(k);
-          }
-          break;
-        case "countrySlugs":
-          if (!sameIds(refs.countries, latest.countries)) {
-            data.countries = refs.countries;
-            data.country = refs.countries?.[0] ?? null;
-            mark(k);
-          }
-          break;
-        case "citySlugs":
-          if (!sameIds(refs.cities, latest.cities)) {
-            data.cities = refs.cities;
-            mark(k);
-          }
-          break;
-        case "authorId":
-          if (idOrNull(refs.author) !== idOrNull(latest.author)) {
-            data.author = refs.author;
-            mark(k);
-          }
-          break;
-        case "coAuthorIds":
-          if (!sameIds(refs.coAuthors, latest.coAuthors)) {
-            data.coAuthors = refs.coAuthors;
-            mark(k);
-          }
-          break;
-        case "flags":
-          for (const [fk, b] of Object.entries(v.flags ?? {})) {
-            if ((latest[fk] === true) !== b) {
-              data[fk] = b;
-              mark(k);
-            }
-          }
-          break;
-        case "sponsor":
-          if ((v.sponsor ?? null) !== ((latest.sponsor as string | null | undefined) ?? null)) {
-            data.sponsor = v.sponsor ?? null;
-            mark(k);
-          }
-          break;
-        case "heroImageId":
-          if (idOrNull(refs.heroImage) !== idOrNull(latest.heroImage)) {
-            data.heroImage = refs.heroImage ?? null;
-            mark(k);
-          }
-          break;
-        case "leadImageCaption":
-          if ((v.leadImageCaption ?? null) !== ((latest.leadImageCaption as string | null | undefined) || null)) {
-            data.leadImageCaption = v.leadImageCaption ?? null;
-            mark(k);
-          }
-          break;
-      }
-    }
+    const built = await buildDraftUpdateData(payload, {
+      v,
+      tenant,
+      latest,
+      editorConfig: async () => (await loadHubEditorConfig(payload.config)) as HubEditorConfig,
+      deps: { convert: deps?.convert },
+    });
+    if (!built.ok) return built.response;
+    const { data, changed } = built;
 
     if (data.slug !== undefined && (await findSlugConflict({ payload, tenantId: tenant.id, slug: v.slug as string, excludeId: articleId }))) {
       return slugConflictResponse(payload, tenant.id, v.slug, articleId);

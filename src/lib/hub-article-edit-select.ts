@@ -31,6 +31,7 @@ import { loadHubEditorConfig } from "@/lib/hub-article-markdown";
 import { isRoundTripSafeBody, type HubEditorConfig } from "@/lib/hub-author-body";
 import { isHubAuthoredDoc } from "@/lib/hub-author-auth";
 import { toId } from "@/access/helpers";
+import { isLiveEditTenant, liveEditTenants, liveGateReason } from "@/lib/hub-author-live-pure";
 
 /** The main-table read of `view=edit` = the detail select + `origin` (needed by the gate). */
 export const HUB_ARTICLE_EDIT_MAIN_SELECT = { ...HUB_ARTICLE_DETAIL_SELECT, origin: true } as const;
@@ -80,6 +81,8 @@ const idOf = (v: unknown): number | string | null => toId(v) ?? null;
 export interface HubArticleEditNo {
   editable: false;
   editableReason: Exclude<HubEditableReason, "ok" | "scheduled">;
+  /** APCGHub P5.4 (D6 / T3): ONLY on the branch "main row published" when the caller passed `tenantSlug`. */
+  live?: HubArticleEditLive;
 }
 
 /** K10 (P5.2): a hub-authored article scheduled from the hub — read-only, with its hour. */
@@ -137,6 +140,38 @@ export interface HubArticleEditMedia {
 }
 
 export type HubArticleEdit = HubArticleEditNo | (HubArticleEditYes & Partial<HubArticleEditMedia>) | HubArticleEditScheduled;
+
+/** P5.4 (T3): why a published article cannot be edited live from the hub (never "origin" on the wire). */
+export type HubArticleEditLiveReason = "scheduled" | "status" | "draft_diverged" | "not_hub_authored" | "feature_disabled";
+
+export interface HubArticleEditLiveNo {
+  editable: false;
+  reason: HubArticleEditLiveReason;
+  version: number | null;
+}
+
+/** P5.4 (T3): the live-editable block — EXACTLY 17 keys, flat like `HubArticleEditYes` (no `origin`, `reason` for `editableReason`). */
+export interface HubArticleEditLiveYes {
+  editable: true;
+  reason: "ok";
+  version: number | null;
+  bodyEditable: boolean;
+  pillarSlug: string | null;
+  subSectionSlug: string | null;
+  secondary: HubArticleEditYes["secondary"];
+  tagSlugs: string[];
+  countrySlugs: string[];
+  citySlugs: string[];
+  authorId: number | string | null;
+  coAuthorIds: (number | string)[];
+  flags: HubArticleEditYes["flags"];
+  sponsor: string | null;
+  hero: HubArticleEditMedia["hero"];
+  leadImageCaption: string | null;
+  bodyMedia: HubEditMedia[];
+}
+
+export type HubArticleEditLive = HubArticleEditLiveNo | HubArticleEditLiveYes;
 
 /** P5.3: distinct media ids allowed in one hub body (= `too_many` of T5). */
 export const HUB_EDIT_BODY_MEDIA_MAX = 30;
@@ -240,9 +275,18 @@ export async function loadHubArticleEdit(args: {
   payload: Payload;
   mainDoc: Doc;
   tenantId: number | string;
+  /** P5.4 (D6): the CMS tenant slug — given by the route; absent ⇒ no `live` block (and no env read). */
+  tenantSlug?: string;
+  /** P5.4 (D11): the live-edit tenant switch (default: `liveEditTenants()`, read on this call). */
+  liveTenants?: readonly string[];
 }): Promise<{ edit: HubArticleEdit; latest: Doc | null }> {
   const { payload, mainDoc, tenantId } = args;
   const mainReason = editableReasonOf(mainDoc);
+  // P5.4 (D6): the main row is published ⇒ add the `live` block, only when the caller named the tenant slug.
+  if (mainReason === "status" && mainDoc.workflowStatus === "published" && args.tenantSlug !== undefined) {
+    const live = await computeEditLive({ payload, mainDoc, tenantId, tenantSlug: args.tenantSlug, liveTenants: args.liveTenants ?? liveEditTenants() });
+    return { edit: { editable: false, editableReason: "status", live }, latest: null };
+  }
   if (mainReason) return { edit: { editable: false, editableReason: mainReason }, latest: null };
 
   const latest = (await payload.findByID({
@@ -288,6 +332,64 @@ export async function loadHubArticleEdit(args: {
 }
 
 /**
+ * P5.4 (D6): the `edit.live` block of a PUBLISHED main row. (0) tenant outside
+ * `liveTenants` ⇒ `feature_disabled`, NO database read; (i) the gate reads — the FULL
+ * main row (depth 0, no select) + the latest version — through `liveGateReason`; (ii)
+ * only when the gate passes, ONE display read (no draft, detail depth, `en`,
+ * `HUB_ARTICLE_EDIT_SELECT`) feeds the sanitizer, the media block and `bodyEditable`.
+ */
+export async function computeEditLive(args: {
+  payload: Payload;
+  mainDoc: Doc;
+  tenantId: number | string;
+  tenantSlug: string;
+  liveTenants: readonly string[];
+}): Promise<HubArticleEditLive> {
+  const { payload, mainDoc, tenantId } = args;
+  if (!isLiveEditTenant(args.tenantSlug, args.liveTenants)) return { editable: false, reason: "feature_disabled", version: null };
+  const id = mainDoc.id as number | string;
+  const main = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc | null;
+  if (!main || String(toId(main.tenant)) !== String(tenantId)) return { editable: false, reason: "status", version: null };
+  const latest = (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc | null;
+  const version = typeof main.version === "number" ? main.version : null;
+  const reason = liveGateReason({ main, latest, isHubAuthored: latest ? await isHubAuthoredDoc(payload, latest) : false });
+  if (reason) return { editable: false, reason: reason === "origin" ? "status" : reason, version };
+  const shown = (await payload.findByID({
+    collection: "articles",
+    id,
+    depth: HUB_ARTICLE_DETAIL_DEPTH,
+    locale: "en",
+    overrideAccess: true,
+    select: HUB_ARTICLE_EDIT_SELECT,
+    disableErrors: true,
+  })) as unknown as Doc | null;
+  if (!shown || String(toId(shown.tenant)) !== String(tenantId)) return { editable: false, reason: "status", version };
+  const editorConfig = (await loadHubEditorConfig(payload.config)) as HubEditorConfig;
+  const media = hubEditMediaBlock(shown, tenantId);
+  const bodyEditable = !media.tooMany && isRoundTripSafeBody(editorConfig, shown.body);
+  const y = sanitizeHubArticleEdit(shown, { bodyEditable, editable: true, editableReason: "ok" }) as HubArticleEditYes;
+  return {
+    editable: true,
+    reason: "ok",
+    version,
+    bodyEditable,
+    pillarSlug: y.pillarSlug,
+    subSectionSlug: y.subSectionSlug,
+    secondary: y.secondary,
+    tagSlugs: y.tagSlugs,
+    countrySlugs: y.countrySlugs,
+    citySlugs: y.citySlugs,
+    authorId: y.authorId,
+    coAuthorIds: y.coAuthorIds,
+    flags: y.flags,
+    sponsor: y.sponsor,
+    hero: media.hero,
+    leadImageCaption: media.leadImageCaption,
+    bodyMedia: media.bodyMedia,
+  };
+}
+
+/**
  * Review M1 (CMS-2) + review-3 M3: the ONE withhold rule for `article.heroImage` in
  * `view=edit` — every branch (editable, scheduled, and the main row of the
  * not-editable branches). A hero that is not a populated media of THIS tenant is
@@ -303,6 +405,8 @@ export function withholdForeignHero<T extends Doc>(doc: T, tenantId: number | st
  * receives has lost its images, so it must never be offered as editable Markdown.
  */
 export function applyBodyTokenFallback(edit: HubArticleEdit, tokenFallback: boolean): HubArticleEdit {
+  // P5.4 (CMS3-6): same invariant for the `live` block (its Markdown came from the same token export).
+  if (tokenFallback && edit.editable === false && "live" in edit && edit.live?.editable === true) return { ...edit, live: { ...edit.live, bodyEditable: false } };
   if (!tokenFallback || edit.editable !== true || edit.bodyEditable !== true) return edit;
   return { ...edit, bodyEditable: false };
 }

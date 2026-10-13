@@ -23,7 +23,9 @@
  * Flags by phase: --setup/--check/--paging = CMS-1; --setup2/--check2 = CMS-2;
  * --setup3/--check3 = CMS-3; --setup4/--check4 = CMS-4; --check5 = CMS-4b;
  * --setup6/--check6 = P5.1; --setup7/--check7 = P5.2; --setup8/--check8 = P5.3
- * (images: POST /api/hub/media; see the --check8 section near the end).
+ * (images: POST /api/hub/media; see the --check8 section near the end);
+ * --setup9/--check9 = P5.4 (live edit: PATCH /api/hub/articles/{id}/live; see the
+ * --check9 section at the end).
  */
 
 import "./lib/env";
@@ -5607,9 +5609,13 @@ async function check6() {
       const plain = await getA(art.id);
       const xyz = await getA(art.id, "&view=xyz");
       const edit = await getA(art.id, "&view=edit");
-      expect(`T ${k}: no view ⇒ no edit key, view=xyz byte-identical to no view; view=edit ⇒ edit has only {editable,editableReason}, article from MAIN`, [
+      // P5.4 D6 (b): the published fixture (manual, published, lastEngine null) now carries a `live` block whose
+      // `editable` is false; its reason depends on the server env (feature_disabled or not_hub_authored) ⇒ not pinned.
+      const liveBlock = (edit.body.edit as Doc | undefined)?.live as Doc | undefined;
+      expect(`T ${k}: no view ⇒ no edit key, view=xyz byte-identical to no view; view=edit ⇒ edit has only {editable,editableReason}${k === "published" ? " + live (editable false)" : ""}, article from MAIN`, [
         "edit" in plain.body, plain.text === xyz.text, Object.keys((edit.body.edit as Doc | undefined) ?? {}).sort(), JSON.stringify(edit.body.article) === JSON.stringify(plain.body.article),
-      ], [false, true, ["editable", "editableReason"], true]);
+        k === "published" ? liveBlock?.editable : null,
+      ], [false, true, k === "published" ? ["editable", "editableReason", "live"] : ["editable", "editableReason"], true, k === "published" ? false : null]);
     }
     const rel = await getA(s6.articles.manualDraftRelationBody.id, "&view=edit");
     expect("T relationship body ⇒ editable true, bodyEditable false", [(rel.body.edit as Doc | undefined)?.editable, (rel.body.edit as Doc | undefined)?.bodyEditable], [true, false]);
@@ -8937,6 +8943,12 @@ async function check7UnitB(expect: Expect7): Promise<void> {
     expect("K10-U2: latest scheduled but NOT hub-authored (CMS-admin schedule) ⇒ edit {editable false, editableReason status} only, latest NOT returned", await load(mk(sched, { hubAuthor: false })), [{ editable: false, editableReason: "status" }, null]);
     expect("K10-U3: hub-authored scheduled article stored WITHOUT an hour ⇒ scheduledFor null", await load(mk({ ...sched, scheduledFor: null })), [{ editable: false, editableReason: "scheduled", scheduledFor: null, version: 4 }, "Latest title"]);
     expect("K10-U4: main row published ⇒ status, latest never used", await load(mk(sched, { main: { workflowStatus: "published" } })), [{ editable: false, editableReason: "status" }, null]);
+    // P5.4 D6 (a): the same row WITH tenantSlug + an explicit live list ⇒ the `live` block (independent of the probe's env).
+    {
+      const s = mk(sched, { main: { workflowStatus: "published" } });
+      const r = await sel.loadHubArticleEdit({ payload: s.payload as never, mainDoc: s.articles.get(5)!.main, tenantId: 1, tenantSlug: "gcv", liveTenants: ["gcv"] } as never);
+      expect("K10-U4b (P5.4 D6 a): main row published + tenantSlug gcv + liveTenants [gcv] ⇒ status + live {editable false, reason scheduled, version}, latest never used", [r.edit, r.latest ? (r.latest as Doc).title : null], [{ editable: false, editableReason: "status", live: { editable: false, reason: "scheduled", version: 3 } }, null]);
+    }
     expect("K10-U5: HUB_ARTICLE_EDIT_SELECT selects scheduledFor (and still version / lastEngine)", [(sel.HUB_ARTICLE_EDIT_SELECT as Doc).scheduledFor ?? null, (sel.HUB_ARTICLE_EDIT_SELECT as Doc).version ?? null, (sel.HUB_ARTICLE_EDIT_SELECT as Doc).lastEngine ?? null], [true, true, true]);
   }
 }
@@ -10575,6 +10587,1069 @@ async function check8P1(expect: (label: string, actual: unknown, wanted: unknown
   expect("P1 lex2 holds an upload id outside the tenant-checked set ⇒ detected (would be unknown_ref at 2.2)", outside, ["9"]);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// APCGHub P5.4 (--setup9 / --check9) — live edit of a published hub article:
+// `PATCH /api/hub/articles/{id}/live` + the `edit.live` block of `view=edit`.
+// LOCAL DISPOSABLE POSTGRES + LOCAL SERVER ONLY: `guard9` (assertLocalTargets +
+// assertNoR2 + assertLocalDb) runs FIRST in every mode, `--unit-only` included,
+// before any DB / HTTP call (exit 2, "refusing").
+//
+//   npx tsx scripts/hub-probe.ts --setup9 --in <f6> --out <f9>
+//       reuses the --setup6 engines (writeonly = the hub write key, author = the
+//       author key); creates the fixtures (a)–(r) of the plan §5 step 1 through the
+//       real routes (/api/hub/articles, /publish, /schedule, /status, /api/hub/media)
+//       and the Local API; tenant p54-hook (frontendUrl = the fake webhook server on
+//       127.0.0.1:$P54_HOOK_PORT, default 3599); grants of writeonly / author / both /
+//       writenoread = every fixture tenant except `wad` (the out-of-grant control).
+//       The server must run with HUB_LIVE_EDIT_TENANTS = dtw,gcv,world-travel-brief,p54-hook
+//       (brief-asia = the switch-off control) and a test CENTRAL_SIGNING_SECRET / CRON_SECRET.
+//   npx tsx scripts/hub-probe.ts --check9 --unit-only
+//   npx tsx scripts/hub-probe.ts --check9 --in <f9>            (23 groups; never --only in a gate run)
+//       re-applies the fixture grants at the start and restores the --setup6 grants of
+//       writeonly / author in `finally` (FIN-2); prints `groups executed N/23, skipped M`
+//       and exits ≠ 0 unless all 23 groups ran and passed. `P54_SELFTEST_DROP_GROUP=<g>`
+//       drops one group (self-test of the counter only).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const P9_GROUPS = ["P1", "P2", "P3", "P3b", "P3c", "P3d", "P4", "P4b", "P5", "P6", "P7", "P8", "P8b", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16", "P17", "P18"] as const;
+const P9_ACTOR = { email: "p9@example.invalid", role: "editor", id: "hub-user-9" } as const;
+const P9_LIVE_TENANTS = ["dtw", "gcv", "world-travel-brief", "p54-hook"] as const;
+const P9_HOOK_TENANT = "p54-hook";
+const P9_CONTROL_TENANT = "brief-asia";
+const P9_OUT_OF_GRANT = "wad";
+const P9_FIXTURE_TENANTS = ["dtw", "gcv", "world-travel-brief", P9_HOOK_TENANT, P9_CONTROL_TENANT] as const;
+type P9Article = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "k" | "l" | "m" | "n";
+
+interface Setup9 {
+  version: 1;
+  setup6: string;
+  out: string;
+  hookPort: number;
+  liveTenants: string[];
+  controlTenant: string;
+  outOfGrantTenant: string;
+  hookTenant: string;
+  translationTenant: string;
+  plainTenant: string;
+  tenants: Record<string, number>;
+  engines: Record<"both" | "writenoread", { id: number; name: string; tokenFile: string }>;
+  originalGrants: Record<"writeonly" | "author", number[]>;
+  fixtureGrant: number[];
+  fixtures: Record<string, { pillar: string; pillarOther: string | null; sub: string | null; tags: string[]; cities: string[]; authors: number[] }>;
+  articles: Record<P9Article, { id: number; tenant: string; slug: string }>;
+  media: { h: number; spare: number; hFile: string };
+  publicReadTokenFile: Record<string, string>;
+}
+
+function guard9(): void {
+  assertLocalTargets();
+  assertNoR2("probe9");
+  try {
+    assertLocalDb(process.env.DATABASE_URL);
+  } catch (e) {
+    refuseLocalDb6(e);
+  }
+}
+
+type Reply9 = { status: number; text: string; body: Doc; ms: number };
+
+async function call9(method: string, path: string, body: unknown, token: string | null, raw?: string): Promise<Reply9> {
+  const t0 = performance.now();
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { ...(body !== undefined || raw !== undefined ? { "content-type": "application/json" } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const text = await res.text();
+  let parsed: Doc = {};
+  try {
+    parsed = JSON.parse(text) as Doc;
+  } catch {
+    /* non-JSON */
+  }
+  return { status: res.status, text, body: parsed, ms: Math.round(performance.now() - t0) };
+}
+
+const P9_PNG = async (r: number) => {
+  const sharp = await loadSharp8();
+  return sharp({ create: { width: 64, height: 48, channels: 3, background: { r, g: 120, b: 160 } } }).png().toBuffer();
+};
+
+async function setup9() {
+  guard9();
+  const inFile = arg("in");
+  const out = arg("out");
+  if (!inFile || !out) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup9 --in <file from --setup6> --out <f9>");
+    process.exit(2);
+  }
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const payload = await getPayload({ config });
+  const tenants = await tenantsBySlug(payload);
+  const hookPort = Number(process.env.P54_HOOK_PORT ?? 3599);
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const author = tok(s6.engines.author.tokenFile);
+  const write = tok(s6.engines.writeonly.tokenFile);
+
+  // (j) the webhook tenant (created once; frontendUrl = the fake webhook server).
+  if (!tenants.has(P9_HOOK_TENANT)) {
+    const t = (await payload.create({
+      collection: "tenants",
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { name: "P54 Hook", slug: P9_HOOK_TENANT, status: "active", defaultLanguage: "en", supportedLanguages: ["en"], frontendUrl: `http://127.0.0.1:${hookPort}`, features: { articles: true, translations: false } } as never,
+    })) as unknown as { id: number };
+    tenants.set(P9_HOOK_TENANT, t.id);
+  } else {
+    await payload.update({ collection: "tenants", id: tenants.get(P9_HOOK_TENANT)!, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: `http://127.0.0.1:${hookPort}` } as never });
+  }
+  // Every tenant's frontendUrl must be null or a local 127.0.0.1 address BEFORE any article is created.
+  const allT = (await payload.find({ collection: "tenants", limit: 100, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+  const badUrl = allT.filter((t) => t.frontendUrl != null && t.frontendUrl !== "" && !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(String(t.frontendUrl)));
+  if (badUrl.length) {
+    console.error(`[setup9] refusing: tenant frontendUrl not local: ${badUrl.map((t) => t.slug).join(", ")}`);
+    process.exit(2);
+  }
+  const tid = (s: string) => need(tenants, s);
+  const fixtureGrant = P9_FIXTURE_TENANTS.map((s) => tid(s));
+  if (fixtureGrant.includes(tid(P9_OUT_OF_GRANT))) throw new Error("fixture grant must exclude wad");
+
+  // (r) grants: writeonly / author (originals recorded), (o) both, (p) writenoread.
+  const grantOf = async (id: number) => (((await payload.findByID({ collection: "content-engines", id, depth: 0, overrideAccess: true })) as unknown as Doc).allowedTenants as unknown[] ?? []).map((x) => Number(toId6(x)));
+  const originalGrants = { writeonly: await grantOf(s6.engines.writeonly.id), author: await grantOf(s6.engines.author.id) };
+  const prev = existsSyncSafe(out) ? (JSON.parse(readFileSync(out, "utf8")) as Partial<Setup9>) : null;
+  if (prev?.originalGrants) Object.assign(originalGrants, prev.originalGrants);
+  const engines = {} as Setup9["engines"];
+  for (const [key, flags] of [["both", { hubRead: true, hubWrite: true, hubAuthor: true }], ["writenoread", { hubRead: false, hubWrite: true, hubAuthor: false }]] as const) {
+    const name = `apcghub-p54-${key}`;
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", allowedTenants: fixtureGrant, ...flags };
+    let id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else id = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", allowedActions: ["import"], ...data } as never })) as unknown as { id: number }).id;
+    const tokenFile = `${out}.${key}.token`;
+    writeFileSync(tokenFile, token, { mode: 0o600 });
+    engines[key] = { id, name, tokenFile };
+  }
+  for (const id of [s6.engines.writeonly.id, s6.engines.author.id]) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: { allowedTenants: fixtureGrant } as never });
+  const readBack = [await grantOf(s6.engines.writeonly.id), await grantOf(s6.engines.author.id), await grantOf(engines.both.id), await grantOf(engines.writenoread.id)].map((g) => [...g].sort((x, y) => x - y));
+  const want = [...fixtureGrant].sort((x, y) => x - y);
+  if (!readBack.every((g) => JSON.stringify(g) === JSON.stringify(want))) throw new Error(`grant read-back mismatch: ${JSON.stringify(readBack)}`);
+
+  // Taxonomy on the two new fixture tenants (dtw / gcv / wtb come from --setup6).
+  const fixtures: Setup9["fixtures"] = {};
+  for (const slug of ["dtw", "gcv", "world-travel-brief"] as const) {
+    const f = s6.fixtures[slug]!;
+    fixtures[slug] = { pillar: "p6-main", pillarOther: "p6-other", sub: "p6-sub", tags: f.tags, cities: f.cities, authors: f.authors };
+  }
+  for (const slug of [P9_HOOK_TENANT, P9_CONTROL_TENANT] as const) {
+    const id = tid(slug);
+    await ensurePillar(payload, id, "p9-main", "P9 Main", 95);
+    const a1 = await ensureAuthor(payload, id, "p9-author-1", "P9 Author One");
+    fixtures[slug] = { pillar: "p9-main", pillarOther: null, sub: null, tags: [], cities: [], authors: [a1] };
+  }
+
+  // Public read tokens (probe9, sha256 stored, raw in 0600 files).
+  const publicReadTokenFile: Record<string, string> = {};
+  for (const slug of P9_FIXTURE_TENANTS) {
+    const id = tid(slug);
+    const t = randomBytes(24).toString("hex");
+    const tDoc = (await payload.findByID({ collection: "tenants", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const rest = ((tDoc.readTokens as Doc[] | undefined) ?? []).filter((r) => r.label !== "probe9");
+    await payload.update({ collection: "tenants", id, overrideAccess: true, context: { disableRevalidate: true }, data: { readTokens: [...rest, { label: "probe9", tokenHash: sha256Hex6(t), tokenPrefix: t.slice(0, 6), status: "active" }] } as never });
+    const f = `${out}.public-${slug}.token`;
+    writeFileSync(f, t, { mode: 0o600 });
+    publicReadTokenFile[slug] = f;
+  }
+
+  const run = runId6();
+  let seq = 0;
+  const draft = async (tenant: string, extra: Doc = {}) => {
+    const fx = fixtures[tenant]!;
+    const slug = `p9-${run}-${seq++}`;
+    const r = await call9("POST", "/api/hub/articles", {
+      tenant, title: `P9 ${tenant} ${slug}`, slug, actor: P9_ACTOR, pillarSlug: fx.pillar, ...(fx.sub ? { subSectionSlug: fx.sub } : {}), authorId: fx.authors[0],
+      bodyMarkdown: "P9 fixture body: a published hub article.", ...extra,
+    }, author);
+    if (r.status !== 201) throw new Error(`setup9 draft ${tenant} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return { id: r.body.id as number, version: r.body.version as number, slug, tenant };
+  };
+  const publish = async <D extends { id: number; version: number; tenant: string }>(d: D): Promise<D> => {
+    const r = await call9("POST", `/api/hub/articles/${d.id}/publish`, { tenant: d.tenant, expectedVersion: d.version, actor: P9_ACTOR }, write);
+    if (r.status !== 200) throw new Error(`setup9 publish ${d.id} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return d;
+  };
+  const latestV = async (id: number) => ((await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true })) as unknown as Doc).version as number;
+  const arts = {} as Setup9["articles"];
+  const keep = (k: P9Article, d: { id: number; tenant: string; slug: string }) => {
+    arts[k] = { id: d.id, tenant: d.tenant, slug: d.slug };
+  };
+  const hubCtx = { hubWrite: { actor: P9_ACTOR, reason: "probe9 fixture" }, engineId: s6.engines.writeonly.id, disableRevalidate: true };
+
+  keep("a", await publish(await draft("gcv")));
+  const b = await publish(await draft("gcv"));
+  await payload.update({ collection: "articles", id: b.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: "P9 B SECRET DRAFT TITLE" } as never });
+  keep("b", b);
+  const c = await draft("gcv");
+  const at = new Date(Math.ceil((Date.now() + 120 * 60_000) / 60_000) * 60_000).toISOString();
+  const cs = await call9("POST", `/api/hub/articles/${c.id}/schedule`, { tenant: "gcv", expectedVersion: c.version, actor: P9_ACTOR, scheduledFor: at }, write);
+  if (cs.status !== 200) throw new Error(`setup9 schedule (c) ⇒ ${cs.status} ${cs.text.slice(0, 200)}`);
+  keep("c", c);
+  const d = await publish(await draft("gcv"));
+  await payload.update({ collection: "articles", id: d.id, overrideAccess: true, depth: 0, context: hubCtx, data: { workflowStatus: "hidden" } as never });
+  keep("d", d);
+  const e = await publish(await draft("gcv"));
+  const es = await call9("POST", `/api/hub/articles/${e.id}/status`, { tenant: "gcv", to: "archived", expectedStatus: "published", reason: "probe9 hide", actor: P9_ACTOR }, write);
+  if (es.status !== 200) throw new Error(`setup9 hide (e) ⇒ ${es.status} ${es.text.slice(0, 200)}`);
+  keep("e", e);
+  const fSlug = `p9-${run}-engine`;
+  const fr = await call9("POST", "/api/engine/intake", { publicationId: "dtw", title: `P9 engine ${run}`, pillarSlug: "p6-main", body_markdown: "P9 engine body.", byline: "P9 Engine Byline", slug: fSlug, engineDraftId: `p9-eng-${run}` }, process.env.SEED_ENGINE_TOKEN ?? null);
+  if (fr.status !== 201) throw new Error(`setup9 intake (f) ⇒ ${fr.status} ${fr.text.slice(0, 200)}`);
+  arts.f = { id: fr.body.id as number, tenant: "dtw", slug: fSlug };
+  const gSlug = `p9-${run}-cmshand`;
+  const g = (await payload.create({
+    collection: "articles", overrideAccess: true, locale: "en", context: { disableRevalidate: true },
+    data: { tenant: tid("gcv"), title: `P9 CMS hand ${run}`, slug: gSlug, origin: "manual", _status: "published", workflowStatus: "published", pillar: (await ensurePillar(payload, tid("gcv"), "p6-main", "P6 Main", 90)), author: fixtures.gcv!.authors[0], readMin: 2, body: { root: { type: "root", version: 1, direction: "ltr", format: "", indent: 0, children: [{ type: "paragraph", version: 1, direction: "ltr", format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: "CMS hand body.", format: 0, detail: 0, mode: "normal", style: "" }] }] } } } as never,
+  })) as unknown as { id: number };
+  arts.g = { id: g.id, tenant: "gcv", slug: gSlug };
+  // (h) published with a body image (P5.3 media route) + one spare media of gcv not in the body.
+  const hd = await draft("gcv");
+  const mpH = await multipart8([["file", { data: await P9_PNG(10), type: "image/png" }], ["alt", "P9 alt"], ["articleId", String(hd.id)], ["actorRole", "editor"], ["actorId", "hub-user-9"]]);
+  const mh = await fetch(`${BASE}/api/hub/media?tenant=gcv`, { method: "POST", headers: { "content-type": mpH.type, "content-length": String(mpH.body.length), authorization: `Bearer ${author}` }, body: new Uint8Array(mpH.body) });
+  const mhBody = (await mh.json()) as Doc;
+  if (mh.status !== 201) throw new Error(`setup9 media (h) ⇒ ${mh.status} ${JSON.stringify(mhBody).slice(0, 200)}`);
+  const mpS = await multipart8([["file", { data: await P9_PNG(200), type: "image/png" }], ["alt", "P9 spare"], ["articleId", String(hd.id)], ["actorRole", "editor"], ["actorId", "hub-user-9"]]);
+  const ms = await fetch(`${BASE}/api/hub/media?tenant=gcv`, { method: "POST", headers: { "content-type": mpS.type, "content-length": String(mpS.body.length), authorization: `Bearer ${author}` }, body: new Uint8Array(mpS.body) });
+  const msBody = (await ms.json()) as Doc;
+  if (ms.status !== 201) throw new Error(`setup9 media (spare) ⇒ ${ms.status}`);
+  const media = mhBody.media as Doc;
+  const mUrl = String(media.url ?? "");
+  const mRow = (await rawDb(payload).execute(sql`SELECT filename FROM media WHERE id = ${media.id as number}`)) as { rows?: Doc[] };
+  const hFile = String(mRow.rows?.[0]?.filename ?? "");
+  if (!mUrl.startsWith("/api/media/file/") || !hFile || !existsSyncSafe(`media/${hFile}`)) {
+    console.error(`[setup9] refusing: fixture (h) media is not on local disk (url=${mUrl.slice(0, 40)}, file=${hFile ? "named" : "none"}) — R2 must be off`);
+    process.exit(2);
+  }
+  const hv = await latestV(hd.id);
+  const hp = await call9("PATCH", `/api/hub/articles/${hd.id}`, { tenant: "gcv", expectedVersion: hv, actor: P9_ACTOR, bodyMarkdown: `P9 image intro.\n\n![](cms-media:${media.id as number})\n\nP9 image outro.` }, author);
+  if (hp.status !== 200) throw new Error(`setup9 (h) body ⇒ ${hp.status} ${hp.text.slice(0, 200)}`);
+  keep("h", await publish({ ...hd, version: hp.body.version as number }));
+  keep("i", await publish(await draft("world-travel-brief", fixtures["world-travel-brief"]!.cities.length ? { citySlugs: fixtures["world-travel-brief"]!.cities } : {})));
+  // (k) scheduled, then published with EXACTLY the cron's update (scheduledFor stays).
+  const k = await draft("gcv");
+  const ks = await call9("POST", `/api/hub/articles/${k.id}/schedule`, { tenant: "gcv", expectedVersion: k.version, actor: P9_ACTOR, scheduledFor: at }, write);
+  if (ks.status !== 200) throw new Error(`setup9 schedule (k) ⇒ ${ks.status}`);
+  const kRaw = (await payload.findByID({ collection: "articles", id: k.id, draft: true, depth: 0, overrideAccess: true })) as unknown as Doc;
+  await payload.update({ collection: "articles", id: k.id, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: kRaw.publishedAt ?? kRaw.scheduledFor ?? new Date().toISOString() } as never });
+  keep("k", k);
+  // (l) published with a body node that is not Markdown (relationship).
+  const l = await draft("gcv");
+  await payload.update({
+    collection: "articles", id: l.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true },
+    data: { body: { root: { type: "root", version: 1, direction: "ltr", format: "", indent: 0, children: [{ type: "paragraph", version: 1, direction: "ltr", format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: "Relation:", format: 0, detail: 0, mode: "normal", style: "" }] }, { type: "relationship", format: "", version: 2, relationTo: "articles", value: arts.a.id }] } } } as never,
+  });
+  keep("l", await publish({ ...l, version: await latestV(l.id) }));
+  keep("m", await publish(await draft(P9_CONTROL_TENANT)));
+  keep("n", await draft("gcv"));
+
+  const f9: Setup9 = {
+    version: 1, setup6: inFile, out, hookPort, liveTenants: [...P9_LIVE_TENANTS], controlTenant: P9_CONTROL_TENANT, outOfGrantTenant: P9_OUT_OF_GRANT,
+    hookTenant: P9_HOOK_TENANT, translationTenant: "world-travel-brief", plainTenant: "gcv",
+    tenants: Object.fromEntries([...P9_FIXTURE_TENANTS, P9_OUT_OF_GRANT].map((s) => [s, tid(s)])),
+    engines, originalGrants, fixtureGrant, fixtures, articles: arts, media: { h: media.id as number, spare: (msBody.media as Doc).id as number, hFile }, publicReadTokenFile,
+  };
+  writeFileSync(out, JSON.stringify(f9, null, 2), { mode: 0o600 });
+  console.log(`[setup9] wrote ${out} (fixtures a–n, engines both / writenoread, grants = ${P9_FIXTURE_TENANTS.join(",")}; ${P9_OUT_OF_GRANT} out of grant; ${P9_CONTROL_TENANT} = switch-off control; tokens in 0600 files, not printed)`);
+  process.exit(0);
+}
+
+function existsSyncSafe(p: string): boolean {
+  try {
+    readFileSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── --check9 --unit-only ─────────────────────────────────────────────────────
+
+async function check9Unit(expect: (label: string, actual: unknown, wanted: unknown) => void): Promise<void> {
+  const purem = await import("../src/lib/hub-author-live-pure");
+  const input = await import("../src/lib/hub-author-input");
+  const limits = await import("../src/lib/hub-author-limits");
+  const core = await import("../src/lib/hub-author-live-core");
+  expect("U-1: HUB_LIVE_FIELD_KEYS = HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption (15)", [purem.HUB_LIVE_FIELD_KEYS.length, [...purem.HUB_LIVE_FIELD_KEYS]], [15, input.HUB_DRAFT_FIELD_KEYS.filter((k) => !["slug", "heroImageId", "leadImageCaption"].includes(k))]);
+  expect("U-2: HUB_FIELD_CODES still 23 (no new code, hard stop 9)", limits.HUB_FIELD_CODES.length, 23);
+  expect("U-3: LIVE_KEY_COLUMNS covers exactly the 15 live keys", Object.keys(core.LIVE_KEY_COLUMNS).sort(), [...purem.HUB_LIVE_FIELD_KEYS].sort());
+  const env = (raw: string | undefined) => purem.liveEditTenants(raw === undefined ? {} : { HUB_LIVE_EDIT_TENANTS: raw }).includes("world-travel-brief");
+  expect("U-4: liveEditTenants — 8 env vectors (unset, '', ' ', wtb, *, WORLD-TRAVEL-BRIEF, 'gcv,,world-travel-brief', 'world-travel-brief ,gcv')", [undefined, "", " ", "wtb", "*", "WORLD-TRAVEL-BRIEF", "gcv,,world-travel-brief", "world-travel-brief ,gcv"].map(env), [false, false, false, false, false, false, true, true]);
+  const g = (main: Doc, latest: Doc, hub = true) => purem.liveGateReason({ main, latest, isHubAuthored: hub });
+  const M = { origin: "manual", workflowStatus: "published", _status: "published", version: 3, engineDraftId: null };
+  expect("U-5: liveGateReason table (ok, engine, scheduled main / latest, hidden, archived, draft, diverged version / _status, CMS-hand, engineDraftId)", [
+    g(M, M), g({ ...M, origin: "engine" }, M), g({ ...M, workflowStatus: "scheduled" }, M), g(M, { ...M, workflowStatus: "scheduled" }), g({ ...M, workflowStatus: "hidden" }, M), g({ ...M, workflowStatus: "archived" }, M),
+    g({ ...M, workflowStatus: "draft", _status: "draft" }, M), g(M, { ...M, version: 4 }), g(M, { ...M, _status: "draft" }), g(M, M, false), g({ ...M, engineDraftId: "x" }, M),
+  ], [null, "origin", "scheduled", "scheduled", "status", "status", "status", "draft_diverged", "draft_diverged", "not_hub_authored", "not_hub_authored"]);
+  const pl = (fields: unknown) => {
+    const r = purem.parseLiveBody({ tenant: "gcv", expectedVersion: 3, actor: { email: "a@b.co", role: "editor" }, fields });
+    return r.ok ? "ok" : [r.status, r.body.status, (r.body as Doc).reason ?? (r.body as Doc).field ?? null];
+  };
+  expect("U-6: parseLiveBody locks: slug / heroImageId / leadImageCaption / flags.breaking|aiAssisted|sponsored|affiliate; deepDive editable", [
+    pl({ slug: "x" }), pl({ heroImageId: 1 }), pl({ leadImageCaption: "c" }), pl({ flags: { breaking: false } }), pl({ flags: { aiAssisted: true } }), pl({ flags: { sponsored: false } }), pl({ flags: { affiliate: false } }), pl({ flags: { deepDive: true } }),
+  ], [[422, "not_live_editable", "slug_locked"], [422, "not_live_editable", "media_locked"], [422, "not_live_editable", "media_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], "ok"]);
+  expect("U-7: parseLiveBody structure 400s (fields.tenant / fields.actor / fields.__proto__ / missing actor)", [
+    pl({ tenant: "x" }), pl({ actor: {} }), pl(JSON.parse('{"__proto__":{"a":1}}')),
+    (() => { const r = purem.parseLiveBody({ tenant: "gcv", expectedVersion: 3, fields: {} }); return r.ok ? "ok" : [r.status, (r.body as Doc).field]; })(),
+  ], [[400, "bad_request", "unknown field: fields.tenant"], [400, "bad_request", "unknown field: fields.actor"], [400, "bad_request", "unknown field: fields.__proto__"], [400, "actor"]]);
+  // guard9 self-tests: each child must exit EXACTLY 2 with "refusing" on stderr.
+  const child = (env: Record<string, string>) => {
+    const r = spawnSync("npx", ["tsx", "scripts/hub-probe.ts", "--check9", "--unit-only"], { env: { ...process.env, P54_GUARD_CHILD: "1", ...env }, encoding: "utf8", timeout: 120_000 });
+    return [r.status, /refusing/.test(r.stderr ?? "")];
+  };
+  if (process.env.P54_GUARD_CHILD !== "1") {
+    expect("U-8: guard9 self-tests (R2_BUCKET=x / HUB_PROBE_BASE=https://x.example / DATABASE_URL=db.example.com / ?host=evil) ⇒ exit 2 + 'refusing'", [
+      child({ R2_BUCKET: "x" }), child({ HUB_PROBE_BASE: "https://x.example" }), child({ DATABASE_URL: "postgres://u@db.example.com/x" }), child({ DATABASE_URL: "postgres://u@localhost/x?host=evil" }),
+    ], [[2, true], [2, true], [2, true], [2, true]]);
+  }
+}
+
+// ── --check9 --in <f9> ───────────────────────────────────────────────────────
+
+async function check9() {
+  guard9();
+  const { state, expect } = makeExpect();
+  if (flag("unit-only")) {
+    await check9Unit(expect);
+    console.log(`\n[check9] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup9 --in <f6> --out <f9> | --check9 --in <f9> | --check9 --unit-only");
+    process.exit(2);
+  }
+  const only = (arg("only") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const drop = (process.env.P54_SELFTEST_DROP_GROUP ?? "").trim();
+  const s9 = JSON.parse(readFileSync(inFile, "utf8")) as Setup9;
+  const s6 = JSON.parse(readFileSync(s9.setup6, "utf8")) as Setup6;
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const T = {
+    author: tok(s6.engines.author.tokenFile),
+    write: tok(s6.engines.writeonly.tokenFile),
+    both: tok(s9.engines.both.tokenFile),
+    writenoread: tok(s9.engines.writenoread.tokenFile),
+  };
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const rows = async (q: unknown) => ((await db.execute(q)) as { rows?: Doc[] }).rows ?? [];
+  const core = await import("../src/lib/hub-author-live-core");
+  const input = await import("../src/lib/hub-author-input");
+  const { verifySigned } = await import("../src/lib/crypto");
+  const A = s9.articles;
+  const fx = (t: string) => s9.fixtures[t]!;
+  const run = runId6();
+  let seq = 0;
+  const executed: string[] = [];
+
+  // ── helpers ──
+  const mainOf = async (id: number) => (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const latestOf = async (id: number) => (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const mainAll = async (id: number) => (await payload.findByID({ collection: "articles", id, depth: 0, locale: "all" as never, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const rowSnap = async (id: number) => JSON.stringify((await rows(sql`SELECT a.version::int AS v, a._status::text AS s, a.workflow_status::text AS w, a.published_at AS p, a.updated_at AS u, l.title AS t, l.dek AS d, l.slug AS g FROM articles a LEFT JOIN articles_locales l ON l._parent_id = a.id AND l._locale = 'en' WHERE a.id = ${id}`))[0] ?? null);
+  const verCount = async (id: number) => Number((await rows(sql`SELECT count(*)::int AS n FROM _articles_v WHERE parent_id = ${id}`))[0]?.n ?? 0);
+  const actCount = async (id: number) => Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE target_id = ${String(id)} AND event_type = 'human_edit'`))[0]?.n ?? 0);
+  const maxLog = async () => Number((await rows(sql`SELECT coalesce(max(id), 0)::int AS m FROM activity_log`))[0]?.m ?? 0);
+  const interr = async () => Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'integration_error'`))[0]?.n ?? 0);
+  const jobs = async (id: number) => (await rows(sql`SELECT target_locale::text AS l, source_version::int AS v FROM translation_jobs WHERE article_id = ${id} ORDER BY id`)) as { l: string; v: number }[];
+  const pubTok = (t: string) => tok(s9.publicReadTokenFile[t]!);
+  const pubGet = (t: string, slug: string) => call9("GET", `/api/public/articles/${encodeURIComponent(slug)}`, undefined, pubTok(t));
+  const sha = (s: string) => sha256Hex6(s);
+  const live = (id: number, tenant: string, expectedVersion: number | undefined, fields: unknown, token: string | null = T.write) =>
+    call9("PATCH", `/api/hub/articles/${id}/live`, { tenant, expectedVersion, actor: P9_ACTOR, fields }, token);
+  const liveRaw = (id: number | string, body: unknown, token: string | null = T.write) => call9("PATCH", `/api/hub/articles/${id}/live`, body, token);
+  const getEdit = (id: number, tenant: string, view = "&view=edit") => call9("GET", `/api/hub/articles/${id}?tenant=${tenant}${view}`, undefined, T.author);
+  const vOf = async (id: number) => (await mainOf(id)).version as number;
+  const mkDraft = async (tenant: string, extra: Doc = {}) => {
+    const f = fx(tenant);
+    const slug = `p9c-${run}-${seq++}`;
+    const r = await call9("POST", "/api/hub/articles", {
+      tenant, title: `P9C ${tenant} ${slug}`, slug, actor: P9_ACTOR, pillarSlug: f.pillar, ...(f.sub ? { subSectionSlug: f.sub } : {}), authorId: f.authors[0],
+      bodyMarkdown: "P9C body text for a live edit.", ...extra,
+    }, T.author);
+    if (r.status !== 201) throw new Error(`mkDraft ${tenant} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return { id: r.body.id as number, version: r.body.version as number, slug, tenant };
+  };
+  const mkPublished = async (tenant: string, extra: Doc = {}) => {
+    const d = await mkDraft(tenant, extra);
+    const r = await call9("POST", `/api/hub/articles/${d.id}/publish`, { tenant, expectedVersion: d.version, actor: P9_ACTOR }, T.write);
+    if (r.status !== 200) throw new Error(`publish ${d.id} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return { ...d, version: await vOf(d.id) };
+  };
+  const inproc = async (id: number, tenant: string, expectedVersion: number, fields: unknown, d: Doc = {}) => {
+    const req = new Request(`${BASE}/api/hub/articles/${id}/live`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${T.write}`, "content-type": "application/json" },
+      body: JSON.stringify({ tenant, expectedVersion, actor: P9_ACTOR, fields }),
+    });
+    const res = await core.handleHubLiveUpdateWith(req, { params: Promise.resolve({ id: String(id) }) }, { getPayload: async () => payload, liveTenants: s9.liveTenants, ...d } as never);
+    const text = await res.text();
+    let body: Doc = {};
+    try {
+      body = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, text, body };
+  };
+  const noLock = { lockRow: async () => {} };
+  const DIVERGED = [409, { ok: false, status: "draft_diverged", reason: "article has unpublished changes" }];
+  const NLE = (reason: string) => [422, { ok: false, status: "not_live_editable", reason }];
+  const pair = (r: { status: number; body: Doc }) => [r.status, r.body];
+  const group = async (name: (typeof P9_GROUPS)[number], fn: () => Promise<void>) => {
+    if (only.length && !only.includes(name)) return;
+    if (drop === name) return;
+    executed.push(name);
+    console.log(`\n── ${name} ──`);
+    try {
+      await fn();
+    } catch (e) {
+      expect(`${name}: group threw`, `${(e as Error)?.name}: ${String((e as Error)?.message).slice(0, 300)}`, "no exception");
+    }
+  };
+
+  // The fake webhook server (P10 / P11): a child process on 127.0.0.1:<hookPort>; on each POST it
+  // GETs the public detail of the signed slug (tenant read token by the signed tenant) and logs both.
+  const hookLog = `${inFile}.hooks.jsonl`;
+  writeFileSync(hookLog, "", { mode: 0o600 });
+  const { spawn } = await import("node:child_process");
+  const hookSrc = `
+    const http = require("http"), fs = require("fs");
+    const port = Number(process.env.P54_HOOK_PORT), out = process.env.P54_HOOK_OUT, base = process.env.P54_BASE, pre = process.env.P54_TOKEN_PREFIX;
+    http.createServer((req, res) => {
+      let b = ""; req.on("data", (c) => (b += c));
+      req.on("end", async () => {
+        let token = null, seen = null;
+        try { token = JSON.parse(b).token; } catch {}
+        try {
+          const claims = JSON.parse(Buffer.from(String(token).split(".")[0].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+          const t = fs.readFileSync(pre + ".public-" + claims.tenant + ".token", "utf8").trim();
+          const r = await fetch(base + "/api/public/articles/" + encodeURIComponent(claims.slug), { headers: { authorization: "Bearer " + t } });
+          const j = await r.json().catch(() => null);
+          seen = { status: r.status, title: j && j.doc ? j.doc.title : null };
+        } catch (e) { seen = { error: String(e && e.name) }; }
+        fs.appendFileSync(out, JSON.stringify({ at: Date.now(), path: req.url, token, seen }) + "\\n");
+        res.writeHead(200, { "content-type": "application/json" }); res.end('{"ok":true}');
+      });
+    }).listen(port, "127.0.0.1", () => console.log("hook up"));`;
+  const hook = spawn(process.execPath, ["-e", hookSrc], { env: { ...process.env, P54_HOOK_PORT: String(s9.hookPort), P54_HOOK_OUT: hookLog, P54_BASE: BASE, P54_TOKEN_PREFIX: s9.out }, stdio: ["ignore", "pipe", "pipe"] });
+  await new Promise<void>((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error("hook server did not start")), 10_000);
+    hook.stdout.on("data", (d: Buffer) => {
+      if (String(d).includes("hook up")) {
+        clearTimeout(to);
+        resolve();
+      }
+    });
+  });
+  const hooks = () =>
+    readFileSync(hookLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { at: number; path: string; token: string; seen: Doc });
+  const claimsOf = (t: string) => {
+    try {
+      return JSON.parse(Buffer.from(t.split(".")[0]!.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")) as Doc;
+    } catch {
+      return {};
+    }
+  };
+
+  // Re-apply the fixture grants (a previous --check9 restored the --setup6 ones).
+  const setGrant = (id: number, ids: number[]) => payload.update({ collection: "content-engines", id, overrideAccess: true, data: { allowedTenants: ids } as never });
+  await setGrant(s6.engines.writeonly.id, s9.fixtureGrant);
+  await setGrant(s6.engines.author.id, s9.fixtureGrant);
+  const wtbId = s9.tenants["world-travel-brief"]!;
+  const wtbDoc = (await payload.findByID({ collection: "tenants", id: wtbId, depth: 0, overrideAccess: true })) as unknown as Doc;
+  const wtbFrontend = (wtbDoc.frontendUrl as string | null | undefined) ?? null;
+
+  try {
+    // ══ P1 — after /publish: main + latest published, same version ═════════
+    await group("P1", async () => {
+      const a = A.a.id;
+      const m = await mainOf(a);
+      const l = await latestOf(a);
+      const ua = (await rows(sql`SELECT updated_at AS u FROM articles WHERE id = ${a}`))[0]?.u;
+      const uv = (await rows(sql`SELECT updated_at AS u FROM _articles_v WHERE parent_id = ${a} AND latest = true ORDER BY id DESC LIMIT 1`))[0]?.u;
+      console.log(`OBS   P1 updatedAt main=${String(ua)} newest version row=${String(uv)} (recorded, not decided — CMS-9)`);
+      expect("P1: (AC2) after /publish: main _status + workflowStatus published, latest _status published, latest.version === main.version", [m._status, m.workflowStatus, l._status, l.version === m.version], ["published", "published", "published", true]);
+    });
+
+    // ══ P2 — the happy path, every key, body identity, D12 controls ═══════
+    await group("P2", async () => {
+      const a = A.a.id;
+      const v0 = await vOf(a);
+      const ver0 = await verCount(a);
+      const act0 = await actCount(a);
+      const r = await live(a, "gcv", v0, { title: `P9 A title ${run}`, bodyMarkdown: `P9 A body edited live ${run}.` });
+      const m = await mainOf(a);
+      expect("P2-1: (AC1) title + body ⇒ 200, version (read back) = +1, changed [title, bodyMarkdown], still published, +1 _articles_v, +1 human_edit", [
+        r.status, r.body.version, r.body.changed, m.version, m._status, m.workflowStatus, (await verCount(a)) - ver0, (await actCount(a)) - act0,
+      ], [200, v0 + 1, ["title", "bodyMarkdown"], v0 + 1, "published", "published", 1, 1]);
+      // Every live key, one at a time (CMS3-1). Current values from view=edit (slugs) + the main row (ids / text).
+      const f = fx("gcv");
+      const cur = async () => ((await getEdit(a, "gcv")).body.edit as Doc).live as Doc;
+      // Re-run safety (not asserted): start from no secondary row, so the pillar flip can never duplicate it.
+      if (((await cur()).secondary as unknown[]).length) await live(a, "gcv", await vOf(a), { secondary: [] });
+      const flip = <T,>(x: T, y: T, now: unknown) => (JSON.stringify(now) === JSON.stringify(x) ? y : x);
+      const steps: [string, (c: Doc, m: Doc) => Doc, string[]][] = [
+        ["title", (_c, mm) => ({ title: `${String(mm.title)} +` }), ["title"]],
+        ["dek", (_c, mm) => ({ dek: mm.dek === "P9 dek one" ? "P9 dek two" : "P9 dek one" }), ["dek"]],
+        ["bodyMarkdown", (_c, mm) => ({ bodyMarkdown: `P9 body ${String(mm.version)}.` }), ["bodyMarkdown"]],
+        ["takeaways", (_c, mm) => ({ takeaways: mm.takeaways === "k1" ? ["k2"] : ["k1"] }), ["takeaways"]],
+        ["readMin", (_c, mm) => ({ readMin: mm.readMin === 7 ? 8 : 7 }), ["readMin"]],
+        ["pillarSlug", (c) => ({ pillarSlug: c.pillarSlug === "p6-main" ? "p6-other" : "p6-main", subSectionSlug: "p6-sub" }), ["pillarSlug", "subSectionSlug"]],
+        ["secondary", (c) => ({ secondary: (c.secondary as unknown[]).length ? [] : [{ pillarSlug: c.pillarSlug === "p6-main" ? "p6-other" : "p6-main", subSectionSlug: null }] }), ["secondary"]],
+        ["tagSlugs", (c) => ({ tagSlugs: flip([f.tags[0]], [f.tags[1]], c.tagSlugs) }), ["tagSlugs"]],
+        ["countrySlugs", (c) => ({ countrySlugs: flip(["vietnam"], ["singapore"], c.countrySlugs) }), ["countrySlugs"]],
+        ["authorId", (c) => ({ authorId: c.authorId === f.authors[0] ? f.authors[1] : f.authors[0] }), ["authorId"]],
+        ["coAuthorIds", (c) => ({ coAuthorIds: (c.coAuthorIds as unknown[]).length ? [] : [f.authors[1]] }), ["coAuthorIds"]],
+        ["flags.deepDive", (c) => ({ flags: { deepDive: !(c.flags as Doc).deepDive } }), ["flags"]],
+        ["flags.longHaul", (c) => ({ flags: { longHaul: !(c.flags as Doc).longHaul } }), ["flags"]],
+        ["sponsor", (c) => ({ sponsor: c.sponsor ? null : "P9 Sponsor" }), ["sponsor"]],
+      ];
+      const got: unknown[] = [];
+      for (const [name, mk, want] of steps) {
+        const c = await cur();
+        const mm = await mainOf(a);
+        const rr = await live(a, "gcv", mm.version as number, mk(c, mm));
+        got.push([name, rr.status, rr.body.changed ?? rr.body]);
+        if (rr.status !== 200 || JSON.stringify(rr.body.changed) !== JSON.stringify(want)) console.log(`OBS   P2 key ${name}: ${rr.status} ${rr.text.slice(0, 300)}`);
+      }
+      expect("P2-2: (CMS3-1) every live key on (a), one value change each ⇒ 200, changed = exactly that key, never 409", got, steps.map(([n, , w]) => [n, 200, w]));
+      // citySlugs on the translation tenant (i) (the only seed tenant with citiesMap).
+      const i = A.i.id;
+      const ci = ((await getEdit(i, "world-travel-brief")).body.edit as Doc).live as Doc;
+      const vi = await vOf(i);
+      const cities = fx("world-travel-brief").cities;
+      const rc = await live(i, "world-travel-brief", vi, { citySlugs: (ci.citySlugs as unknown[]).length ? [] : cities });
+      expect("P2-3: citySlugs on (i) (translation tenant): 200, changed [citySlugs], version >= +1", [rc.status, rc.body.changed, (rc.body.version as number) >= vi + 1], [200, ["citySlugs"], true]);
+      // (h): dek only, then tags only ⇒ the Lexical body is byte-identical.
+      const h = A.h.id;
+      const b0 = JSON.stringify((await mainAll(h)).body);
+      const rd = await live(h, "gcv", await vOf(h), { dek: `P9 H dek ${run}` });
+      const ht = ((await getEdit(h, "gcv")).body.edit as Doc).live as Doc;
+      const rt = await live(h, "gcv", await vOf(h), { tagSlugs: flip([f.tags[0]], [f.tags[1]], ht.tagSlugs) });
+      expect("P2-4: (h) dek only, then tagSlugs only ⇒ 200 / 200, body tree byte-identical (locale all)", [rd.status, rt.status, JSON.stringify((await mainAll(h)).body) === b0], [200, 200, true]);
+      // D12 controls (no interleaving): (a), (h), (i), (k) ⇒ 200, never a false 409.
+      const ctl: unknown[] = [];
+      for (const [k, t] of [["a", "gcv"], ["h", "gcv"], ["i", "world-travel-brief"], ["k", "gcv"]] as const) {
+        const id = A[k].id;
+        const rr = await live(id, t, await vOf(id), { dek: `P9 control ${k} ${run}` });
+        ctl.push([k, rr.status]);
+      }
+      expect("P2-5: D12 control (no interleaving) on (a) (h) (i) (k) ⇒ 200 each (field diff empty)", ctl, [["a", 200], ["h", 200], ["i", 200], ["k", 200]]);
+    });
+
+    // ══ P3 — latest ≠ main ⇒ 409 draft_diverged, nothing leaks ════════════
+    await group("P3", async () => {
+      const b = A.b.id;
+      const pub0 = await pubGet("gcv", A.b.slug);
+      const ver0 = await verCount(b);
+      const act0 = await actCount(b);
+      const r = await live(b, "gcv", await vOf(b), { dek: `P9 B dek ${run}` });
+      const pub1 = await pubGet("gcv", A.b.slug);
+      const l = await latestOf(b);
+      expect("P3-1: (AC3) (b) latest ≠ main ⇒ 409 draft_diverged; body carries no draft content; public DETAIL sha256 unchanged; draft kept; 0 human_edit, 0 _articles_v", [
+        ...pair(r), r.text.includes("SECRET"), sha(pub0.text) === sha(pub1.text), pub1.status, l._status, String(l.title).includes("SECRET"), (await actCount(b)) - act0, (await verCount(b)) - ver0,
+      ], [...DIVERGED, false, true, 200, "draft", true, 0, 0]);
+      let called = 0;
+      const ri = await inproc(b, "gcv", await vOf(b), { dek: "x" }, { beforeWrite: async () => { called++; } });
+      expect("P3-2: in-process twin with a spy beforeWrite ⇒ 409 draft_diverged and the spy is NOT called (gate before the write)", [...pair(ri), called], [...DIVERGED, 0]);
+    });
+
+    // ══ P3b — a Save-Draft slips in (D15 seam, real lockRow) ══════════════
+    await group("P3b", async () => {
+      const x = await mkPublished("gcv");
+      const snap0 = await rowSnap(x.id);
+      const pub0 = await pubGet("gcv", x.slug);
+      const act0 = await actCount(x.id);
+      let verAfterSeam = -1;
+      const r = await inproc(x.id, "gcv", x.version, { dek: `P9 3b live dek ${run}` }, {
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: x.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P9 3b SLIPPED DRAFT ${run}` } as never });
+          verAfterSeam = await verCount(x.id);
+        },
+      });
+      const pub1 = await pubGet("gcv", x.slug);
+      const l = await latestOf(x.id);
+      expect("P3b: (AC29 / AC34) Save-Draft through beforeWrite (2nd connection, REAL lockRow) ⇒ 409 draft_diverged + rollback: row snapshot unchanged, public title unchanged, draft kept, phantom human_edit = 1, _articles_v delta 0 (counted from after the seam's draft)", [
+        ...pair(r), (await rowSnap(x.id)) === snap0, (pub1.body.doc as Doc | undefined)?.title === (pub0.body.doc as Doc | undefined)?.title, l._status, (await actCount(x.id)) - act0, (await verCount(x.id)) - verAfterSeam,
+      ], [...DIVERGED, true, true, "draft", 1, 0]);
+    });
+
+    // ══ P3c — translation tenant (i): Save-Draft en / fr; a NON-draft write (isolated D12) ══
+    await group("P3c", async () => {
+      const t = "world-travel-brief";
+      const x = await mkPublished(t);
+      const snap0 = await rowSnap(x.id);
+      const r1 = await inproc(x.id, t, x.version, { dek: `P9 3c dek ${run}` }, {
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: x.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P9 3c SLIPPED EN ${run}` } as never });
+        },
+      });
+      expect("P3c-i: translation tenant, Save-Draft (en title) slips in, REAL lockRow ⇒ 409 + rollback, row unchanged", [...pair(r1), (await rowSnap(x.id)) === snap0], [...DIVERGED, true]);
+      const y = await mkPublished(t);
+      const snapY = await rowSnap(y.id);
+      const r2 = await inproc(y.id, t, y.version, { dek: `P9 3c dek fr ${run}` }, {
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: y.id, draft: true, overrideAccess: true, locale: "fr" as never, context: { disableRevalidate: true }, data: { title: `P9 3c GLISSÉ FR ${run}` } as never });
+        },
+      });
+      expect("P3c-i(fr): (ADV3-1) Save-Draft changing ONLY the fr title ⇒ 409 + rollback, row unchanged", [...pair(r2), (await rowSnap(y.id)) === snapY], [...DIVERGED, true]);
+      const z = await mkPublished(t);
+      const r3 = await inproc(z.id, t, z.version, { dek: `P9 3c live dek ii ${run}` }, {
+        ...noLock,
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: z.id, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P9 3c NONDRAFT ${run}` } as never });
+        },
+      });
+      const zm = await mainOf(z.id);
+      expect("P3c-ii: [ca cô lập D12 — lockRow no-op] a NON-draft write without ctx changes the title (status still published, version leg passes on the translation tenant) ⇒ ONLY the field leg catches it ⇒ 409; main = the slipped write, not the live dek", [
+        ...pair(r3), String(zm.title), zm.dek === `P9 3c live dek ii ${run}`, zm._status,
+      ], [...DIVERGED, `P9 3c NONDRAFT ${run}`, false, "published"]);
+      const w = await mkPublished(t);
+      expect("P3c control: translation tenant, no interleaving, REAL lockRow ⇒ 200", (await inproc(w.id, t, w.version, { dek: "P9 3c control" })).status, 200);
+    });
+
+    // ══ P3d — a Hide slips in; the row lock blocks a Hide ═════════════════
+    await group("P3d", async () => {
+      const x = await mkPublished("gcv");
+      const r1 = await inproc(x.id, "gcv", x.version, { dek: `P9 3d dek ${run}` }, {
+        ...noLock,
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: x.id, overrideAccess: true, depth: 0, context: { hubWrite: { actor: P9_ACTOR, reason: "probe9 hide" }, engineId: s6.engines.writeonly.id }, data: { workflowStatus: "archived" } as never });
+        },
+      });
+      const xm = await mainOf(x.id);
+      expect("P3d-i: [ca cô lập D12 — lockRow no-op] a Hide (the /status write, hubWrite, no lock) commits before the write ⇒ 409 + rollback; the article STAYS archived (never re-published); public 404", [
+        ...pair(r1), xm.workflowStatus, (await pubGet("gcv", x.slug)).status,
+      ], [...DIVERGED, "archived", 404]);
+      const y = await mkPublished("gcv");
+      let code: string | null = null;
+      const r2 = await inproc(y.id, "gcv", y.version, { dek: `P9 3d ii dek ${run}` }, {
+        beforeWrite: async () => {
+          const pool = (payload.db as unknown as { pool: { connect: () => Promise<{ query: (q: string, p?: unknown[]) => Promise<unknown>; release: () => void }> } }).pool;
+          const c = await pool.connect();
+          try {
+            await c.query("BEGIN");
+            await c.query("SET LOCAL lock_timeout = '300ms'");
+            await c.query("UPDATE articles SET workflow_status = 'archived' WHERE id = $1", [y.id]);
+            code = "no-error";
+          } catch (e) {
+            code = (e as { code?: string }).code ?? "unknown";
+          } finally {
+            await c.query("ROLLBACK").catch(() => {});
+            c.release();
+          }
+        },
+      });
+      const ym = await mainOf(y.id);
+      expect("P3d-ii: (D16, REAL lockRow) an UPDATE articles from a 2nd connection during the live write ⇒ 55P03 (row lock held); live 200; article still published with the new dek", [
+        code, r2.status, ym.workflowStatus, ym.dek,
+      ], ["55P03", 200, "published", `P9 3d ii dek ${run}`]);
+    });
+
+    // ══ P4 — scheduled / hidden / archived / never-published ═══════════════
+    await group("P4", async () => {
+      const r = async (k: P9Article) => pair(await live(A[k].id, "gcv", await vOf(A[k].id), { dek: "x" }));
+      expect("P4: (AC4) (c) scheduled ⇒ 422 scheduled; (d) hidden, (e) archived, (n) never-published draft ⇒ 422 status", [await r("c"), await r("d"), await r("e"), await r("n")], [NLE("scheduled"), NLE("status"), NLE("status"), NLE("status")]);
+    });
+
+    // ══ P4b — scheduled then published by the cron (scheduledFor kept) ═══
+    await group("P4b", async () => {
+      const k = A.k.id;
+      const km = await mainOf(k);
+      const r1 = await live(k, "gcv", km.version as number, { dek: `P9 4b dek ${run}` });
+      const e1 = (((await getEdit(k, "gcv")).body.edit as Doc).live as Doc | undefined)?.editable;
+      expect("P4b-1: (k) scheduled then published with the cron's update (scheduledFor kept) ⇒ /live 200; view=edit live.editable true", [km.scheduledFor != null, r1.status, e1], [true, 200, true]);
+      const d = await mkDraft("gcv");
+      const at = new Date(Math.ceil((Date.now() + 10 * 60_000) / 60_000) * 60_000).toISOString();
+      const sc = await call9("POST", `/api/hub/articles/${d.id}/schedule`, { tenant: "gcv", expectedVersion: d.version, actor: P9_ACTOR, scheduledFor: at }, T.write);
+      const past = new Date(Date.now() - 60_000).toISOString();
+      await payload.update({ collection: "articles", id: d.id, draft: true, depth: 0, overrideAccess: true, data: { workflowStatus: "scheduled", scheduledFor: past, publishedAt: past, _status: "draft" } as never, context: { hubWrite: { actor: P9_ACTOR, reason: "probe9 sets the hour" }, engineId: s6.engines.writeonly.id, disableRevalidate: true } });
+      const cron = await call9("GET", "/api/cron/publish-scheduled", undefined, process.env.CRON_SECRET ?? null);
+      const dm = await mainOf(d.id);
+      const r2 = await live(d.id, "gcv", dm.version as number, { dek: `P9 4b cron dek ${run}` });
+      const e2 = (((await getEdit(d.id, "gcv")).body.edit as Doc).live as Doc | undefined)?.editable;
+      expect("P4b-2: (N5) the REAL cron route (Bearer CRON_SECRET) publishes it, scheduledFor still set ⇒ /live 200; view=edit live.editable true", [sc.status, cron.status, dm.workflowStatus, dm._status, dm.scheduledFor != null, r2.status, e2], [200, 200, "published", "published", true, 200, true]);
+    });
+
+    // ══ P5 — engine / CMS hand-made ═══════════════════════════════════════
+    await group("P5", async () => {
+      const f = await live(A.f.id, "dtw", await vOf(A.f.id), { dek: "x" });
+      const g = await live(A.g.id, "gcv", await vOf(A.g.id), { dek: "x" });
+      expect("P5: (AC5) (f) engine ⇒ 422 origin; (g) CMS hand-made (lastEngine null) ⇒ 422 not_hub_authored", [pair(f), pair(g)], [NLE("origin"), NLE("not_hub_authored")]);
+    });
+
+    // ══ P6 — optimistic lock: stale version, races ═══════════════════════
+    await group("P6", async () => {
+      const x = await mkPublished("gcv");
+      const stale = await live(x.id, "gcv", x.version - 1 < 1 ? x.version + 5 : x.version - 1, { dek: "stale" });
+      expect("P6-1: (AC6) stale expectedVersion ⇒ 409 version_conflict + currentVersion", [stale.status, stale.body.status, stale.body.currentVersion], [409, "version_conflict", x.version]);
+      const rounds: unknown[] = [];
+      for (let i = 0; i < 10; i++) {
+        const v = await vOf(x.id);
+        const both = await Promise.all([live(x.id, "gcv", v, { dek: `P9 6 r${i} a` }), live(x.id, "gcv", v, { dek: `P9 6 r${i} b` })]);
+        const st = both.map((b) => b.status).sort();
+        const loser = both.find((b) => b.status !== 200);
+        rounds.push([st, loser?.body.status ?? null, typeof loser?.body.currentVersion === "number"]);
+      }
+      expect("P6-2: 10 rounds of two parallel PATCH with the same version ⇒ exactly one 200 + one 409 whose body is version_conflict + currentVersion (never draft_diverged)", rounds, rounds.map(() => [[200, 409], "version_conflict", true]));
+      // Deterministic phase shift (FIN-3): another write commits between gate 1 and the row lock.
+      const v = await vOf(x.id);
+      const r = await inproc(x.id, "gcv", v, { dek: "P9 6 loser" }, {
+        lockRow: async (p: unknown, id: number, req: unknown) => {
+          await payload.update({ collection: "articles", id: x.id, overrideAccess: true, locale: "en", depth: 0, context: { hubAuthor: { actor: P9_ACTOR, action: "update", fields: ["dek"] }, engineId: s6.engines.writeonly.id, disableRevalidate: true }, data: { dek: "P9 6 winner" } as never });
+          await core.defaultLockRow(p as never, id, req as never);
+        },
+      });
+      expect("P6-3: in-process phase shift (a winner commits before the row lock) ⇒ the loser gets 409 version_conflict with the winner's version (checked INSIDE the lock)", [r.status, r.body.status, r.body.currentVersion, (await mainOf(x.id)).dek], [409, "version_conflict", v + 1, "P9 6 winner"]);
+    });
+
+    // ══ P7 — slug / media / flags locked; publishedAt + slug kept ═════════
+    await group("P7", async () => {
+      const x = await mkPublished("gcv");
+      const m0 = await mainOf(x.id);
+      const out = [
+        pair(await live(x.id, "gcv", x.version, { slug: `${x.slug}-new` })),
+        pair(await live(x.id, "gcv", x.version, { slug: x.slug })),
+        pair(await live(x.id, "gcv", x.version, { heroImageId: s9.media.spare })),
+        pair(await live(x.id, "gcv", x.version, { leadImageCaption: "c" })),
+        ...(await Promise.all(["breaking", "aiAssisted", "sponsored", "affiliate"].map(async (f) => pair(await live(x.id, "gcv", x.version, { flags: { [f]: false } }))))),
+      ];
+      const m1 = await mainOf(x.id);
+      expect("P7: (AC7 / AC8) slug (new or same) ⇒ slug_locked; heroImageId / leadImageCaption ⇒ media_locked; flags.breaking / aiAssisted / sponsored / affiliate ⇒ flags_locked; slug, publishedAt, version unchanged", [
+        out, m1.slug === m0.slug, String(m1.publishedAt) === String(m0.publishedAt), m1.version === m0.version,
+      ], [[NLE("slug_locked"), NLE("slug_locked"), NLE("media_locked"), NLE("media_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked")], true, true, true]);
+      const ok = await live(x.id, "gcv", x.version, { dek: "P9 7 dek" });
+      const m2 = await mainOf(x.id);
+      expect("P7-2: a real edit keeps slug + publishedAt", [ok.status, m2.slug === m0.slug, String(m2.publishedAt) === String(m0.publishedAt)], [200, true, true]);
+    });
+
+    // ══ P8 — body images round-trip; no new image ═════════════════════════
+    await group("P8", async () => {
+      const h = A.h.id;
+      const e = await getEdit(h, "gcv");
+      const md = String(((e.body.article ?? {}) as Doc).bodyMarkdown ?? "");
+      const ups = async () => {
+        const out: string[] = [];
+        const walk = (n: unknown) => {
+          const o = (n && typeof n === "object" ? n : null) as Doc | null;
+          if (!o) return;
+          if (o.type === "upload") out.push(String(toId6(o.value)));
+          if (Array.isArray(o.children)) o.children.forEach(walk);
+        };
+        walk(((await mainOf(h)).body as Doc | undefined)?.root);
+        return out;
+      };
+      const u0 = await ups();
+      const same = await live(h, "gcv", await vOf(h), { bodyMarkdown: md });
+      const add = await live(h, "gcv", await vOf(h), { bodyMarkdown: `${md}\n\n![](cms-media:${s9.media.spare})` });
+      expect("P8-1: (AC9) view=edit ⇒ cms-media token; sending it back unchanged ⇒ 200 (upload set kept); adding another tenant media ⇒ 422 fields.bodyMarkdown unknown_ref", [
+        md.includes(`cms-media:${s9.media.h}`), same.status, JSON.stringify(await ups()) === JSON.stringify(u0), add.status, (add.body.fields as Doc | undefined)?.bodyMarkdown,
+      ], [true, 200, true, 422, "unknown_ref"]);
+      const drop = await live(h, "gcv", await vOf(h), { bodyMarkdown: "P9 image removed." });
+      const u1 = await ups();
+      const back = await live(h, "gcv", await vOf(h), { bodyMarkdown: md });
+      expect("P8-2: removing the image ⇒ 200 (no upload node left); putting the SAME image back ⇒ 422 unknown_ref (it is no longer in the live body — D5)", [drop.status, u1.length, back.status], [200, 0, 422]);
+      // Restore (h) for a re-run: the image comes back through a Local API body write (not the hub).
+      await payload.update({ collection: "articles", id: h, overrideAccess: true, locale: "en", context: { disableRevalidate: true, hubAuthor: { actor: P9_ACTOR, action: "update", fields: ["bodyMarkdown"] }, engineId: s6.engines.writeonly.id }, data: { body: { root: { type: "root", version: 1, direction: "ltr", format: "", indent: 0, children: [{ type: "paragraph", version: 1, direction: "ltr", format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: "P9 image intro.", format: 0, detail: 0, mode: "normal", style: "" }] }, { type: "upload", version: 3, format: "", id: "p9restore", fields: null, relationTo: "media", value: s9.media.h }] } } } as never });
+    });
+
+    // ══ P8b — PATCH rules + checkPublishable on a live article ═══════════
+    await group("P8b", async () => {
+      const l = A.l.id;
+      const s0 = await rowSnap(l);
+      const bn = await live(l, "gcv", await vOf(l), { bodyMarkdown: "Replace." });
+      expect("P8b-1: (l) non-Markdown body + bodyMarkdown ⇒ 422 body_not_editable; row unchanged", [pair(bn), (await rowSnap(l)) === s0], [[422, { ok: false, status: "body_not_editable", reason: "existing body cannot be edited as Markdown" }], true]);
+      const x = await mkPublished("gcv");
+      const sp = await mkPublished("gcv", { flags: { sponsored: true }, sponsor: "P9 Sponsor Co" });
+      const sx = await rowSnap(x.id);
+      const ssp = await rowSnap(sp.id);
+      const code = async (id: number, fields: Doc) => {
+        const r = await live(id, "gcv", await vOf(id), fields);
+        return [r.status, r.body.status, r.body.fields ?? r.body.reason];
+      };
+      const out = [
+        await code(x.id, { bodyMarkdown: "" }),
+        await code(x.id, { subSectionSlug: null }),
+        await code(sp.id, { sponsor: null }),
+        await code(x.id, { authorId: null }),
+        await code(x.id, { pillarSlug: "exclusive" }),
+      ];
+      console.log(`OBS   P8b authorId:null ⇒ ${JSON.stringify(out[3])} (the PATCH parser refuses null before checkPublishable: code 'type', not 'required')`);
+      expect("P8b-2: (AC27) body '' ⇒ required; subSectionSlug null on a pillar with sub-sections ⇒ required; sponsor null on a sponsored article ⇒ required; authorId null ⇒ 422 (parser 'type'); blocked pillar (exclusive) ⇒ 422 blocked_pillar; nothing written", [
+        out, (await rowSnap(x.id)) === sx, (await rowSnap(sp.id)) === ssp,
+      ], [[
+        [422, "invalid", { bodyMarkdown: "required" }],
+        [422, "invalid", { subSectionSlug: "required" }],
+        [422, "invalid", { sponsor: "required" }],
+        [422, "invalid", { authorId: "type" }],
+        [422, "invalid", { pillarSlug: "blocked_pillar" }],
+      ], true, true]);
+    });
+
+    // ══ P9 — public read right after 200 ══════════════════════════════════
+    await group("P9", async () => {
+      const x = await mkPublished("gcv");
+      const ver0 = await verCount(x.id);
+      const t = `P9 public title ${run}`;
+      const r = await live(x.id, "gcv", x.version, { title: t, bodyMarkdown: `P9 public body ${run}.` });
+      const p = await pubGet("gcv", x.slug);
+      const doc = (p.body.doc ?? {}) as Doc;
+      const m = await mainOf(x.id);
+      expect("P9: (AC10) public DETAIL right after 200 ⇒ new title + body text; still published; exactly one new _articles_v", [
+        r.status, p.status, doc.title, JSON.stringify(doc).includes(`P9 public body ${run}`), m._status, m.workflowStatus, (await verCount(x.id)) - ver0,
+      ], [200, 200, t, true, "published", "published", 1]);
+    });
+
+    // ══ P10 — translation tenant: jobs, versions, webhooks (MEASURED) ═════
+    await group("P10", async () => {
+      const t = "world-travel-brief";
+      await payload.update({ collection: "tenants", id: wtbId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: `http://127.0.0.1:${s9.hookPort}` } as never });
+      const x = await mkPublished(t);
+      // Mark two locales as already machine-translated at the current version (translationWrite: no bump).
+      const l0 = await latestOf(x.id);
+      const rows0 = ((l0.translationStatus as Doc[] | undefined) ?? []).map((r) => ({ ...r }));
+      const locs = rows0.slice(0, 2).map((r) => String(r.locale));
+      const marked = rows0.map((r) => (locs.includes(String(r.locale)) ? { ...r, state: "machine_translated", sourceVersionAtTranslation: x.version } : r));
+      await payload.update({ collection: "articles", id: x.id, overrideAccess: true, context: { translationWrite: true, skipTranslationEnqueue: true, disableRevalidate: true }, data: { translationStatus: marked } as never });
+      const v0 = await vOf(x.id);
+      const j0 = await jobs(x.id);
+      const act0 = await actCount(x.id);
+      const h0 = hooks().filter((h) => claimsOf(h.token).slug === x.slug).length;
+      const r = await live(x.id, t, v0, { title: `P9 10 title ${run}` });
+      const m = await mainOf(x.id);
+      const j1 = (await jobs(x.id)).slice(j0.length);
+      const st1 = ((m.translationStatus as Doc[] | undefined) ?? []).filter((s) => locs.includes(String(s.locale))).map((s) => s.state);
+      const nHooks = hooks().filter((h) => claimsOf(h.token).slug === x.slug).length - h0;
+      const nAct = (await actCount(x.id)) - act0;
+      console.log(`OBS   P10 MEASURED: version before=${v0} returned=${String(r.body.version)} stored=${String(m.version)}; new jobs=${j1.length} sourceVersion(s)=${JSON.stringify([...new Set(j1.map((j) => j.v))])}; human_edit rows=${nAct}; webhooks=${nHooks}; states of the 2 marked locales after=${JSON.stringify(st1)} (outdated → pending)`);
+      expect("P10-1: (AC11 / AC32) translation tenant: 200; returned version = stored version (read back); new jobs for the re-queued locales; the 2 machine_translated locales end 'pending'", [
+        r.status, r.body.version === m.version, (m.version as number) >= v0 + 1, j1.filter((j) => locs.includes(j.l)).length >= locs.length, st1,
+      ], [200, true, true, true, ["pending", "pending"]]);
+      const r2 = await live(x.id, t, r.body.version as number, { dek: `P9 10 second ${run}` });
+      const jBefore = (await jobs(x.id)).length;
+      const r3 = await live(x.id, t, r2.body.version as number, { dek: `P9 10 second ${run}` });
+      expect("P10-2: a second save with the returned version ⇒ 200 (no false 409); changed [] ⇒ 200 with no new job", [r2.status, r3.status, r3.body.changed, (await jobs(x.id)).length - jBefore], [200, 200, [], 0]);
+    });
+
+    // ══ P11 — webhook once per write, HMAC valid; staleness MEASURED ══════
+    await group("P11", async () => {
+      const t = s9.hookTenant;
+      const x = await mkPublished(t);
+      await new Promise((r) => setTimeout(r, 300));
+      const before = hooks().filter((h) => claimsOf(h.token).slug === x.slug).length;
+      const title = `P9 11 title ${run}`;
+      const r = await live(x.id, t, x.version, { title });
+      await new Promise((rs) => setTimeout(rs, 500));
+      const mine = hooks().filter((h) => claimsOf(h.token).slug === x.slug).slice(before);
+      const claims = mine[0] ? verifySigned(mine[0].token, Math.floor(Date.now() / 1000)) : null;
+      console.log(`OBS   P11 MEASURED: webhook path=${mine[0]?.path ?? "-"}; public GET from the hook (before the CMS commit) saw status=${String(mine[0]?.seen?.status)} title=${JSON.stringify(mine[0]?.seen?.title)} (new title ⇒ fresh; old ⇒ gap hub-p5-4-revalidate-before-commit)`);
+      expect("P11: (AC12) non-translation tenant with a local frontendUrl: exactly ONE webhook per live write, HMAC valid (verifySigned), claims carry the tenant + slug", [
+        r.status, mine.length, claims !== null, (claims as Doc | null)?.tenant, (claims as Doc | null)?.slug,
+      ], [200, 1, true, t, x.slug]);
+    });
+
+    // ══ P12 — KEY RISK: provenance survives a live write ═════════════════
+    await group("P12", async () => {
+      const x = await mkPublished("gcv");
+      const r1 = await live(x.id, "gcv", x.version, { dek: "P9 12 one" });
+      const m = await mainOf(x.id);
+      const { isHubAuthoredDoc } = await import("../src/lib/hub-author-auth");
+      const r2 = await live(x.id, "gcv", r1.body.version as number, { dek: "P9 12 two" });
+      expect("P12: (AC13) after a live write: lastEngine = the author engine, editedByHuman true, origin manual, isHubAuthoredDoc true; a 2nd live write ⇒ 200", [
+        r1.status, Number(toId6(m.lastEngine)), m.editedByHuman, m.origin, await isHubAuthoredDoc(payload, m), r2.status,
+      ], [200, s6.engines.author.id, true, "manual", true, 200]);
+    });
+
+    // ══ P13 — Activity Log: one human_edit via hub, names only ════════════
+    await group("P13", async () => {
+      const x = await mkPublished("gcv");
+      const since = await maxLog();
+      const dek = `P9 13 secret dek ${run}`;
+      const r = await live(x.id, "gcv", x.version, { dek, tagSlugs: [fx("gcv").tags[0]] });
+      const logs = await rows(sql`SELECT event_type::text AS e, actor_type::text AS a, actor_engine_id AS eng, detail FROM activity_log WHERE target_id = ${String(x.id)} AND id > ${since} ORDER BY id`);
+      const he = logs.filter((l) => l.e === "human_edit");
+      const det = (he[0]?.detail ?? {}) as Doc;
+      expect("P13: (AC14) exactly one human_edit; actor engine = the write key; detail {via hub, actor, action update, fields NAMES}; no content", [
+        r.status, he.length, he[0]?.a, Number(he[0]?.eng), det.via, det.action, det.fields, JSON.stringify(he).includes(dek),
+      ], [200, 1, "engine", s6.engines.writeonly.id, "hub", "update", ["dek", "tagSlugs"], false]);
+    });
+
+    // ══ P14 — intake never overwrites a live-edited hub article ═══════════
+    await group("P14", async () => {
+      const x = await mkPublished("dtw");
+      await live(x.id, "dtw", x.version, { dek: "P9 14 live" });
+      const s0 = await rowSnap(x.id);
+      const tk = process.env.SEED_ENGINE_TOKEN ?? null;
+      const neu = await call9("POST", "/api/engine/intake", { publicationId: "dtw", title: `P9 14 intake new ${run}`, pillarSlug: "p6-main", body_markdown: "x", byline: "P9 Engine Byline", engineDraftId: `p9-14-new-${run}` }, tk);
+      const same = await call9("POST", "/api/engine/intake", { publicationId: "dtw", title: `P9 14 intake same slug ${run}`, pillarSlug: "p6-main", body_markdown: "x", byline: "P9 Engine Byline", slug: x.slug, engineDraftId: `p9-14-same-${run}` }, tk);
+      console.log(`OBS   P14 MEASURED intake with a new engineDraftId ⇒ ${neu.status} ${neu.text.slice(0, 160)}; intake with the SAME slug as the hub article ⇒ ${same.status} ${same.text.slice(0, 200)}`);
+      const fm0 = await mainOf(A.f.id);
+      const ref = await call9("POST", "/api/engine/intake", { publicationId: "dtw", title: `P9 engine refreshed ${run}`, pillarSlug: "p6-main", body_markdown: "P9 engine body refreshed.", byline: "P9 Engine Byline", engineDraftId: String(fm0.engineDraftId ?? "") }, tk);
+      const fm1 = await mainOf(A.f.id);
+      expect("P14: (AC5 / AC15) the hub article's row is unchanged by an intake with a new engineDraftId and by one with ITS slug (measured above); engine article (f) still refreshes", [
+        neu.status, (await rowSnap(x.id)) === s0, (await mainOf(x.id)).engineDraftId ?? null, ref.status < 300, fm1.title,
+      ], [201, true, null, true, `P9 engine refreshed ${run}`]);
+    });
+
+    // ══ P15 — view=edit live block shapes ═════════════════════════════════
+    await group("P15", async () => {
+      const ed = async (k: P9Article) => (await getEdit(A[k].id, A[k].tenant)).body;
+      const a = await ed("a");
+      const al = ((a.edit as Doc).live ?? {}) as Doc;
+      expect("P15-1: (a) ⇒ live.editable true, EXACTLY the 17 wire keys", [al.editable, al.reason, Object.keys(al)], [true, "ok", ["editable", "reason", "version", "bodyEditable", "pillarSlug", "subSectionSlug", "secondary", "tagSlugs", "countrySlugs", "citySlugs", "authorId", "coAuthorIds", "flags", "sponsor", "hero", "leadImageCaption", "bodyMedia"]]);
+      const b = await getEdit(A.b.id, "gcv");
+      expect("P15-2: (b) ⇒ live {editable false, reason draft_diverged, version}; no draft content in the response", [((b.body.edit as Doc).live as Doc), b.text.includes("SECRET")], [{ editable: false, reason: "draft_diverged", version: await vOf(A.b.id) }, false]);
+      const f = await ed("f");
+      const g = await ed("g");
+      const m = await ed("m");
+      expect("P15-3: (f) engine ⇒ no live key (origin branch); (g) ⇒ live.reason not_hub_authored; (m) on the switch-off tenant ⇒ live.reason feature_disabled", [
+        "live" in (f.edit as Doc), ((g.edit as Doc).live as Doc).reason, ((m.edit as Doc).live as Doc),
+      ], [false, "not_hub_authored", { editable: false, reason: "feature_disabled", version: null }]);
+      const n = await getEdit(A.n.id, "gcv");
+      const nd = await getEdit(A.n.id, "gcv", "");
+      expect("P15-4: hub draft (n) ⇒ editable true, no live key, 18 keys; default read ⇒ no edit key", [((n.body.edit as Doc).editable), "live" in (n.body.edit as Doc), Object.keys(n.body.edit as Doc).length, "edit" in nd.body], [true, false, 18, false]);
+      // Baseline 0.1 (when the files sit next to f9): default read + hub-draft view=edit byte-identical (updatedAt removed).
+      const dir = inFile.replace(/\/[^/]*$/, "");
+      if (existsSyncSafe(`${dir}/baseline.json`) && existsSyncSafe(`${dir}/base-publishedId.json`)) {
+        const bl = JSON.parse(readFileSync(`${dir}/baseline.json`, "utf8")) as Doc;
+        const canon = (txt: string) => {
+          const j = JSON.parse(txt) as Doc;
+          if (j.article && typeof j.article === "object") delete (j.article as Doc).updatedAt;
+          return JSON.stringify(sortKeys6(j), null, 2);
+        };
+        const fileCanon = (f2: string) => JSON.stringify(sortKeys6(JSON.parse(readFileSync(f2, "utf8"))), null, 2);
+        const pubId = bl.publishedId as number;
+        const dId = bl.hubDraftId as number;
+        const now = [
+          canon((await call9("GET", `/api/hub/articles/${pubId}?tenant=dtw`, undefined, T.author)).text) === fileCanon(`${dir}/base-publishedId.json`),
+          canon((await call9("GET", `/api/hub/articles/${dId}?tenant=dtw`, undefined, T.author)).text) === fileCanon(`${dir}/base-hubDraftId.json`),
+          canon((await call9("GET", `/api/hub/articles/${dId}?tenant=dtw&view=edit`, undefined, T.author)).text) === fileCanon(`${dir}/base-hubDraftId-edit.json`),
+        ];
+        expect("P15-5: (AC16) mốc 0.1: default read of the published baseline row, default read + view=edit of the hub draft ⇒ byte-identical (updatedAt removed)", now, [true, true, true]);
+      } else console.log("OBS   P15-5 skipped: no baseline.json / base-*.json next to f9 (Phase 0 capture)");
+    });
+
+    // ══ P16 — key boundaries ══════════════════════════════════════════════
+    await group("P16", async () => {
+      const x = A.a.id;
+      const v = await vOf(x);
+      const au = await live(x, "gcv", v, { dek: "x" }, T.author);
+      const bo = await live(x, "gcv", v, { dek: "x" }, T.both);
+      const wr = await call9("POST", "/api/hub/articles", { tenant: "gcv", title: "P9 16 should fail", actor: P9_ACTOR }, T.write);
+      const wn = await live(x, "gcv", v, { dek: "x" }, T.writenoread);
+      expect("P16: (AC17 / AC33) author key ⇒ /live 403 (no hubWrite); engine with hubRead+hubWrite+hubAuthor ⇒ 403 'author key cannot live-edit'; write key ⇒ POST /api/hub/articles 403; hubWrite without hubRead ⇒ /live 403", [
+        [au.status, au.body.reason], pair(bo), [wr.status, wr.body.reason], wn.status,
+      ], [[403, "hub write not allowed for this engine"], [403, { ok: false, status: "forbidden", reason: "author key cannot live-edit" }], [403, "hub author not allowed for this engine"], 403]);
+    });
+
+    // ══ P17 — isolation, int4, 413, 400, flags, switch-off; 0 integration_error ══
+    await group("P17", async () => {
+      const i0 = await interr();
+      const m = A.m.id;
+      const sm = await rowSnap(m);
+      const v = await vOf(A.a.id);
+      const other = await live(m, "gcv", await vOf(m), { dek: "x" });
+      const ghost = await live(2_147_483_000, "gcv", 1, { dek: "x" });
+      const big = await live(9_999_999_999, "gcv", 1, { dek: "x" });
+      const wadR = await live(A.a.id, s9.outOfGrantTenant, v, { dek: "x" });
+      const tooBig = await call9("PATCH", `/api/hub/articles/${A.a.id}/live`, undefined, T.write, JSON.stringify({ tenant: "gcv", expectedVersion: v, actor: P9_ACTOR, fields: { dek: "x".repeat(1_000_100) } }));
+      const keys = await Promise.all(["zzz", "tenant", "actor", "expectedVersion"].map(async (k) => {
+        const r = await live(A.a.id, "gcv", v, { dek: "x", [k]: "v" });
+        return [r.status, r.body.field];
+      }));
+      const proto = await call9("PATCH", `/api/hub/articles/${A.a.id}/live`, undefined, T.write, `{"tenant":"gcv","expectedVersion":${v},"actor":${JSON.stringify(P9_ACTOR)},"fields":{"dek":"x","__proto__":{"slug":"y"}}}`);
+      const brk = await live(A.a.id, "gcv", v, { flags: { breaking: false } });
+      const off = await live(m, s9.controlTenant, await vOf(m), { dek: "x" });
+      expect("P17-1: (AC30) tenant B's article with tenant=gcv ⇒ 404 byte-identical to a missing id; id > int4 ⇒ same 404; B's row unchanged", [
+        other.status, other.text === ghost.text, big.text === ghost.text, (await rowSnap(m)) === sm,
+      ], [404, true, true, true]);
+      expect("P17-2: tenant outside the grant (wad) ⇒ 403 forbidden; body > 1,000,000 B ⇒ 413; unknown / tenant / actor / expectedVersion / __proto__ inside fields ⇒ 400 fields.<key>; flags.breaking equal to stored ⇒ 422 flags_locked; switch-off tenant ⇒ 403 feature_disabled", [
+        [wadR.status, wadR.body.status], tooBig.status, keys, [proto.status, proto.body.field], pair(brk), pair(off),
+      ], [[403, "forbidden"], 413, [[400, "fields.zzz"], [400, "fields.tenant"], [400, "fields.actor"], [400, "fields.expectedVersion"]], [400, "fields.__proto__"], NLE("flags_locked"), [403, { ok: false, status: "feature_disabled", reason: "live edit disabled for tenant" }]]);
+      expect("P17-3: the error branches above wrote 0 integration_error rows", (await interr()) - i0, 0);
+    });
+
+    // ══ P18 — same codes as PATCH (parser), except the 7 locked keys ══════
+    await group("P18", async () => {
+      const x = await mkPublished("gcv");
+      const v = x.version;
+      const vectors: [string, Doc][] = [
+        ["title C0", { title: "a\u0001b" }],
+        ["title BiDi", { title: "a‮b" }],
+        ["title too long", { title: "t".repeat(2000) }],
+        ["title empty", { title: "   " }],
+        ["dek BiDi", { dek: "x‮y" }],
+        ["body javascript: link", { bodyMarkdown: "Click [here](javascript:alert(1))." }],
+        ["body image syntax", { bodyMarkdown: "Look ![x](https://example.invalid/i.png) here." }],
+        ["body C0", { bodyMarkdown: "a\u0002b" }],
+        ["takeaways newline", { takeaways: ["a\nb"] }],
+        ["readMin 0", { readMin: 0 }],
+        ["tagSlugs not array", { tagSlugs: "x" }],
+        ["authorId string", { authorId: "x" }],
+        ["coAuthorIds [0]", { coAuthorIds: [0] }],
+        ["flags.deepDive string", { flags: { deepDive: "yes" } }],
+        ["flags.foo unknown", { flags: { foo: true } }],
+        ["countrySlugs ['']", { countrySlugs: [""] }],
+        ["secondary duplicate", { secondary: [{ pillarSlug: "p6-other" }, { pillarSlug: "p6-other" }] }],
+      ];
+      const mismatches: unknown[] = [];
+      for (const [name, f] of vectors) {
+        const exp = input.parseUpdateBody({ ...f, tenant: "gcv", expectedVersion: v, actor: P9_ACTOR });
+        const got = await live(x.id, "gcv", v, f);
+        const want = exp.ok ? "ok" : JSON.stringify([exp.status, exp.body]);
+        const have = JSON.stringify([got.status, got.body]);
+        if (exp.ok || want !== have) mismatches.push([name, want, have]);
+      }
+      expect("P18-1: (AC30) the PATCH parser vectors (javascript:, BiDi, C0, `![`, …) through /live ⇒ the SAME status + body as the PATCH parser", mismatches, []);
+      const locked = [
+        pair(await live(x.id, "gcv", v, { slug: "Bad Slug" })),
+        pair(await live(x.id, "gcv", v, { heroImageId: "x" })),
+        pair(await live(x.id, "gcv", v, { leadImageCaption: "a‮b" })),
+        pair(await live(x.id, "gcv", v, { flags: { breaking: "x" } })),
+        pair(await live(x.id, "gcv", v, { flags: { aiAssisted: true } })),
+        pair(await live(x.id, "gcv", v, { flags: { sponsored: true } })),
+        pair(await live(x.id, "gcv", v, { flags: { affiliate: true } })),
+      ];
+      expect("P18-2: (CMS4-6) vectors touching the 7 locked keys ⇒ 422 not_live_editable (slug_locked / media_locked / flags_locked) instead of the PATCH code", locked, [NLE("slug_locked"), NLE("media_locked"), NLE("media_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked")]);
+      const miss = await Promise.all(["actor", "expectedVersion", "tenant"].map(async (k) => {
+        const b: Doc = { tenant: "gcv", expectedVersion: v, actor: P9_ACTOR, fields: { dek: "x" } };
+        delete b[k];
+        const r = await liveRaw(x.id, b);
+        return [r.status, r.body.status, r.body.field];
+      }));
+      const badActor = await liveRaw(x.id, { tenant: "gcv", expectedVersion: v, actor: { email: "nope", role: "editor" }, fields: { dek: "x" } });
+      expect("P18-3: (N7) missing actor / expectedVersion / tenant ⇒ 400 bad_request field:<key>; a present but malformed actor ⇒ 422 invalid (actor.email format)", [miss, [badActor.status, badActor.body.status, (badActor.body.fields as Doc | undefined)?.["actor.email"]]], [[[400, "bad_request", "actor"], [400, "bad_request", "expectedVersion"], [400, "bad_request", "tenant"]], [422, "invalid", "format"]]);
+    });
+  } finally {
+    // FIN-2 / E6: restore the --setup6 grants of writeonly / author; the wtb frontendUrl; stop the hook server.
+    await setGrant(s6.engines.writeonly.id, s9.originalGrants.writeonly).catch(() => {});
+    await setGrant(s6.engines.author.id, s9.originalGrants.author).catch(() => {});
+    await payload.update({ collection: "tenants", id: wtbId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: wtbFrontend } as never }).catch(() => {});
+    hook.kill("SIGTERM");
+  }
+  const grantNow = async (id: number) => ((((await payload.findByID({ collection: "content-engines", id, depth: 0, overrideAccess: true })) as unknown as Doc).allowedTenants as unknown[]) ?? []).map((x) => Number(toId6(x))).sort((a, b) => a - b);
+  const gw = await grantNow(s6.engines.writeonly.id);
+  const ga = await grantNow(s6.engines.author.id);
+  console.log(`OBS   E6 grants after restore: writeonly=${JSON.stringify(gw)} author=${JSON.stringify(ga)} (originals writeonly=${JSON.stringify(s9.originalGrants.writeonly)} author=${JSON.stringify(s9.originalGrants.author)})`);
+  expect("E6: the --setup6 grants of writeonly / author are restored", [gw, ga], [[...s9.originalGrants.writeonly].sort((a, b) => a - b), [...s9.originalGrants.author].sort((a, b) => a - b)]);
+  const skipped = P9_GROUPS.length - executed.length;
+  console.log(`\n[check9] groups executed ${executed.length}/${P9_GROUPS.length}, skipped ${skipped}`);
+  const ok = state.failures === 0 && executed.length === P9_GROUPS.length;
+  console.log(`[check9] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED${executed.length !== P9_GROUPS.length ? ` + ${skipped} GROUP(S) NOT RUN` : ""}`}`);
+  process.exit(ok ? 0 : 1);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -10619,10 +11694,14 @@ const run = flag("setup")
                                           ? setup8
                                           : flag("check8")
                                             ? check8
-                                            : null;
+                                            : flag("setup9")
+                                              ? setup9
+                                              : flag("check9")
+                                                ? check9
+                                                : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only | --setup9 --in <setup6.json> --out <f9> | --check9 --in <f9> | --check9 --unit-only",
   );
   process.exit(2);
 }
