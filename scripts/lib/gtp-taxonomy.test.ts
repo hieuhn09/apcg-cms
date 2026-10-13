@@ -122,11 +122,12 @@ describe("gtp fixture: slug contract (plan section 3)", () => {
   it("authors: exactly the five editors plus GTP Newsroom; ranks and slugs unique; collective has no rank", () => {
     assert.deepEqual(
       GTP_AUTHORS.map((a) => a.name),
-      ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Clara Widjaja", "Yuki Hamada", "GTP Newsroom"],
+      ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada", "GTP Newsroom"],
     );
     assert.deepEqual(GTP_AUTHORS.map((a) => a.rank), [1, 2, 3, 4, 5, undefined]);
     assert.equal(new Set(GTP_AUTHORS.map((a) => a.slug)).size, 6);
-    assert.equal(GTP_AUTHORS.find((a) => a.name === "Yuki Hamada")?.role, "Japan Correspondent");
+    assert.equal(GTP_AUTHORS.find((a) => a.name === "Yuki Hamada")?.role, "Contributing Writer");
+    assert.equal(GTP_AUTHORS.find((a) => a.name === "Yuki Hamada")?.city, undefined);
     assert.equal(GTP_AUTHORS.find((a) => a.name === "GTP Newsroom")?.role, "Newsroom");
   });
   it("tags: the six exact slugs; every pr-* title minus 'PR: ' is a P3 press-room chip", () => {
