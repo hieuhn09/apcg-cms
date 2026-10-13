@@ -15,7 +15,7 @@ import {
 
 const BASE = "https://img.apcgmedia.com";
 const CMS = "https://apcg-cms.vercel.app";
-const PREFIXES = ["brief-asia", "dtw", "gcv", "wad", "world-travel-brief"];
+const PREFIXES = ["brief-asia", "dtw", "gcv", "gtp", "wad", "world-travel-brief"];
 
 /** Invisible characters, built from code points so none sits literally in this file. */
 const NUL = String.fromCodePoint(0x0);

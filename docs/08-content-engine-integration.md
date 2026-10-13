@@ -64,9 +64,27 @@ Content-Type: application/json
 | 401 | `{ ok:false, status:"unauthorized" }` | bad/suspended token |
 | 403 | `{ ok:false, status:"forbidden", reason }` | tenant/action not allowed |
 | 422 | `{ ok:false, status:"unprocessable", reason }` | feature disabled / unknown pillar |
-| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom` — Pressroom articles come only from editors; WAD's own `pressroom` is not blocked); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
-| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom` and GCV `pressroom`; WAD's `pressroom` is not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom`, GlobalTravelPost (`gtp`) `press-room` and `events-awards` — Pressroom / Press Room / Events & Awards articles come only from editors; WAD's own `pressroom` is not blocked); the check is on the PRIMARY `pillarSlug` only (a gtp `news` primary with `sections:["events-awards"]` is not blocked by it); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom`, GCV `pressroom` and GlobalTravelPost `gtp` `press-room`; WAD's `pressroom` and gtp `events-awards` are not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
 | 5xx | `{ ok:false, status:"error" }` | transient — safe to retry |
+
+### GlobalTravelPost (`gtp`) notes
+
+- Tenant slug / `publicationId` `gtp`. Engine-writable pillars: `news`, `destinations`,
+  `business-of-travel`, `experiences-luxury`; `press-room` and `events-awards` are
+  editor-only (422 above). Taxonomy source of truth: `scripts/lib/gtp-taxonomy.ts`.
+- **`engineDraftId` convention:** send `content-engine:gtp:<article.id>` (stable per
+  engine row, independent of the source URL; the gcv/wad clients already do this). Without
+  it Central dedups on `sourceProvenance.url` only, and an article with no source URL has
+  no dedupe at all (a retry creates a duplicate).
+- **Secondary sections come from `sections[]`, not `secondaryPillarSlugs`** (the latter is
+  accepted and ignored). Recommended for gtp: one primary pillar plus an optional
+  sub-section, no secondary sections.
+- `byline` must equal a gtp `authors.name` exactly (`Daniel Cheong`, `Priya Nair`,
+  `Marcus Tan`, `Clara Widjaja`, `Yuki Hamada`, `GTP Newsroom`); an unmatched byline
+  silently creates a "ghost" author (role Staff Writer, no slug, no rank).
+- The tenant is created with `autoPublishEngineDrafts=false`, so gtp intake lands
+  `pending_review`.
 
 ### `contentType` — what the document is
 

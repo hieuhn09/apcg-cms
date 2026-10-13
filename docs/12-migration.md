@@ -161,3 +161,14 @@ Every script supports `--dry-run`.
 Central mode — translations are pre-stored in Central and the public API serves the
 requested locale. The reference `cms-client.ts` already implements this. (If the
 frontend wants its own translation cache, keep it in the frontend's own DB.)
+
+## Legacy plain-Postgres sources (GTP)
+
+The GlobalTravelPost (tenant `gtp`) source is NOT a Payload site: it is a shared,
+multi-site Postgres database. Its tooling lives in `scripts/migrate/` and is
+documented in `scripts/migrate/GTP-LEGACY.md` (discovery, mapping, import,
+second pass, redirects, parity, rollback, exports, rehearsal). The tools are
+inert until the Phase 5 cutover: every legacy read is a closed, site-filtered
+builder on an allow-listed table; imports are dry runs unless `--apply`; a
+non-local Central needs `--confirm-host`; provisional owner decisions are fatal
+outside the local rehearsal. Rehearse locally with `npm run rehearse:gtp`.

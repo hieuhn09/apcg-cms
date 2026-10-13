@@ -38,3 +38,6 @@ src/payload-types.ts
 .claude/hooks/.logs/
 .vercel
 .env*
+
+# gtp-launch P4: migration tool run artifacts (slug maps, snapshots, PII exports). Never commit.
+/scripts/migrate/out/

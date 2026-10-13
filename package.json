@@ -12,7 +12,9 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test:media-redirect": "tsx --test src/lib/media-redirect.test.ts",
-    "test:single-home": "tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts scripts/lib/local-db-guard.test.ts",
+    "audit:add-gtp-taxonomy": "tsx scripts/audit/add-gtp-taxonomy.ts",
+    "probe:gtp": "tsx scripts/gtp-probe.ts",
+    "test:single-home": "tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts scripts/lib/local-db-guard.test.ts scripts/lib/gtp-taxonomy.test.ts",
     "payload": "payload",
     "payload:generate-types": "payload generate:types",
     "payload:generate-importmap": "payload generate:importmap",
@@ -30,6 +32,18 @@
     "migrate:author-slugs": "tsx scripts/migrate/backfill-author-slugs.ts",
     "migrate:sync-views": "tsx scripts/migrate/sync-view-counts.ts",
     "migrate:fix-body-uploads": "tsx scripts/migrate/fix-body-upload-refs.ts",
+    "migrate:gtp:discover": "tsx scripts/migrate/discover-legacy-pg.ts",
+    "migrate:gtp:export": "tsx scripts/migrate/export-gtp-legacy.ts",
+    "migrate:gtp:validate-mapping": "tsx scripts/migrate/validate-gtp-mapping.ts",
+    "migrate:gtp:import": "tsx scripts/migrate/import-gtp-legacy.ts",
+    "migrate:gtp:rewrite-links": "tsx scripts/migrate/rewrite-links-gtp.ts",
+    "migrate:gtp:rollback": "tsx scripts/migrate/rollback-gtp-import.ts",
+    "migrate:gtp:redirects": "tsx scripts/migrate/build-gtp-redirects.ts",
+    "migrate:gtp:verify": "tsx scripts/migrate/verify-gtp-parity.ts",
+    "migrate:gtp:fixture": "tsx scripts/migrate/fixtures/gtp-legacy/seed-gtp-legacy-fixture.ts",
+    "rehearse:gtp": "bash scripts/migrate/fixtures/gtp-legacy/rehearse-gtp.sh",
+    "lint:migrate": "eslint scripts/migrate --ignore-pattern \"scripts/migrate/out/**\"",
+    "test:migrate-gtp": "tsx --test scripts/migrate/lib/*.test.ts",
     "audit:gcv-export": "tsx scripts/audit/gcv-audit-export.ts",
     "audit:apply-luxury": "tsx scripts/audit/apply-luxury-decisions.ts",
     "audit:migrate-lifestyle": "tsx scripts/audit/migrate-lifestyle-subsections.ts",
@@ -68,6 +82,7 @@
     "eslint-config-next": "15.4.11",
     "jsdom": "^30.0.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "zod": "^4.6.6"
   }
 }

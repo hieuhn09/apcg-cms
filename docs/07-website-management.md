@@ -20,6 +20,32 @@ For System Admins. A "website" is a row in the **Tenants** collection.
 8. Save. Then mint a read token (below) and create header/footer **Menus** for the
    tenant.
 
+### Example: GlobalTravelPost (`gtp`)
+
+Owner-run, systemAdmin only (gtp-launch P1 plan section 7 is the full sheet):
+
+- Name `GlobalTravelPost`, slug `gtp`, status `active`, default language `en`,
+  supported languages `[en]`, timezone `Asia/Singapore`.
+- **Domain / additional domains: EMPTY at creation** (the live domain still serves the old
+  site until the DNS cutover).
+- **Frontend URL: staged.** Leave EMPTY at creation (the revalidate webhook is then
+  skipped and preview mint answers 400); set the gtp-web PREVIEW URL for the smoke, and
+  `https://globaltravelpost.com` only at cutover. Never point it at a dead host (every
+  editorial save then waits up to 5 s).
+- Features: `articles`, `newsletters`, `corrections` on; everything else off (incl.
+  `translations`).
+- **Auto publish engine drafts: OFF.** `npm run audit:add-gtp-taxonomy` refuses `--apply`
+  while it is on.
+- Then create the taxonomy with `npm run audit:add-gtp-taxonomy` (dry run first; see
+  `docs/11-operations.md` "GTP rollout"), and mint tokens with environment-named labels:
+  `frontend-preview` first, `frontend-prod` at cutover, so they can be revoked
+  independently. The engine record for content-engine is a separate one
+  (`content-engine-gtp`, allowed tenants `[gtp]`, actions `create_article` +
+  `update_article`), created in Console `/console/engines/new`.
+- **Seed is local-only.** Never run `npm run db:seed` against production: it re-upserts
+  fixture rows. The gtp seed fixture is behind `SEED_INCLUDE_GTP=true` and refuses a
+  non-local database.
+
 ## Configure domain & languages
 
 - **Domain**: `domain` + `additionalDomains` are informational/CORS hints; the
@@ -73,6 +99,9 @@ learned.
 ## Mint / rotate tokens
 
 - **Read token** (frontend): `tsx scripts/mint-token.ts read --tenant <slug> --label frontend`.
+  (`tsx` is not on PATH: use `npx tsx`. The script has no local-DB guard and writes to
+  whichever `DATABASE_URL` is exported: print
+  `node -e 'console.log(new URL(process.env.DATABASE_URL).hostname)'` first.)
   Prints the raw token once; stores only its hash on the tenant. Revoke by setting
   the matching `readTokens` row status to `revoked` in admin.
 - **Engine token**: `tsx scripts/mint-token.ts engine --engine "<name>"`. Rotates
