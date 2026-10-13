@@ -43,10 +43,16 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // engine block checks the PRIMARY pillar only; `events-awards` is NOT
 // single-home, so it keeps sub-sections, secondary sections and a REQUIRED
 // author. The four other gtp pillars stay engine-writable.
+//
+// VowAsia (tenant `vowasia`, vowasia launch P1, owner decision 13-10-26):
+// `press-room` (hyphenated slug, like gtp; single-home too, see below) is
+// editor-only. VowAsia has no `events-awards` pillar; its seven other pillars
+// stay engine-writable.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   gcv: ["exclusive", "pressroom"],
   "brief-asia": ["pressroom"],
   gtp: ["press-room", "events-awards"],
+  vowasia: ["press-room"],
 };
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */
@@ -78,10 +84,14 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // GTP `press-room` (hyphenated, exact slug; gtp-launch P1) is single-home with
 // an optional author, like the Pressroom pillars; GTP `events-awards` is NOT
 // (it is only engine-blocked, above).
+// VowAsia `press-room` (vowasia launch P1, owner decision 13-10-26: "pressroom
+// is a pillar and has no secondary pillar") is single-home with an optional
+// author, exactly like GTP `press-room`.
 export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
   "brief-asia": ["pressroom"],
   gcv: ["pressroom"],
   gtp: ["press-room"],
+  vowasia: ["press-room"],
 };
 
 // ── Top-level user role (global identity) ───────────────────────────────────
