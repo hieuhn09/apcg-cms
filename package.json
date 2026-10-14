@@ -15,6 +15,7 @@
     "test:hub-media": "tsx --test src/lib/hub-media-validate.test.ts src/lib/media-create.test.ts src/lib/hub-author-media-token.test.ts",
     "test:single-home": "tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts scripts/lib/local-db-guard.test.ts",
     "test:hub-live": "tsx --test src/lib/hub-author-live-pure.test.ts src/lib/hub-author-live-core.test.ts",
+    "test:hub-p56": "tsx --test src/lib/hub-author-preview-pure.test.ts src/lib/hub-author-preview-core.test.ts",
     "payload": "payload",
     "payload:generate-types": "payload generate:types",
     "payload:generate-importmap": "payload generate:importmap",

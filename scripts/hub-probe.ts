@@ -26,6 +26,8 @@
  * (images: POST /api/hub/media; see the --check8 section near the end);
  * --setup9/--check9 = P5.4 (live edit: PATCH /api/hub/articles/{id}/live; see the
  * --check9 section at the end).
+ * --setup10/--check10 = P5.6 (preview mint: POST /api/hub/articles/{id}/preview; see the
+ * --check10 section right before the dispatch).
  */
 
 import "./lib/env";
@@ -11663,6 +11665,401 @@ async function check9() {
   process.exit(ok ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// APCGHub P5.6 (chặng 1) — POST /api/hub/articles/{id}/preview (content-engine plan
+// process/features/apcg-hub/active/apcg-hub-p5-6-preview-taxonomy-cms-exit_PLAN_30-09-26.md).
+//
+//   npx tsx scripts/hub-probe.ts --setup10 --in <f6> --out <f10>
+//   npx tsx scripts/hub-probe.ts --check10 --in <f10> [--server-log <file>] [--f9 <f9>]   (X1–X12, X26)
+//   npx tsx scripts/hub-probe.ts --check10 --in <f10> --unit-only                      (X3, X4, X5 in-process)
+//
+// LOCAL DISPOSABLE DATABASE ONLY (guard9: assertLocalTargets + R2 unset + assertLocalDb, FIRST).
+// Every tenant frontendUrl written here is null or http://127.0.0.1:<unused port>; the one
+// bad value X8 needs (`http://p56.invalid`) lives only inside X8 and is restored in `finally`
+// (and repaired at the start of --check10 if a dead run left it). Tokens go to 0600 files
+// next to <f10>, never printed. The signing secret is read from the probe's own env (a
+// throwaway value) and only ever compared, never printed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const P10_GROUPS = ["X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10", "X11", "X12", "X26"] as const;
+const P10_UNIT_GROUPS = ["X3", "X4", "X5"] as const;
+const P10_ACTOR = { email: "p56@example.invalid", role: "editor", id: "hub-user-56" } as const;
+const P10_FRONT_PORT = 3597; // nothing listens there; mint never fetches the frontend
+const P10_TENANTS = { a: "p56-a", b: "p56-b", nourl: "p56-nourl", badurl: "p56-badurl" } as const;
+const P10_BAD_URL = "http://p56.invalid";
+type P10Article = "draft" | "otherTenant" | "noSlug" | "published" | "engine" | "adminDraft" | "noVersionRow" | "nourl" | "badurl";
+
+interface Setup10 {
+  version: 1;
+  setup6: string;
+  out: string;
+  frontendUrl: string;
+  tenants: Record<keyof typeof P10_TENANTS, { id: number; slug: string }>;
+  engines: Record<"author" | "read" | "write", { id: number; name: string; tokenFile: string }>;
+  articles: Record<P10Article, { id: number; tenant: string; slug: string | null }>;
+  /** Main-row slug of `draft` (the latest version's slug differs: PATCHed after creation). */
+  draftMainSlug: string;
+  noVersionRowDeleted: number;
+}
+
+async function setup10() {
+  guard9();
+  const inFile = arg("in");
+  const out = arg("out");
+  if (!inFile || !out) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup10 --in <file from --setup6> --out <f10>");
+    process.exit(2);
+  }
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const payload = await getPayload({ config });
+  const tenants = await tenantsBySlug(payload);
+  const frontendUrl = `http://127.0.0.1:${P10_FRONT_PORT}`;
+
+  // Refuse unless every existing tenant frontendUrl is null / local (same rule as --setup9).
+  const allT = (await payload.find({ collection: "tenants", limit: 200, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+  const badUrl = allT.filter((t) => t.frontendUrl != null && t.frontendUrl !== "" && !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(String(t.frontendUrl)));
+  if (badUrl.length) {
+    console.error(`[setup10] refusing: tenant frontendUrl not local: ${badUrl.map((t) => t.slug).join(", ")}`);
+    process.exit(2);
+  }
+
+  const tOut = {} as Setup10["tenants"];
+  for (const [key, slug] of Object.entries(P10_TENANTS) as [keyof typeof P10_TENANTS, string][]) {
+    const url = key === "a" || key === "b" ? frontendUrl : null;
+    const data = { name: `P56 ${key}`, slug, status: "active", defaultLanguage: "en", supportedLanguages: ["en"], frontendUrl: url, features: { articles: true, translations: false } };
+    let id = tenants.get(slug);
+    if (id == null) id = ((await payload.create({ collection: "tenants", overrideAccess: true, context: { disableRevalidate: true }, data: data as never })) as unknown as { id: number }).id;
+    else await payload.update({ collection: "tenants", id, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: url, status: "active", features: { articles: true, translations: false } } as never });
+    tOut[key] = { id, slug };
+  }
+  const grant = Object.values(tOut).map((t) => t.id);
+
+  const engines = {} as Setup10["engines"];
+  for (const [key, flags] of [
+    ["author", { hubRead: true, hubAuthor: true, hubWrite: false }],
+    ["read", { hubRead: true, hubAuthor: false, hubWrite: false }],
+    ["write", { hubRead: true, hubAuthor: false, hubWrite: true }],
+  ] as const) {
+    const name = `apcghub-p56-${key}`;
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", allowedTenants: grant, ...flags };
+    let id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else id = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", allowedActions: ["import"], ...data } as never })) as unknown as { id: number }).id;
+    const tokenFile = `${out}.${key}.token`;
+    writeFileSync(tokenFile, token, { mode: 0o600 });
+    engines[key] = { id, name, tokenFile };
+  }
+  const author = readFileSync(engines.author.tokenFile, "utf8").trim();
+
+  const run = runId6();
+  const art = async (key: keyof typeof P10_TENANTS, slug: string, data: Doc, opts: { draft?: boolean } = {}) => {
+    const tid = tOut[key].id;
+    const pillar = await ensurePillar(payload, tid, "p56-main", "P56 Main", 96);
+    const au = await ensureAuthor(payload, tid, "p56-author-1", "P56 Author One");
+    return ((await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      locale: "en",
+      ...(opts.draft ? { draft: true } : {}),
+      context: { disableRevalidate: true },
+      data: { tenant: tid, title: `P56 ${slug}`, slug, pillar, author: au, ...data } as never,
+    })) as unknown as { id: number }).id;
+  };
+  const s = (n: string) => `p56-${run}-${n}`;
+  // (1) a hub draft whose LATEST version got a new slug (main row keeps the first one).
+  const draftId = await art("a", s("draft"), { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id }, { draft: true });
+  await payload.update({ collection: "articles", id: draftId, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { slug: s("draft-new") } as never });
+  const mainSlug = String(((await payload.findByID({ collection: "articles", id: draftId, depth: 0, overrideAccess: true })) as unknown as Doc).slug);
+  const latestSlug = String(((await payload.findByID({ collection: "articles", id: draftId, depth: 0, draft: true, overrideAccess: true })) as unknown as Doc).slug);
+  if (latestSlug !== s("draft-new") || mainSlug === latestSlug) throw new Error(`setup10: slug fixture not as expected (main=${mainSlug} latest=${latestSlug})`);
+  // (2) another tenant's draft.
+  const otherId = await art("b", s("other"), { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id }, { draft: true });
+  // (3) a draft WITHOUT a slug. The hub route always derives one from the title (hub-author-input.ts,
+  //     `slugify(title)` when absent), so such a draft can only come from a direct (CMS-side) draft save.
+  const noSlugId = ((await payload.create({
+    collection: "articles",
+    overrideAccess: true,
+    locale: "en",
+    draft: true,
+    context: { disableRevalidate: true },
+    data: {
+      tenant: tOut.a.id, title: `P56 no slug ${run}`, origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id,
+      pillar: await ensurePillar(payload, tOut.a.id, "p56-main", "P56 Main", 96), author: await ensureAuthor(payload, tOut.a.id, "p56-author-1", "P56 Author One"),
+    } as never,
+  })) as unknown as { id: number }).id;
+  const nsLatest = (await payload.findByID({ collection: "articles", id: noSlugId, depth: 0, draft: true, overrideAccess: true })) as unknown as Doc;
+  if (typeof nsLatest.slug === "string" && nsLatest.slug.trim() !== "") throw new Error("setup10: the no-slug draft has a slug");
+  const r3 = await call9("POST", "/api/hub/articles", { tenant: P10_TENANTS.a, title: `P56 title only ${run}`, actor: P10_ACTOR }, author);
+  console.log(`OBS   setup10: a title-only hub draft gets slug "${String(r3.body.slug ?? "")}" (status ${r3.status}) — the hub route derives it from the title`);
+  // (4) published, (5) engine pending_review, (6) a CMS-admin draft (lastEngine null).
+  const pubId = await art("a", s("pub"), { origin: "manual", workflowStatus: "published", _status: "published" });
+  const engId = await art("a", s("engine"), { origin: "engine", workflowStatus: "pending_review" }, { draft: true });
+  const admId = await art("a", s("admin"), { origin: "manual", workflowStatus: "draft", lastEngine: null }, { draft: true });
+  // (7) a published article whose version rows are removed (an imported article without one).
+  const nvId = await art("a", s("noversion"), { origin: "manual", workflowStatus: "published", _status: "published" });
+  const db = rawDb(payload);
+  const del = (await db.execute(sql`DELETE FROM _articles_v WHERE parent_id = ${nvId} RETURNING id`)) as { rows?: unknown[] };
+  // (8) / (9) one article on the null-URL tenant and one on the bad-URL tenant (URL null at rest).
+  const nourlId = await art("nourl", s("nourl"), { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id }, { draft: true });
+  const badId = await art("badurl", s("badurl"), { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id }, { draft: true });
+
+  const o: Setup10 = {
+    version: 1,
+    setup6: inFile,
+    out,
+    frontendUrl,
+    tenants: tOut,
+    engines,
+    articles: {
+      draft: { id: draftId, tenant: P10_TENANTS.a, slug: latestSlug },
+      otherTenant: { id: otherId, tenant: P10_TENANTS.b, slug: s("other") },
+      noSlug: { id: noSlugId, tenant: P10_TENANTS.a, slug: null },
+      published: { id: pubId, tenant: P10_TENANTS.a, slug: s("pub") },
+      engine: { id: engId, tenant: P10_TENANTS.a, slug: s("engine") },
+      adminDraft: { id: admId, tenant: P10_TENANTS.a, slug: s("admin") },
+      noVersionRow: { id: nvId, tenant: P10_TENANTS.a, slug: s("noversion") },
+      nourl: { id: nourlId, tenant: P10_TENANTS.nourl, slug: s("nourl") },
+      badurl: { id: badId, tenant: P10_TENANTS.badurl, slug: s("badurl") },
+    },
+    draftMainSlug: mainSlug,
+    noVersionRowDeleted: del.rows?.length ?? 0,
+  };
+  writeFileSync(out, JSON.stringify(o, null, 2), { mode: 0o600 });
+  console.log(`[setup10] written ${out} (+ three 0600 token files; tokens NOT printed). tenants ${Object.values(P10_TENANTS).join(",")}; version rows removed for the no-version article: ${o.noVersionRowDeleted}`);
+  process.exit(0);
+}
+
+/** base64url payload of a `<payload>.<sig>` token (decode only; no verification). */
+function p10Claims(token: string): Doc {
+  const body = token.split(".")[0] ?? "";
+  return JSON.parse(Buffer.from(body.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")) as Doc;
+}
+
+async function check10() {
+  guard9();
+  const { state, expect } = makeExpect();
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --check10 --in <f10> [--server-log <file>] [--f9 <f9>] | --check10 --in <f10> --unit-only");
+    process.exit(2);
+  }
+  const unit = flag("unit-only");
+  const s10 = JSON.parse(readFileSync(inFile, "utf8")) as Setup10;
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const T = { author: tok(s10.engines.author.tokenFile), read: tok(s10.engines.read.tokenFile), write: tok(s10.engines.write.tokenFile) };
+  const secret = process.env.CENTRAL_SIGNING_SECRET ?? "";
+  if (secret.length < 16) {
+    console.error("[check10] refusing: CENTRAL_SIGNING_SECRET (a throwaway probe value) must be set in the probe env");
+    process.exit(2);
+  }
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const rows = async (q: unknown) => ((await db.execute(q)) as { rows?: Doc[] }).rows ?? [];
+  const { signPayload, verifySigned } = await import("../src/lib/crypto");
+  const A = s10.articles;
+  const executed: string[] = [];
+  const seen: string[] = []; // every response text (X10)
+  const minted: { token: string; url: string }[] = [];
+  const isJsonOk = (r: Reply9) => typeof r.body.ok === "boolean";
+  const badurlId = s10.tenants.badurl.id;
+
+  // Repair a bad frontendUrl a dead run may have left (X8 sets it only temporarily).
+  const curBad = ((await payload.findByID({ collection: "tenants", id: badurlId, depth: 0, overrideAccess: true })) as unknown as Doc).frontendUrl;
+  if (curBad != null && curBad !== "") {
+    await payload.update({ collection: "tenants", id: badurlId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: null } as never });
+    console.log("OBS   p56-badurl frontendUrl left over by a dead run — restored to null");
+  }
+
+  const mint = async (id: number | string, tenant: string, token: string | null = T.author) => {
+    const r = await call9("POST", `/api/hub/articles/${id}/preview`, { tenant, actor: P10_ACTOR }, token);
+    seen.push(r.text);
+    if (r.status === 200 && typeof r.body.url === "string") {
+      const t = new URL(r.body.url).searchParams.get("token") ?? "";
+      minted.push({ token: t, url: r.body.url });
+    }
+    return r;
+  };
+  const pubPreview = async (token: string) => {
+    const r = await call9("GET", `/api/public/preview?token=${encodeURIComponent(token)}`, undefined, null);
+    return r;
+  };
+  const group = async (name: (typeof P10_GROUPS)[number], fn: () => Promise<void>) => {
+    try {
+      await fn();
+      executed.push(name);
+    } catch (e) {
+      state.failures++;
+      console.log(`FAIL  ${name} threw: ${(e as Error).name}: ${String((e as Error).message).slice(0, 200)}`);
+    }
+  };
+
+  if (unit) {
+    // In-process: mint through the handler with the real local Payload, then token checks with the verifier.
+    const core = await import("../src/lib/hub-author-preview-core");
+    const req = new Request(`${BASE}/api/hub/articles/${A.draft.id}/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${T.author}` },
+      body: JSON.stringify({ tenant: A.draft.tenant, actor: P10_ACTOR }),
+    });
+    const res = await core.handleHubPreviewMintWith(req, { params: Promise.resolve({ id: String(A.draft.id) }) }, { getPayload: async () => payload });
+    const body = (await res.json()) as Doc;
+    expect("U0: in-process mint ⇒ 200", res.status, 200);
+    const token = new URL(String(body.url)).searchParams.get("token") ?? "";
+    const now = Math.floor(Date.now() / 1000);
+    await group("X3", async () => {
+      const c = p10Claims(token);
+      expect("X3: claims keys / tenant slug / draft / ttl ≤ 600", [Object.keys(c).sort(), c.tenant, c.slug, c.draft, Number(c.exp) - now <= 600 && Number(c.exp) - now > 590], [["draft", "exp", "slug", "tenant"], A.draft.tenant, A.draft.slug, true, true]);
+    });
+    await group("X4", async () => {
+      const expired = signPayload({ ...p10Claims(token), exp: now - 5 } as never);
+      expect("X4: an expired token is refused by the verifier", verifySigned(expired, now), null);
+    });
+    await group("X5", async () => {
+      const flipped = token.slice(0, -1) + (token.endsWith("A") ? "B" : "A");
+      const body2 = token.split(".")[0]!;
+      const altered = `${body2.slice(0, -1)}${body2.endsWith("A") ? "B" : "A"}.${token.split(".")[1]}`;
+      expect("X5: one changed character (signature / payload) ⇒ refused", [verifySigned(flipped, now), verifySigned(altered, now), verifySigned(token, now) !== null], [null, null, true]);
+    });
+    console.log(`\n[check10] groups executed ${executed.length}/${P10_UNIT_GROUPS.length} (unit-only: ${P10_UNIT_GROUPS.join(", ")})`);
+    const ok = state.failures === 0 && executed.length === P10_UNIT_GROUPS.length;
+    console.log(`[check10] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(ok ? 0 : 1);
+  }
+
+  let x1: Reply9 | null = null;
+  await group("X1", async () => {
+    x1 = await mint(A.draft.id, A.draft.tenant);
+    const b = x1.body;
+    const u = typeof b.url === "string" ? new URL(b.url) : null;
+    expect("X1: author key mint ⇒ 200, exactly {ok,id,tenant,url,expiresAt}, url = <frontendUrl>/preview?token&slug", [x1.status, Object.keys(b).sort(), b.ok, b.id, b.tenant, u ? u.origin + u.pathname : null, u ? [...u.searchParams.keys()] : null, u?.searchParams.get("slug")], [200, ["expiresAt", "id", "ok", "tenant", "url"], true, A.draft.id, A.draft.tenant, `${s10.frontendUrl}/preview`, ["token", "slug"], A.draft.slug]);
+  });
+  const x1Token = () => (x1 && typeof (x1 as Reply9).body.url === "string" ? new URL(String((x1 as Reply9).body.url)).searchParams.get("token") ?? "" : "");
+
+  await group("X2", async () => {
+    const r = await pubPreview(x1Token());
+    const doc = (r.body.doc ?? {}) as Doc;
+    expect("X2: the minted token is accepted by GET /api/public/preview; doc = the article's LATEST version (new slug, not the main row's)", [r.status, r.body.preview, doc.id, doc.slug, doc.slug === s10.draftMainSlug], [200, true, A.draft.id, A.draft.slug, false]);
+  });
+
+  await group("X3", async () => {
+    const c = p10Claims(x1Token());
+    const now = Math.floor(Date.now() / 1000);
+    expect("X3: decoded claims = {tenant slug, slug, draft:true, exp}, exp − now ≤ 600", [Object.keys(c).sort(), c.tenant, c.draft, Number(c.exp) - now <= 600, Number(c.exp) - now > 540], [["draft", "exp", "slug", "tenant"], A.draft.tenant, true, true, true]);
+  });
+
+  await group("X4", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const expired = signPayload({ ...p10Claims(x1Token()), exp: now - 5 } as never);
+    const r = await pubPreview(expired);
+    expect("X4: (positive) JSON reply; an expired token ⇒ 401", [isJsonOk(r), r.status], [true, 401]);
+  });
+
+  await group("X5", async () => {
+    const t = x1Token();
+    const [body, sig] = t.split(".") as [string, string];
+    const a = await pubPreview(`${body}.${sig.slice(0, -1)}${sig.endsWith("A") ? "B" : "A"}`);
+    const b = await pubPreview(`${body.slice(0, -1)}${body.endsWith("A") ? "B" : "A"}.${sig}`);
+    expect("X5: (positive) JSON replies; one changed character in signature / payload ⇒ 401 / 401", [isJsonOk(a), isJsonOk(b), a.status, b.status], [true, true, 401, 401]);
+  });
+
+  await group("X6", async () => {
+    const cross = await mint(A.otherTenant.id, A.draft.tenant);
+    const missing = await mint(2147483000, A.draft.tenant);
+    const shape = await mint("2147483648", A.draft.tenant);
+    expect("X6: (positive) JSON; tenant B's article with tenant A ⇒ 404, byte-identical to an unknown id and an out-of-range id", [isJsonOk(cross), cross.status, cross.text === missing.text, cross.text === shape.text], [true, 404, true, true]);
+  });
+
+  await group("X7", async () => {
+    const rd = await mint(A.draft.id, A.draft.tenant, T.read);
+    const wr = await mint(A.draft.id, A.draft.tenant, T.write);
+    const none = await mint(A.draft.id, A.draft.tenant, null);
+    expect("X7: (positive) JSON; read-only / status-write-only / no token ⇒ 403 / 403 / 401", [isJsonOk(rd), isJsonOk(wr), isJsonOk(none), rd.status, wr.status, none.status, rd.body.reason, wr.body.reason], [true, true, true, 403, 403, 401, "hub author not allowed for this engine", "hub author not allowed for this engine"]);
+  });
+
+  await group("X8", async () => {
+    const n = await mint(A.nourl.id, A.nourl.tenant);
+    let b: Reply9 | null = null;
+    try {
+      await payload.update({ collection: "tenants", id: badurlId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: P10_BAD_URL } as never });
+      b = await mint(A.badurl.id, A.badurl.tenant);
+    } finally {
+      await payload.update({ collection: "tenants", id: badurlId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: null } as never });
+    }
+    const after = ((await payload.findByID({ collection: "tenants", id: badurlId, depth: 0, overrideAccess: true })) as unknown as Doc).frontendUrl ?? null;
+    expect("X8: null frontendUrl ⇒ 409 no_frontend_url; temporary http://p56.invalid ⇒ 409 bad_frontend_url; restored to null", [n.status, n.body.status, n.body.reason, b?.status, b?.body.reason, after], [409, "preview_unavailable", "no_frontend_url", 409, "bad_frontend_url", null]);
+  });
+
+  await group("X9", async () => {
+    const r = await mint(A.noSlug.id, A.noSlug.tenant);
+    expect("X9: a title-only draft (no slug) ⇒ 409 no_slug", [r.status, r.body.status, r.body.reason], [409, "preview_unavailable", "no_slug"]);
+  });
+
+  await group("X26", async () => {
+    const out: unknown[] = [];
+    for (const k of ["published", "engine", "adminDraft"] as const) {
+      const r = await mint(A[k].id, A[k].tenant);
+      const tokenK = typeof r.body.url === "string" ? new URL(r.body.url).searchParams.get("token") ?? "" : "";
+      const pr = k === "published" ? await pubPreview(tokenK) : null;
+      out.push([k, r.status, pr ? [pr.status, ((pr.body.doc ?? {}) as Doc).slug] : null]);
+    }
+    expect("X26 (D9): published / engine pending_review / CMS-admin draft ⇒ 200; public round trip on the published one", out, [
+      ["published", 200, [200, A.published.slug]],
+      ["engine", 200, null],
+      ["adminDraft", 200, null],
+    ]);
+    // Exploratory (plan: "thử thêm … nếu tạo được"): a published article whose version rows are gone.
+    // Recorded, not asserted — the verifier (/api/public/preview, forbidden zone) is not changed here.
+    const nv = await mint(A.noVersionRow.id, A.noVersionRow.tenant);
+    const nvTok = typeof nv.body.url === "string" ? new URL(nv.body.url).searchParams.get("token") ?? "" : "";
+    const nvPub = nvTok ? await pubPreview(nvTok) : null;
+    console.log(`OBS   X26 no-version-row article (version rows removed at setup: ${s10.noVersionRowDeleted}): mint ${nv.status}; /api/public/preview ${nvPub ? nvPub.status : "not called"}`);
+  });
+
+  await group("X11", async () => {
+    const counts = async () => (await rows(sql`SELECT (SELECT count(*)::int FROM articles) AS a, (SELECT count(*)::int FROM _articles_v) AS v, (SELECT count(*)::int FROM activity_log) AS l`))[0];
+    const before = await counts();
+    const ok = await mint(A.draft.id, A.draft.tenant);
+    const mid = await counts();
+    const denied = await mint(A.draft.id, A.draft.tenant, T.read);
+    const deniedToken = typeof ok.body.url === "string" ? new URL(ok.body.url).searchParams.get("token") ?? "" : "";
+    expect("X11: (positive) JSON; a successful mint adds no articles / versions / activity rows; a refusal carries no token", [isJsonOk(ok), ok.status, JSON.stringify(before) === JSON.stringify(mid), deniedToken !== "" && !denied.text.includes(deniedToken)], [true, 200, true, true]);
+  });
+
+  await group("X10", async () => {
+    const all = seen.join("\n");
+    const logFile = arg("server-log");
+    const log = logFile ? readFileSync(logFile, "utf8") : null;
+    // `next dev` logs every request path. The probe's own calls to the EXISTING verifier
+    // (GET /api/public/preview?token=…) therefore put tokens in the dev request log; those lines
+    // are counted and reported, every OTHER line must hold no token / URL, and no line the secret.
+    const verifierLine = /^\s*GET \/api\/public\/preview\?token=/;
+    const lines = (log ?? "").split("\n");
+    const other = lines.filter((l) => !verifierLine.test(l)).join("\n");
+    const leaks = (txt: string) => [txt.includes(secret), minted.some((m) => m.token !== "" && txt.includes(m.token)), minted.some((m) => txt.includes(m.url))];
+    console.log(`OBS   X10 dev request-log lines of the verifier path (GET /api/public/preview?token=…): ${lines.filter((l) => verifierLine.test(l)).length}`);
+    expect("X10: the secret is never in a response nor in the server log; outside the verifier's own request-path lines the log holds no token / preview URL", [all.includes(secret), log === null ? "no --server-log" : [(log ?? "").includes(secret), ...leaks(other).slice(1)], minted.length > 0], [false, [false, false, false], true]);
+  });
+
+  await group("X12", async () => {
+    const r6 = spawnSync("npx", ["tsx", "scripts/hub-probe.ts", "--check6", "--unit-only"], { env: process.env, encoding: "utf8", timeout: 300_000 });
+    const f9 = arg("f9");
+    const r9 = f9 ? spawnSync("npx", ["tsx", "scripts/hub-probe.ts", "--check9", "--in", f9], { env: process.env, encoding: "utf8", timeout: 600_000 }) : null;
+    const tail = (s: string | undefined) => (s ?? "").split("\n").filter((l) => /groups executed|ALL CHECKS PASSED|CHECK\(S\) FAILED|^PASS|^FAIL/.test(l));
+    const t6 = tail(r6.stdout);
+    const t9 = r9 ? tail(r9.stdout) : [];
+    console.log(`OBS   X12 --check6 --unit-only: exit=${r6.status} PASS=${t6.filter((l) => l.startsWith("PASS")).length} FAIL=${t6.filter((l) => l.startsWith("FAIL")).length}`);
+    console.log(`OBS   X12 --check9: ${r9 ? `exit=${r9.status} PASS=${t9.filter((l) => l.startsWith("PASS")).length} FAIL=${t9.filter((l) => l.startsWith("FAIL")).length} ${t9.filter((l) => l.includes("groups executed")).join(" ")}` : "not run (no --f9)"}`);
+    expect("X12: --check6 --unit-only and --check9 re-run green", [r6.status, r9 ? r9.status : "no --f9"], [0, 0]);
+  });
+
+  const missing = P10_GROUPS.filter((g) => !executed.includes(g));
+  console.log(`\n[check10] groups executed ${executed.length}/${P10_GROUPS.length}${missing.length ? ` (not run: ${missing.join(", ")})` : ""}`);
+  const ok = state.failures === 0 && executed.length === P10_GROUPS.length;
+  console.log(`[check10] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(ok ? 0 : 1);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -11711,10 +12108,14 @@ const run = flag("setup")
                                               ? setup9
                                               : flag("check9")
                                                 ? check9
-                                                : null;
+                                                : flag("setup10")
+                                                  ? setup10
+                                                  : flag("check10")
+                                                    ? check10
+                                                    : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only | --setup9 --in <setup6.json> --out <f9> | --check9 --in <f9> | --check9 --unit-only",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only | --setup9 --in <setup6.json> --out <f9> | --check9 --in <f9> | --check9 --unit-only | --setup10 --in <setup6.json> --out <f10> | --check10 --in <f10> [--server-log <file>] [--f9 <f9>] | --check10 --in <f10> --unit-only",
   );
   process.exit(2);
 }
