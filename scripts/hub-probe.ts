@@ -28,6 +28,8 @@
  * --check9 section at the end).
  * --setup10/--check10 = P5.6 (preview mint: POST /api/hub/articles/{id}/preview; see the
  * --check10 section right before the dispatch).
+ * --check11 = P5.6 (pen name / tag create: POST /api/hub/authors, POST /api/hub/tags; see the
+ * --check11 section right before the dispatch; f10 from a chặng-2 --setup10).
  */
 
 import "./lib/env";
@@ -11695,7 +11697,10 @@ interface Setup10 {
   out: string;
   frontendUrl: string;
   tenants: Record<keyof typeof P10_TENANTS, { id: number; slug: string }>;
-  engines: Record<"author" | "read" | "write", { id: number; name: string; tokenFile: string }>;
+  engines: Record<"author" | "read" | "write", { id: number; name: string; tokenFile: string }> & {
+    /** chặng 2 (X25): an intake engine (create_article) granted p56-a only. Absent in an f10 written before chặng 2. */
+    intake?: { id: number; name: string; tokenFile: string };
+  };
   articles: Record<P10Article, { id: number; tenant: string; slug: string | null }>;
   /** Main-row slug of `draft` (the latest version's slug differs: PATCHed after creation). */
   draftMainSlug: string;
@@ -11749,6 +11754,19 @@ async function setup10() {
     const tokenFile = `${out}.${key}.token`;
     writeFileSync(tokenFile, token, { mode: 0o600 });
     engines[key] = { id, name, tokenFile };
+  }
+  {
+    // chặng 2 (X25): an ENGINE intake key on p56-a only (create_article), to compare the intake's
+    // find-or-create of a byline with the hub-created pen name. Token in a 0600 file, never printed.
+    const name = "apcghub-p56-intake";
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", allowedTenants: [tOut.a.id], allowedActions: ["create_article"], hubRead: false, hubAuthor: false, hubWrite: false };
+    let id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else id = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", ...data } as never })) as unknown as { id: number }).id;
+    const tokenFile = `${out}.intake.token`;
+    writeFileSync(tokenFile, token, { mode: 0o600 });
+    engines.intake = { id, name, tokenFile };
   }
   const author = readFileSync(engines.author.tokenFile, "utf8").trim();
 
@@ -11826,7 +11844,7 @@ async function setup10() {
     noVersionRowDeleted: del.rows?.length ?? 0,
   };
   writeFileSync(out, JSON.stringify(o, null, 2), { mode: 0o600 });
-  console.log(`[setup10] written ${out} (+ three 0600 token files; tokens NOT printed). tenants ${Object.values(P10_TENANTS).join(",")}; version rows removed for the no-version article: ${o.noVersionRowDeleted}`);
+  console.log(`[setup10] written ${out} (+ four 0600 token files; tokens NOT printed). tenants ${Object.values(P10_TENANTS).join(",")}; version rows removed for the no-version article: ${o.noVersionRowDeleted}`);
   process.exit(0);
 }
 
@@ -12060,6 +12078,260 @@ async function check10() {
   process.exit(ok ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// APCGHub P5.6 (chặng 2) — POST /api/hub/authors and POST /api/hub/tags (content-engine
+// plan process/features/apcg-hub/active/apcg-hub-p5-6-preview-taxonomy-cms-exit_PLAN_30-09-26.md).
+//
+//   npx tsx scripts/hub-probe.ts --check11 --in <f10>                (X13–X25, X27 over HTTP)
+//   npx tsx scripts/hub-probe.ts --check11 --in <f10> --unit-only    (X13, X14, X17, X19, X20 in-process)
+//
+// LOCAL DISPOSABLE DATABASE ONLY (guard9 FIRST). Uses the --setup10 tenants / keys (f10 written
+// by a chặng-2 --setup10, which adds the intake key for X25). Every name / title carries a
+// fresh run id so the check can be re-run on the same database. Tokens are never printed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const P11_GROUPS = ["X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20", "X21", "X22", "X23", "X24", "X25", "X27"] as const;
+const P11_UNIT_GROUPS = ["X13", "X14", "X17", "X19", "X20"] as const;
+const P11_CODES = new Set<string>([
+  "required", "type", "too_long", "too_many", "out_of_range", "format", "duplicate", "unknown_ref", "not_enabled", "blocked_pillar",
+  "c0", "bidi", "surrogate", "newline", "invalid", "too_large", "ws_run", "image", "link", "url", "node", "unstable", "too_slow",
+]);
+
+async function check11() {
+  guard9();
+  const { state, expect } = makeExpect();
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --check11 --in <f10> [--unit-only]");
+    process.exit(2);
+  }
+  const unit = flag("unit-only");
+  const s10 = JSON.parse(readFileSync(inFile, "utf8")) as Setup10;
+  if (!unit && !s10.engines.intake) {
+    console.error("[check11] refusing: <f10> has no intake key — re-run --setup10 (chặng 2) first");
+    process.exit(2);
+  }
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const T = { author: tok(s10.engines.author.tokenFile), read: tok(s10.engines.read.tokenFile), write: tok(s10.engines.write.tokenFile) };
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const num = async (q: unknown) => Number((((await db.execute(q)) as { rows?: Doc[] }).rows?.[0] ?? {}).n ?? -1);
+  const ta = s10.tenants.a;
+  const tb = s10.tenants.b;
+  const run = runId6();
+  const nm = (s: string) => `P56 ${s} ${run}`;
+  const executed: string[] = [];
+  const group = async (name: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+      executed.push(name);
+    } catch (e) {
+      state.failures++;
+      console.log(`FAIL  ${name} threw: ${(e as Error).name}: ${String((e as Error).message).slice(0, 200)}`);
+    }
+  };
+  const authorsIn = (tid: number) => num(sql`SELECT count(*)::int AS n FROM authors WHERE tenant_id = ${tid}`);
+  const tagsIn = (tid: number) => num(sql`SELECT count(*)::int AS n FROM tags WHERE tenant_id = ${tid}`);
+  const logRows = (col: string) => num(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'human_edit' AND target_collection = ${col}`);
+  const logDetailHas = async (col: string, id: unknown, needle: string) =>
+    num(sql`SELECT count(*)::int AS n FROM activity_log WHERE target_collection = ${col} AND target_id = ${String(id)} AND (detail::text ILIKE ${"%" + needle + "%"})`);
+
+  // One call helper for both modes: HTTP (default) or the in-process handler (unit-only).
+  type R = { status: number; text: string; body: Doc };
+  const core = unit ? await import("../src/lib/hub-taxonomy-create-core") : null;
+  const post = async (path: "/api/hub/authors" | "/api/hub/tags", body: unknown, token: string | null = T.author): Promise<R> => {
+    if (!core) return call9("POST", path, body, token);
+    const req = new Request(`${BASE}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body),
+    });
+    const deps = { getPayload: async () => payload };
+    const res = path === "/api/hub/authors" ? await core.handleHubAuthorCreateWith(req, deps) : await core.handleHubTagCreateWith(req, deps);
+    const text = await res.text();
+    let b: Doc = {};
+    try {
+      b = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, text, body: b };
+  };
+  const author = (tenant: string, name: string, role?: string, token?: string | null) =>
+    post("/api/hub/authors", { tenant, name, ...(role === undefined ? {} : { role }), actor: P10_ACTOR }, token);
+  const tag = (tenant: string, title: string, token?: string | null) => post("/api/hub/tags", { tenant, title, actor: P10_ACTOR }, token);
+  const idOf = (r: R, k: "author" | "tag") => (r.body[k] as Doc | undefined)?.id;
+  const seen: string[] = [];
+  const keep = (r: R) => {
+    seen.push(r.text);
+    return r;
+  };
+
+  let x13Id: unknown = null;
+  let x16: { id: unknown; slug: unknown } = { id: null, slug: null };
+
+  await group("X13", async () => {
+    const l0 = await logRows("authors");
+    const name = nm("Author One");
+    const a = keep(await author(ta.slug, name));
+    expect("X13 (positive): a new pen name ⇒ 201 JSON created:true", [a.status, a.body.ok, a.body.created], [201, true, true]);
+    const l1 = await logRows("authors");
+    const b = keep(await author(ta.slug, name));
+    const l2 = await logRows("authors");
+    x13Id = idOf(a, "author");
+    expect("X13: repeat ⇒ 200 created:false, same id; activity_log human_edit authors +1 then +0", [b.status, b.body.created, idOf(b, "author") === x13Id, l1 - l0, l2 - l1], [200, false, true, 1, 0]);
+    expect("X13: the activity row's detail carries no name and no e-mail", [await logDetailHas("authors", x13Id, name), await logDetailHas("authors", x13Id, P10_ACTOR.email), await logDetailHas("authors", x13Id, '"via": "hub"')], [0, 0, 1]);
+  });
+
+  await group("X14", async () => {
+    const nfc = `Nguyễn Văn ${run}`;
+    const a = await author(ta.slug, nfc);
+    const b = await author(ta.slug, `  ${nfc.normalize("NFD").replace(/ /g, "  ")} `);
+    expect("X14: NFD with extra spaces and NFC ⇒ the same id (positive first)", [a.status, b.status, idOf(a, "author") === idOf(b, "author"), (b.body.author as Doc)?.name], [201, 200, true, nfc]);
+  });
+
+  if (!unit) {
+    await group("X15", async () => {
+      const a = await author(ta.slug, nm("Case Name"));
+      const b = await author(ta.slug, nm("Case Name").toLowerCase());
+      expect("X15: another letter case ⇒ a NEW row (recorded behaviour; the hub warns)", [a.status, b.status, idOf(a, "author") !== idOf(b, "author")], [201, 201, true]);
+    });
+
+    await group("X16", async () => {
+      const l0 = await logRows("tags");
+      const title = nm("Tag One");
+      const a = keep(await tag(ta.slug, title));
+      const l1 = await logRows("tags");
+      const b = keep(await tag(ta.slug, title.toUpperCase()));
+      const l2 = await logRows("tags");
+      x16 = { id: idOf(a, "tag"), slug: (a.body.tag as Doc)?.slug };
+      const stored = (((await db.execute(sql`SELECT l.title FROM tags_locales l WHERE l._parent_id = ${Number(x16.id)}`)) as { rows?: Doc[] }).rows ?? []).map((r) => r.title);
+      expect("X16: tag 201, repeat (other case) ⇒ 200 same id, title kept; log +1 then +0", [a.status, b.status, idOf(b, "tag") === x16.id, (b.body.tag as Doc)?.title, stored.includes(title), l1 - l0, l2 - l1], [201, 200, true, title, true, 1, 0]);
+      expect("X16: the tag activity row has no title", [await logDetailHas("tags", x16.id, title), await logDetailHas("tags", x16.id, "tag_create")], [0, 1]);
+    });
+  }
+
+  await group("X17", async () => {
+    const a = await tag(ta.slug, `Châu Á ${run}`);
+    const b = await tag(ta.slug, `chau a ${run}`);
+    const c = await tag(ta.slug, `Đồng ${run}`);
+    const d = await tag(ta.slug, `Dong ${run}`);
+    expect("X17: Châu Á ≡ chau a and Đồng ≡ Dong (same slug, same id)", [
+      a.status, b.status, idOf(a, "tag") === idOf(b, "tag"), (a.body.tag as Doc)?.slug,
+      c.status, d.status, idOf(c, "tag") === idOf(d, "tag"), (c.body.tag as Doc)?.slug,
+    ], [201, 200, true, `chau-a-${run}`, 201, 200, true, `dong-${run}`]);
+  });
+
+  if (!unit) {
+    await group("X18", async () => {
+      const name = nm("Shared Name");
+      const a = await author(ta.slug, name);
+      const nb0 = await authorsIn(tb.id);
+      const b = await author(tb.slug, name);
+      const nb1 = await authorsIn(tb.id);
+      expect("X18: the same name in tenant B ⇒ its own row", [a.status, b.status, idOf(a, "author") !== idOf(b, "author"), nb1 - nb0], [201, 201, true, 1]);
+      const tid = (await tenantsBySlug(payload)).get("dtw");
+      const before = tid == null ? -1 : (await authorsIn(tid)) + (await tagsIn(tid));
+      const x = await author("dtw", nm("Outside"));
+      const y = await tag("dtw", nm("Outside"));
+      const after = tid == null ? -1 : (await authorsIn(tid)) + (await tagsIn(tid));
+      expect("X18: a tenant outside the grant ⇒ 403 and 0 new rows", [x.status, y.status, x.body.reason, after - before], [403, 403, "tenant not in allowed scope", 0]);
+    });
+  }
+
+  await group("X19", async () => {
+    const ok = await author(ta.slug, nm("Role Default"));
+    const stored = (((await db.execute(sql`SELECT role FROM authors WHERE id = ${Number(idOf(ok, "author"))}`)) as { rows?: Doc[] }).rows ?? [])[0]?.role;
+    const bad = await author(ta.slug, nm("Role Bad"), "Boss");
+    expect("X19: default role stored = Staff writer (positive first); a role outside the list ⇒ 422 fields.role=invalid", [ok.status, stored, bad.status, bad.body.status, (bad.body.fields as Doc)?.role], [201, "Staff writer", 422, "invalid", "invalid"]);
+  });
+
+  await group("X20", async () => {
+    const pos = await author(ta.slug, nm("Valid Control"));
+    expect("X20 (positive): a clean name ⇒ 201", pos.status, 201);
+    const n0 = await authorsIn(ta.id);
+    const vectors = [nm("Ctl") + String.fromCharCode(1), "<script>x</script>", "x".repeat(121), String.fromCodePoint(0x3164, 0x3164), "A" + String.fromCodePoint(0x34f) + "B"];
+    const out: unknown[] = [];
+    for (const v of vectors) {
+      const r = await author(ta.slug, v);
+      const c = String((r.body.fields as Doc | undefined)?.name ?? "");
+      out.push([r.status, P11_CODES.has(c)]);
+    }
+    const n1 = await authorsIn(ta.id);
+    expect("X20: control / <script> / 121 chars / U+3164×2 / U+034F ⇒ 422 with a closed code, 0 new rows", [out, n1 - n0], [vectors.map(() => [422, true]), 0]);
+  });
+
+  if (unit) {
+    console.log(`\n[check11] groups executed ${executed.length}/${P11_UNIT_GROUPS.length} (unit-only: ${P11_UNIT_GROUPS.join(", ")})`);
+    const okU = state.failures === 0 && executed.length === P11_UNIT_GROUPS.length;
+    console.log(`[check11] ${okU ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(okU ? 0 : 1);
+  }
+
+  await group("X21", async () => {
+    const out: number[] = [];
+    for (const t of [null, T.read, T.write]) {
+      out.push((await author(ta.slug, nm("Key Check"), undefined, t)).status, (await tag(ta.slug, nm("Key Check"), t)).status);
+    }
+    expect("X21: no token 401, read-only 403, status-write 403 (both routes)", out, [401, 401, 403, 403, 403, 403]);
+  });
+
+  await group("X22", async () => {
+    const r = await call9("GET", `/api/hub/taxonomy?tenants=${ta.slug}&kinds=authors,tags`, undefined, T.read);
+    seen.push(r.text);
+    const entry = ((r.body.tenants as Doc[] | undefined) ?? []).find((e) => (e.tenant as Doc | undefined)?.slug === ta.slug || e.slug === ta.slug) ?? ((r.body.tenants as Doc[] | undefined) ?? [])[0];
+    const aIds = (((entry?.authors as Doc | undefined)?.items as Doc[] | undefined) ?? []).map((d) => d.id);
+    const tIds = (((entry?.tags as Doc | undefined)?.items as Doc[] | undefined) ?? []).map((d) => d.id);
+    expect("X22: GET /api/hub/taxonomy (read key) lists the new pen name and tag", [r.status, aIds.includes(x13Id as number), tIds.includes(x16.id as number)], [200, true, true]);
+  });
+
+  await group("X23", async () => {
+    const r = await call9("POST", "/api/hub/articles", { tenant: ta.slug, title: nm("Uses New Taxonomy"), pillarSlug: "p56-main", authorId: x13Id, tagSlugs: [x16.slug], actor: P10_ACTOR }, T.author);
+    const id = r.body.id as number | undefined;
+    const row = id == null ? [] : (((await db.execute(sql`SELECT version_author_id AS author_id FROM _articles_v WHERE parent_id = ${id} ORDER BY id DESC LIMIT 1`)) as { rows?: Doc[] }).rows ?? []);
+    expect("X23: a hub draft with the new authorId + tagSlugs ⇒ 201 and the draft points at the new pen name", [r.status, Number(row[0]?.author_id) === Number(x13Id)], [201, true]);
+  });
+
+  await group("X24", async () => {
+    // `seen` = the create responses + (last) the taxonomy read. The EXISTING taxonomy route (P5.1,
+    // not touched here) emits each author's public `bio` (sanitizeHubAuthor) — recorded, not asserted.
+    const creates = seen.slice(0, -1);
+    const taxonomy = seen[seen.length - 1] ?? "";
+    const leaks = creates.filter((t) => /"(user|avatar|bio)"\s*:/.test(t)).length;
+    expect("X24: no create response carries user / avatar / bio; the taxonomy read carries no user / avatar", [creates.length >= 4, leaks, /"(user|avatar)"\s*:/.test(taxonomy)], [true, 0, false]);
+    console.log(`OBS   X24: the existing GET /api/hub/taxonomy author items carry a "bio" key: ${/"bio"\s*:/.test(taxonomy)} (P5.1 contract, sanitizeHubAuthor)`);
+  });
+
+  await group("X25", async () => {
+    const name = nm("Intake Match");
+    const h = await author(ta.slug, name);
+    const intakeTok = tok(s10.engines.intake!.tokenFile);
+    const n0 = await authorsIn(ta.id);
+    const r = await call9("POST", "/api/engine/intake", { publicationId: ta.slug, title: nm("Intake Article"), pillarSlug: "p56-main", body_markdown: "P56 intake body.", byline: name }, intakeTok);
+    const n1 = await authorsIn(ta.id);
+    const aid = r.body.id == null ? null : (((await db.execute(sql`SELECT author_id FROM articles WHERE id = ${Number(r.body.id)}`)) as { rows?: Doc[] }).rows ?? [])[0]?.author_id;
+    expect("X25: the engine intake with byline = the hub-created name REUSES that id (no duplicate row)", [h.status, r.status, Number(aid) === Number(idOf(h, "author")), n1 - n0], [201, 201, true, 0]);
+  });
+
+  await group("X27", async () => {
+    const title = nm("Race Tag");
+    const [a, b] = await Promise.all([tag(ta.slug, title), tag(ta.slug, title)]);
+    const slug = (a.body.tag as Doc | undefined)?.slug ?? (b.body.tag as Doc | undefined)?.slug;
+    const rows = await num(sql`SELECT count(*)::int AS n FROM tags WHERE tenant_id = ${ta.id} AND slug = ${String(slug)}`);
+    expect("X27: two concurrent creates of one tag ⇒ exactly 1 row, both ok:true", [rows, a.body.ok, b.body.ok, [a.status, b.status].sort()], [1, true, true, [200, 201]]);
+    const name = nm("Race Author");
+    const [c, d] = await Promise.all([author(ta.slug, name), author(ta.slug, name)]);
+    const arows = await num(sql`SELECT count(*)::int AS n FROM authors WHERE tenant_id = ${ta.id} AND name = ${name}`);
+    console.log(`OBS   X27: two concurrent creates of one pen name ⇒ ${arows} row(s); statuses ${c.status}/${d.status} (not asserted — gap hub-p5-6-author-create-race-duplicates)`);
+  });
+
+  const missing = P11_GROUPS.filter((g) => !executed.includes(g));
+  console.log(`\n[check11] groups executed ${executed.length}/${P11_GROUPS.length}${missing.length ? ` (not run: ${missing.join(", ")})` : ""}`);
+  const ok = state.failures === 0 && executed.length === P11_GROUPS.length;
+  console.log(`[check11] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(ok ? 0 : 1);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -12112,10 +12384,12 @@ const run = flag("setup")
                                                   ? setup10
                                                   : flag("check10")
                                                     ? check10
-                                                    : null;
+                                                    : flag("check11")
+                                                      ? check11
+                                                      : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only | --setup9 --in <setup6.json> --out <f9> | --check9 --in <f9> | --check9 --unit-only | --setup10 --in <setup6.json> --out <f10> | --check10 --in <f10> [--server-log <file>] [--f9 <f9>] | --check10 --in <f10> --unit-only",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only | --setup9 --in <setup6.json> --out <f9> | --check9 --in <f9> | --check9 --unit-only | --setup10 --in <setup6.json> --out <f10> | --check10 --in <f10> [--server-log <file>] [--f9 <f9>] | --check10 --in <f10> --unit-only | --check11 --in <f10> [--unit-only]",
   );
   process.exit(2);
 }
