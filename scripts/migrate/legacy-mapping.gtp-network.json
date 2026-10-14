@@ -1,16 +1,7 @@
 {
   "version": 1,
-  "_provisional": [
-    "urls.oldOrigin",
-    "urls.articlePathTemplate",
-    "urls.sectionPaths",
-    "urls.extraLegacyPaths",
-    "archivedAs",
-    "formatTags.enabled",
-    "pin",
-    "countries.match"
-  ],
-  "_evidence": "STRUCTURAL mapping for the GTP legacy import (gtp-launch P4 A2/A12/A13). No site id and no image host here: those live in an overlay passed with --mapping-overlay (owner-held for the real run, OD-34). Values listed in _provisional are owner decisions still open; --require-final (implied for any non-local run) refuses them.",
+  "_provisional": [],
+  "_evidence": "STRUCTURAL mapping for the GTP legacy import (gtp-launch P4 A2/A12/A13). No site id and no image host here: those live in an overlay passed with --mapping-overlay (owner-held for the real run, OD-34). Values listed in _provisional are owner decisions still open; --require-final (implied for any non-local run) refuses them. Resolved 14-10-26: urls.* taken from the live old site's public sitemap and URL probes (articles at /article/{slug}, apex host, static pages at their final paths); archivedAs, formatTags, pin and countries.match accepted at their defaults by the owner.",
   "source": {
     "schema": "public",
     "tableAllowList": ["articles", "sites", "site_authors", "media_assets", "scraping_sources", "gtp_subscribers", "visa_rules", "events", "press_submissions"],
@@ -85,10 +76,17 @@
     "reservedSlugs": []
   },
   "urls": {
-    "oldOrigin": "https://www.globaltravelpost.com",
-    "articlePathTemplate": "/{section}/{slug}",
-    "sectionPaths": {},
-    "extraLegacyPaths": ["/about-us", "/contact-us", "/privacy-policy", "/terms-and-conditions", "/advertise-with-us"]
+    "oldOrigin": "https://globaltravelpost.com",
+    "articlePathTemplate": "/article/{slug}",
+    "sectionPaths": {
+      "news": "/news",
+      "destinations": "/destinations",
+      "business-of-travel": "/business-of-travel",
+      "experiences-luxury": "/experiences-luxury",
+      "press-room": "/press-room",
+      "events-awards": "/events-awards"
+    },
+    "extraLegacyPaths": ["/about", "/contact", "/privacy", "/terms", "/advertise", "/editorial-standards", "/studio", "/licensing", "/press-room-submit", "/newsletters", "/team", "/visa-tracker"]
   },
   "media": {
     "maxBytes": 20971520,

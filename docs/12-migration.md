@@ -171,4 +171,6 @@ second pass, redirects, parity, rollback, exports, rehearsal). The tools are
 inert until the Phase 5 cutover: every legacy read is a closed, site-filtered
 builder on an allow-listed table; imports are dry runs unless `--apply`; a
 non-local Central needs `--confirm-host`; provisional owner decisions are fatal
-outside the local rehearsal. Rehearse locally with `npm run rehearse:gtp`.
+outside the local rehearsal. All mapping owner decisions were resolved on
+14-10-26 (apex origin, articles at `/article/{slug}`, final static paths); the
+open question is `/studio` and `/visa-tracker`, which have no gtp-web route. Rehearse locally with `npm run rehearse:gtp`.

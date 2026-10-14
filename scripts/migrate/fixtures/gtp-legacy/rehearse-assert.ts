@@ -11,7 +11,7 @@
  * (assertions, UNPROVEN list, measured facts) into the rehearsal out dir.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import pg from "pg";
 import { assertLocalDb } from "../../../lib/local-db-guard";
@@ -69,6 +69,15 @@ function tool(script: string, args: string[], env: Record<string, string> = {}):
 const T = (n: string) => `scripts/migrate/${n}`;
 const OV = ["--mapping-overlay", OVERLAY];
 const RH = [...OV, "--rehearsal", "--out", OUT];
+// The committed mapping is final; provisional-path checks run against a clone carrying one marker.
+const PROV_MAPPING = path.join(OUT, "legacy-mapping.provisional.json");
+function writeProvisionalMapping(): string {
+  const raw = JSON.parse(readFileSync(path.join(ROOT, T("legacy-mapping.gtp-network.json")), "utf8")) as Record<string, unknown>;
+  raw._provisional = ["urls.articlePathTemplate"];
+  mkdirSync(OUT, { recursive: true });
+  writeFileSync(PROV_MAPPING, JSON.stringify(raw, null, 2) + "\n", { mode: 0o600 });
+  return PROV_MAPPING;
+}
 const importArgs = (runId: string, extra: string[] = []) => [...RH, "--run-id", runId, ...extra];
 
 function helper(action: string, args: Record<string, unknown> = {}): Doc {
@@ -160,12 +169,15 @@ async function main(): Promise<number> {
 
   console.log("\n== step 5: validate-mapping");
   {
-    const s = tool(T("validate-gtp-mapping.ts"), ["--structural-only", "--mapping", T("legacy-mapping.gtp-network.json")]);
+    const prov = writeProvisionalMapping();
+    const s = tool(T("validate-gtp-mapping.ts"), ["--structural-only", "--mapping", prov]);
     const m = tool(T("validate-gtp-mapping.ts"), ["--mapping", T("legacy-mapping.gtp-network.json"), ...OV]);
-    const f = tool(T("validate-gtp-mapping.ts"), ["--mapping", T("legacy-mapping.gtp-network.json"), ...OV, "--require-final"]);
-    check("validate --structural-only exits 0 with PROVISIONAL list", s.code === 0 && /PROVISIONAL/.test(s.out));
+    const f = tool(T("validate-gtp-mapping.ts"), ["--mapping", prov, ...OV, "--require-final"]);
+    const ff = tool(T("validate-gtp-mapping.ts"), ["--mapping", T("legacy-mapping.gtp-network.json"), ...OV, "--require-final"]);
+    check("validate --structural-only exits 0 with PROVISIONAL list (provisional clone)", s.code === 0 && /PROVISIONAL/.test(s.out) && /urls\.articlePathTemplate/.test(s.out));
     check("validate merged fixture mapping exits 0", m.code === 0);
-    check("validate --require-final exits 2 while markers remain", f.code === 2);
+    check("validate --require-final exits 2 while markers remain (provisional clone)", f.code === 2);
+    check("validate --require-final on the committed mapping exits 0 with an empty PROVISIONAL list", ff.code === 0 && /PROVISIONAL: none/.test(ff.out) && !/urls\.articlePathTemplate/.test(ff.out), ff.out.slice(-300));
   }
 
   console.log("\n== step 6 / G30 / G7: default dry run writes nothing");
@@ -362,8 +374,8 @@ async function main(): Promise<number> {
     check("G31 pass 2 re-recorded the rollback baseline", fl !== undefined && fr !== undefined && new Date(fl.baselineUpdatedAt).toISOString() === new Date(fr.updated_at as string | Date).toISOString() && Number(fl.baselineVersion) === Number(fr.version));
 
     const sitemap = path.join(OUT, "sitemap-urls.txt");
-    const urls = slugMap("rehearsal").filter((e) => e.oldUrl && e.status === "published").map((e) => `https://www.globaltravelpost.com${e.oldUrl}`);
-    urls.push("https://www.globaltravelpost.com/never-existed", "https://www.globaltravelpost.com/NEWS/");
+    const urls = slugMap("rehearsal").filter((e) => e.oldUrl && e.status === "published").map((e) => `https://globaltravelpost.com${e.oldUrl}`);
+    urls.push("https://globaltravelpost.com/never-existed", "https://globaltravelpost.com/NEWS/");
     (await import("node:fs")).writeFileSync(sitemap, urls.join("\n") + "\n", { mode: 0o600 });
     const emit = path.join(OUT, "gtp-web");
     const rr = tool(T("build-gtp-redirects.ts"), ["--run-id", "rehearsal", ...RH, "--known-routes", KNOWN, "--emit-gtp-web", emit, "--sitemap-urls", sitemap]);
@@ -372,11 +384,15 @@ async function main(): Promise<number> {
     const rules = JSON.parse(readFileSync(path.join(emit, "redirect-rules.json"), "utf8")) as unknown[];
     const kr = JSON.parse(readFileSync(KNOWN, "utf8")) as KnownRoutes;
     check("G35 emitted files pass validateGtpWebRedirectFiles", validateGtpWebRedirectFiles(map, rules, kr).length === 0, validateGtpWebRedirectFiles(map, rules, kr).slice(0, 5));
-    const rehomed = slugMap("rehearsal").find((e) => e.rehomed && e.status === "published");
-    check("G35 re-homed published row: from = ORIGINAL old URL", !rehomed || map[normaliseKey(rehomed.oldUrl ?? "") ?? ""] === `/article/${rehomed.slug}`, rehomed?.oldUrl);
+    // With the /article/{slug} template a row whose old URL equals its new URL gets no (identity) redirect.
+    const rehomedAll = slugMap("rehearsal").filter((e) => e.rehomed && e.status === "published");
+    const rehomed = rehomedAll.find((e) => normaliseKey(e.oldUrl ?? "") !== `/article/${e.slug}`) ?? rehomedAll[0];
+    const rhKey = rehomed ? normaliseKey(rehomed.oldUrl ?? "") ?? "" : "";
+    const rhIdentity = rhKey === `/article/${rehomed?.slug}`;
+    check("G35 re-homed published row: from = ORIGINAL old URL (identity redirect dropped)", !rehomed || (rhIdentity ? map[rhKey] === undefined || map[rhKey] === `/article/${rehomed.slug}` : map[rhKey] === `/article/${rehomed.slug}`), rehomed?.oldUrl);
     const arch = slugMap("rehearsal").find((e) => e.status === "archived" && e.oldUrl);
     check("G35 archived row -> section page of its NEW location", !arch || map[normaliseKey(arch.oldUrl ?? "") ?? ""] === (arch.subSection ? `/${arch.pillar}/${arch.subSection}` : `/${arch.pillar}`), arch);
-    check("G35 redirects with no --rehearsal and provisional values exits 2", tool(T("build-gtp-redirects.ts"), ["--run-id", "rehearsal", ...OV, "--out", OUT, "--known-routes", KNOWN]).code === 2);
+    check("G35 redirects with no --rehearsal and provisional values exits 2", tool(T("build-gtp-redirects.ts"), ["--run-id", "rehearsal", "--mapping", writeProvisionalMapping(), ...OV, "--out", OUT, "--known-routes", KNOWN]).code === 2);
     const cov = readFileSync(path.join(runDir("rehearsal"), "redirect-coverage.md"), "utf8");
     check("coverage reported for the supplied URL list", /supplied URL list: \d+ URLs, matched \d+/.test(cov));
     facts.redirects = { mapEntries: Object.keys(map).length, patterns: rules.length, coverage: (/supplied URL list: .*$/m.exec(cov) ?? [""])[0] };

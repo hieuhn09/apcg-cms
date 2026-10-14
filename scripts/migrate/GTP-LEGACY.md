@@ -27,8 +27,20 @@ the Phase 5 runbook is authoritative for order and commands.
 ## Mapping
 
 - `legacy-mapping.gtp-network.json`: committed STRUCTURAL mapping (columns,
-  status/taxonomy/author rules, provisional owner decisions in `_provisional`).
-  It holds no site id and no image host.
+  status/taxonomy/author rules, owner-decision markers in `_provisional`).
+  It holds no site id and no image host. All owner decisions were resolved on
+  14-10-26 (`_provisional` is empty, `--require-final` passes): old origin
+  `https://globaltravelpost.com` (apex), articles at `/article/{slug}`, section
+  pages at `/<section>` (news, destinations, business-of-travel,
+  experiences-luxury, press-room, events-awards), static pages at their final
+  paths (`/about`, `/contact`, `/privacy`, `/terms`, `/advertise`,
+  `/editorial-standards`, `/studio`, `/licensing`, `/press-room-submit`,
+  `/newsletters`, `/team`, `/visa-tracker`), taken from the live old site's
+  public sitemap and URL probes; `archivedAs`, `formatTags`, `pin` and
+  `countries.match` accepted at their defaults by the owner. Open owner
+  question: `/studio` and `/visa-tracker` have no gtp-web route yet (build,
+  redirect elsewhere, or 410). The rehearsal and unit tests exercise the
+  provisional paths with a cloned mapping that carries one marker.
 - Overlay (`--mapping-overlay <path>`): exactly `source.siteFilter`,
   `media.hostAllowlist`, `media.hostRewrite`. The real overlay is held by the
   owner OUTSIDE the repository (OD-34). The committed

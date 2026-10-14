@@ -9,11 +9,18 @@ const ROOT = repoRoot();
 const STRUCT = path.join(ROOT, "scripts/migrate/legacy-mapping.gtp-network.json");
 const OVERLAY = path.join(ROOT, "scripts/migrate/fixtures/gtp-legacy/overlay.fixture.json");
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+// The committed mapping is final (0 markers). Provisional-path checks use a clone carrying one marker.
+const provisionalVariant = (raw: unknown): Record<string, unknown> => {
+  const p = clone(raw) as Record<string, unknown>;
+  p._provisional = ["urls.articlePathTemplate"];
+  return p;
+};
 
 test("C2/G41: the committed structural mapping passes --structural-only and carries no site id or host", () => {
   const raw = readJson(STRUCT) as Record<string, unknown>;
   const r = validateMapping(raw, undefined, { structuralOnly: true });
-  assert.ok(r.provisional.length > 0);
+  assert.equal(r.provisional.length, 0);
+  assert.ok(validateMapping(provisionalVariant(raw), undefined, { structuralOnly: true }).provisional.length > 0);
   assert.equal(r.mapping.source.siteFilter, undefined);
   assert.equal(r.mapping.media.hostAllowlist, undefined);
   const text = JSON.stringify(raw);
@@ -39,7 +46,7 @@ test("C2/G41: merged fixture mapping deep-equals the structural one except the t
 });
 
 test("C2/G46: provisional passes with a printed list; --require-final exits with markers and passes without", () => {
-  const raw = readJson(STRUCT);
+  const raw = provisionalVariant(readJson(STRUCT));
   const ov = readJson(OVERLAY);
   const r = validateMapping(raw, ov);
   assert.match(formatProvisional(r.provisional), /urls\.articlePathTemplate .*OD-24/);
@@ -49,6 +56,11 @@ test("C2/G46: provisional passes with a printed list; --require-final exits with
   assert.equal(validateMapping(fin, ov, { requireFinal: true }).provisional.length, 0);
   delete fin._provisional;
   validateMapping(fin, ov, { requireFinal: true });
+});
+
+test("C2/G46: the committed structural mapping is final: --require-final passes with 0 markers", () => {
+  const r = validateMapping(readJson(STRUCT), readJson(OVERLAY), { requireFinal: true });
+  assert.equal(r.provisional.length, 0);
 });
 
 test("C2/G46: literal TODO fails; a foreign _provisional key fails; unknown keys fail", () => {
