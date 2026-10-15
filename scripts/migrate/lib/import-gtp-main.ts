@@ -36,11 +36,12 @@ import { pCreate, pFind } from "../../lib/payload-loose";
 import { CliError, intFlag } from "./args";
 import { FIXTURE_SITE_ID, parseCommand, resolveEntity, resolveRequireFinal, resolveTestHooks, STRUCTURAL_MAPPING_PATH } from "./cli-spec";
 import { assertImportTenant, centralTarget, loadEffectiveMapping, openLegacy, outDir, resolvePath, runMain } from "./cli-common";
+import { assignAuthors, authorTotals, pillarsUnderTwoAuthors, type AuthorItem } from "./gtp-author-distribution";
 import { eventBriefs, eventDek, eventStatus, planEvents, toLegacyEvent, type CalendarRef } from "./gtp-events";
 import { formatProvisional, mappingFingerprint, type Mapping } from "./gtp-mapping";
 import { generateTimestampsFix } from "./gtp-timestamps";
 import {
-  enText, formatTag, isoOrNull, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveAuthor, resolveCountries,
+  enText, formatTag, isoOrNull, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveCountries,
   resolveTaxonomy, sectionsToHtml, statusWrite, str, stripPhotoLabel, takeawaysText, stableFilename, storedFilenameMatches, oldArticleUrl, wordCount, canonicalSourceUrl,
   type CountryRef, type TagRef,
 } from "./gtp-transform";
@@ -93,7 +94,8 @@ function newReport() {
     tagsCreated: [] as string[],
     formatTagSkipped: 0,
     countriesUnmatched: {} as Record<string, number>,
-    authorFallback: 0,
+    /** Amendment 3: bylines distributed over the 5-author pool (plan totals are over the COMPLETE planned set). */
+    authors: { planTotals: {} as Record<string, number>, planSpread: 0, pillarsUnderTwoAuthors: [] as string[], assignedThisRun: {} as Record<string, number> },
     readMinComputed: 0,
     publishedAtFellBack: 0,
     seoDropped: 0,
@@ -236,6 +238,57 @@ async function main(): Promise<number> {
     if (a.apply) run.writeJson("slug-plan.json", plan);
   }
   const planById = new Map(plan.map((p) => [p.legacyId, p]));
+
+  // ── Author plan (Amendment 3): ONCE per run over the COMPLETE planned set (all importable
+  // articles + all events the run would create), never the rows still to import, so resume and
+  // rollback + re-import give the same bylines. Pillar is NOT an input; it is only used for the report.
+  type AuthorPlanEntry = { legacyId: string; author: string; pillar: string };
+  let authorPlan = run.readJson<AuthorPlanEntry[] | null>("author-plan.json", null);
+  if (!authorPlan) {
+    const items: AuthorItem[] = [];
+    const pillarOf = new Map<string, string>();
+    const cal: CalendarRef[] = [];
+    for await (const page of reader.pages("articles", ["id", "created_at", "status", "section", "subsection", "title", "published_at", "countries", "byline"], 500)) {
+      for (const row of page) {
+        const legacyId = String(row.id);
+        if (str(row.section) === "events-awards" && str(row.subsection) === "industry-calendar") cal.push({ title: enText(row.title), date: isoOrNull(row.published_at)?.slice(0, 10) ?? null, legacyId });
+        if (mapStatus(row.status, m).kind !== "import" || !planById.has(legacyId)) continue;
+        const tx = resolveTaxonomy(row.section, row.subsection, m);
+        if (!tx.ok || !pillarId.has(tx.t.pillar) || (tx.t.subSection && !subId.has(`${tx.t.pillar}/${tx.t.subSection}`)) || (tx.t.pillar === "press-room" && tx.t.subSection)) continue;
+        const countriesRaw = Array.isArray(row.countries) ? row.countries.map((x) => String(x ?? "").trim().toLowerCase()).filter(Boolean) : [];
+        items.push({ legacyId, slug: (planById.get(legacyId) as SlugPlanEntry).slug, publishedAt: publishedAtFor(row.published_at, row.created_at).iso, countries: countriesRaw, legacyByline: str(row.byline), kind: "article" });
+        pillarOf.set(legacyId, tx.t.pillar);
+      }
+    }
+    if (m.events.enabled) {
+      const allEv: ReturnType<typeof toLegacyEvent>[] = [];
+      for await (const p of reader.pages("events", "all", 500)) allEv.push(...p.map(toLegacyEvent));
+      for (const d of await findAll(payload, "articles", { and: [{ tenant: { equals: tenantId } }, { pillar: { equals: pillarId.get("events-awards") } }] }, { draft: true })) {
+        if (isMarker(d)) continue;
+        const briefs = Array.isArray(d.briefs) ? (d.briefs as Doc[]) : [];
+        cal.push({ title: String(d.title ?? ""), date: String(briefs.find((b) => b.label === "Event date")?.value ?? String(d.publishedAt ?? "").slice(0, 10)), legacyId: `central:${String(d.id)}` });
+      }
+      for (const e of planEvents(allEv, cal, m.events.nearMatchThreshold).imports) {
+        const legacyId = `event:${e.id}`;
+        const pe = planById.get(legacyId);
+        if (!pe) continue;
+        items.push({ legacyId, slug: pe.slug, publishedAt: e.dateStart ? `${e.dateStart}T00:00:00.000Z` : null, countries: [], kind: "event" });
+        pillarOf.set(legacyId, "events-awards");
+      }
+    }
+    const assign = assignAuthors(items, m.authors.distribute, m.authors.map);
+    authorPlan = items.map((it) => ({ legacyId: it.legacyId, author: assign.get(it.legacyId) as string, pillar: pillarOf.get(it.legacyId) as string }));
+    if (a.apply) run.writeJson("author-plan.json", authorPlan);
+  }
+  const authorOf = new Map(authorPlan.map((e) => [e.legacyId, e.author]));
+  {
+    const t = authorTotals(authorOf, m.authors.distribute.pool);
+    report.authors.planTotals = t.totals;
+    report.authors.planSpread = t.spread;
+    report.authors.pillarsUnderTwoAuthors = pillarsUnderTwoAuthors(authorOf, new Map(authorPlan.map((e) => [e.legacyId, e.pillar])));
+    for (const n of authorOf.values()) if (!authorId.has(n)) throw new CliError(`import: author "${n}" is not in the Central author preflight (the importer never creates authors).`);
+    console.log(`[import] authors (plan, ${authorOf.size} items): ${Object.entries(t.totals).map(([n, c]) => `${n} ${c}`).join(", ")}; spread ${t.spread}; pillars with < 2 authors: ${report.authors.pillarsUnderTwoAuthors.join(", ") || "none"}`);
+  }
   for (const p of plan) if (p.slugChanged) report.slugChanged.push({ legacyId: p.legacyId, ...p.slugChanged });
   report.duplicates = plan.filter((p) => p.duplicateOf).length;
 
@@ -483,8 +536,11 @@ async function main(): Promise<number> {
             continue;
           }
           const lexical = htmlToLexical(editorConfig, body.html);
-          const author = resolveAuthor(row.byline, m);
-          if (author.fallback) report.authorFallback++;
+          const authorName = authorOf.get(legacyId);
+          if (!authorName) {
+            bump(report.rejects, "reject: no-author-assignment");
+            continue;
+          }
           const ft = formatTag(row.format, m);
           if (!ft && str(row.format)) report.formatTagSkipped++;
           const tagRefs = [...(ft ? [ft] : []), ...legacyTags(row.tags, m)];
@@ -525,7 +581,7 @@ async function main(): Promise<number> {
             publishedAt: pub.iso ?? new Date().toISOString(),
             pillar: pid,
             ...(sid !== undefined ? { subSection: sid } : {}),
-            author: authorId.get(author.name),
+            author: authorId.get(authorName),
             ...(tagIds.length ? { tags: tagIds } : {}),
             ...(cr.ids.length ? { country: cr.ids[0], countries: cr.ids } : {}),
             ...(heroId !== undefined ? { heroImage: heroId } : {}),
@@ -542,6 +598,7 @@ async function main(): Promise<number> {
             await afterCreate(created, entryBase);
             appendFileSync(provenanceFile, JSON.stringify(provenanceRow(row)) + "\n", { mode: 0o600 });
             report.imported++;
+            bump(report.authors.assignedThisRun, authorName);
             bump(report.importedByStatus, sd.status);
             controls.recordArticle(true);
           } catch (err) {
@@ -589,6 +646,10 @@ async function main(): Promise<number> {
           continue;
         }
         if (await handleExisting(legacyId, pe.slug, "event", status, entryBase)) continue;
+        if (!authorOf.has(legacyId)) {
+          bump(report.rejects, "reject: no-author-assignment");
+          continue;
+        }
         report.planned++;
         report.events.publishedAtFromDateStart++; // events have no created_at: publishedAt = date_start (reported)
         if (status === "archived") report.events.archived++;
@@ -606,7 +667,7 @@ async function main(): Promise<number> {
           publishedAt: e.dateStart ? new Date(`${e.dateStart}T00:00:00.000Z`).toISOString() : new Date().toISOString(),
           pillar: pillarId.get("events-awards"),
           subSection: subId.get("events-awards/industry-calendar"),
-          author: authorId.get(m.authors.fallbackName),
+          author: authorId.get(authorOf.get(legacyId) as string),
           briefs: eventBriefs(e),
           readMin: 1,
           origin: MARKER.origin,
@@ -618,6 +679,7 @@ async function main(): Promise<number> {
           await afterCreate(created, entryBase);
           report.events.imported++;
           report.imported++;
+          bump(report.authors.assignedThisRun, authorOf.get(legacyId) as string);
           bump(report.importedByStatus, `event:${status}`);
           controls.recordArticle(true);
         } catch (err) {
@@ -719,7 +781,12 @@ ${kv(r.mediaFailed)}
 - tags created: ${r.tagsCreated.length}; formatTagSkipped: ${r.formatTagSkipped}
 - countriesUnmatched:
 ${kv(r.countriesUnmatched)}
-- authorFallback (GTP Newsroom): ${r.authorFallback}; readMinComputed: ${r.readMinComputed}; publishedAtFellBack: ${r.publishedAtFellBack}
+- authors (plan totals, spread ${r.authors.planSpread}):
+${kv(r.authors.planTotals)}
+- authors assigned in this run:
+${kv(r.authors.assignedThisRun)}
+- pillars with fewer than 2 distinct authors: ${r.authors.pillarsUnderTwoAuthors.join(", ") || "none"}
+- readMinComputed: ${r.readMinComputed}; publishedAtFellBack: ${r.publishedAtFellBack}
 - seoDropped: ${r.seoDropped}; featured flag: ${r.featuredFlag}; is_hero flag: ${r.isHeroFlag} (not mapped to pinnedToLatest)
 - droppedSections: ${r.droppedSections}; rows with tag-like text (kept as text): ${r.tagLikeTextRows}
 - sourceUrlCollisions: ${r.sourceUrlCollisions.length}

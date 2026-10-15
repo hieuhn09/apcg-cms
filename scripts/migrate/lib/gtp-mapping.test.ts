@@ -95,6 +95,25 @@ test("C2: pillar outside the 6, press-room sub-section, author outside staff, cr
   const d = clone(raw);
   (d.authors as Record<string, unknown>).createMissing = true;
   assert.throws(() => validateMapping(d, ov), { message: MAPPING_MESSAGES.createMissing });
+  // Amendment 3: no newsroom anywhere in authors; fallbackName retired; pool checked.
+  const e = clone(raw);
+  (e.authors as Record<string, unknown>).fallbackName = "Daniel Cheong";
+  assert.throws(() => validateMapping(e, ov), { message: MAPPING_MESSAGES.fallbackName });
+  const f = clone(raw);
+  (f.authors as { staff: string[] }).staff.push("GTP Newsroom");
+  assert.throws(() => validateMapping(f, ov), { message: MAPPING_MESSAGES.newsroom });
+  const g = clone(raw);
+  (g.authors as { map: Record<string, string> }).map["Simon Ng"] = "GTP Newsroom";
+  assert.throws(() => validateMapping(g, ov), { message: MAPPING_MESSAGES.newsroom });
+  for (const pool of [[], ["Daniel Cheong", "Daniel Cheong"], ["Daniel Cheong", "Simon Ng"]]) {
+    const h = clone(raw);
+    (h.authors as { distribute: { pool: string[] } }).distribute.pool = pool;
+    assert.throws(() => validateMapping(h, ov), { message: MAPPING_MESSAGES.pool });
+  }
+  const i = clone(raw);
+  (i.authors as { distribute: Record<string, unknown> }).distribute.groupBy = "pillar";
+  assert.throws(() => validateMapping(i, ov), /schema error at authors\.distribute\.groupBy/);
+  assert.equal(validateMapping(raw, ov).mapping.authors.distribute.maxSpread, 1);
 });
 
 test("C2/G47: zod schema keys equal the A12-N11 key table; overlay only three keys; non-local rewrite refused", () => {

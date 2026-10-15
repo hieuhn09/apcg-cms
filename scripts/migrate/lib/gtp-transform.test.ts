@@ -4,7 +4,7 @@ import path from "node:path";
 import { loadMapping } from "./gtp-mapping";
 import { repoRoot } from "./out-dir";
 import {
-  enText, formatTag, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveAuthor, resolveCountries, resolveTaxonomy,
+  enText, formatTag, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveCountries, resolveTaxonomy,
   sanitizeLegacyHtml, sectionsToHtml, sniffBodyFormat, statusWrite, stripPhotoLabel, takeawaysText, tagSlugify, stableFilename, storedFilenameMatches,
   canonicalSourceUrl, oldArticleUrl, plainTextForParity, jaccard, rewriteInternalLinks,
 } from "./gtp-transform";
@@ -55,7 +55,7 @@ test("G37: countries lowercase/trim, code or name, unmatched reported", () => {
   assert.deepEqual(resolveCountries(["Japan"], all, "code"), { ids: [], unmatched: ["Japan"] });
 });
 
-test("G37: takeaways, readMin 230 wpm min 1, publishedAt fallback, author map + GTP Newsroom, Photo: strip, provenance", () => {
+test("G37: takeaways, readMin 230 wpm min 1, publishedAt fallback, author pool (Amendment 3), Photo: strip, provenance", () => {
   assert.equal(takeawaysText(["One", " Two "]), "One\nTwo");
   assert.equal(takeawaysText([]), undefined);
   assert.equal(takeawaysText("[]"), undefined);
@@ -63,9 +63,10 @@ test("G37: takeaways, readMin 230 wpm min 1, publishedAt fallback, author map + 
   assert.deepEqual(readMinFor(null, 1000, 230), { readMin: 5, computed: true });
   assert.deepEqual(readMinFor(0, 3, 230), { readMin: 1, computed: true });
   assert.deepEqual(publishedAtFor(null, "2026-08-01T00:00:00Z"), { iso: "2026-08-01T00:00:00.000Z", fellBack: true });
-  assert.deepEqual(resolveAuthor("Daniel Cheong", M), { name: "Daniel Cheong", fallback: false });
-  assert.deepEqual(resolveAuthor("Clara Widjaja", M), { name: "Natalie Ong", fallback: false });
-  for (const b of ["Simon Ng", "Ryan Ng", "Valerie Nguyen", "BriefAsia", "", null]) assert.deepEqual(resolveAuthor(b, M), { name: "GTP Newsroom", fallback: true });
+  // Amendment 3: bylines come from authors.distribute (gtp-author-distribution.test.ts); no newsroom fallback.
+  assert.deepEqual(M.authors.distribute.pool, ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada"]);
+  assert.equal(M.authors.distribute.keepLegacy, false);
+  assert.ok(!M.authors.staff.includes("GTP Newsroom"));
   assert.equal(stripPhotoLabel("Photo: Jimmy Liao / Pexels"), "Jimmy Liao / Pexels");
   assert.equal(stripPhotoLabel("PHOTO:Ana / Pexels"), "Ana / Pexels");
   assert.deepEqual(provenanceRow({ id: "x", migrate_source: "scrape_rss", ai_model: "m", ai_score: 80, title: "t" }), { legacyId: "x", migrate_source: "scrape_rss", ai_model: "m", ai_score: 80 });
@@ -143,7 +144,7 @@ test("C5/G34 unit: slug plan order (created_at,id), suffixes, rejected rows excl
   assert.equal(ev[0]?.legacyId, "event:e1");
 });
 
-test("C11/G38 unit: events briefs, de-dupe, near match, inactive; author GTP Newsroom handled by the importer", () => {
+test("C11/G38 unit: events briefs, de-dupe, near match, inactive; author from the distribution map (importer)", () => {
   const e = toLegacyEvent({ id: "1", title: "ITB Asia", date_start: "2026-10-22", date_end: "2026-10-24", location: "Singapore", url: "https://www.itb-asia.com/x", note: "n", active: true, category: "Trade show" });
   assert.deepEqual(eventBriefs(e), [
     { label: "Event date", value: "2026-10-22", source: "www.itb-asia.com" },

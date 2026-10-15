@@ -102,6 +102,7 @@ async function q<T = Doc>(url: string, text: string, params: unknown[] = []): Pr
   }
 }
 const MARKER_SQL = "SELECT count(*)::int AS n FROM articles a JOIN tenants t ON t.id = a.tenant_id WHERE t.slug = 'gtp' AND a.origin = 'import' AND a.engine_source_name = 'legacy:globaltravelpost'";
+const POOL = ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada"];
 const markerCount = async () => Number((await q<{ n: number }>(CENTRAL, MARKER_SQL))[0]?.n);
 const centralCounts = async () =>
   (await q<Doc>(CENTRAL, "SELECT (SELECT count(*) FROM articles)::int AS articles, (SELECT count(*) FROM media)::int AS media, (SELECT count(*) FROM tags)::int AS tags, (SELECT count(*) FROM activity_log)::int AS activity"))[0] as Doc;
@@ -223,7 +224,27 @@ async function main(): Promise<number> {
        (SELECT count(*) FROM articles_briefs b WHERE b._parent_id = a.id AND (coalesce(b.label,'') = '' OR coalesce(b.value,'') = '' OR coalesce(b.source,'') = ''))::int AS bad
        FROM articles a JOIN articles_locales l ON l._parent_id = a.id AND l._locale = 'en' JOIN tenants t ON t.id = a.tenant_id LEFT JOIN authors au ON au.id = a.author_id
        WHERE t.slug = 'gtp' AND a.id = ANY($1::int[])`, [slugMap("rehearsal").filter((e) => e.kind === "event").map((e) => Number(e.articleId))]).catch((e): Doc[] => [{ error: String((e as Error).message) }]);
-    check("6b events: briefs 1..4 rows, non-empty label/value/source, author GTP Newsroom, unique slugs", evRows.length === 12 && evRows.every((r) => Number(r.briefs) >= 1 && Number(r.briefs) <= 4 && Number(r.bad) === 0 && r.author === "GTP Newsroom") && new Set(evRows.map((r) => r.slug)).size === 12, evRows.slice(0, 3));
+    check("6b events: briefs 1..4 rows, non-empty label/value/source, author from the 5-author pool, unique slugs", evRows.length === 12 && evRows.every((r) => Number(r.briefs) >= 1 && Number(r.briefs) <= 4 && Number(r.bad) === 0 && POOL.includes(String(r.author))) && new Set(evRows.map((r) => r.slug)).size === 12, evRows.slice(0, 3));
+    // Amendment 3: bylines spread evenly over the 5 web authors, never by pillar, never the newsroom.
+    const byAuthor = await q<{ author: string | null; pillar: string; n: number }>(CENTRAL, `SELECT au.name AS author, p.slug AS pillar, count(*)::int AS n FROM articles a JOIN tenants t ON t.id = a.tenant_id
+       LEFT JOIN authors au ON au.id = a.author_id LEFT JOIN pillars p ON p.id = a.pillar_id
+       WHERE t.slug = 'gtp' AND a.origin = 'import' AND a.engine_source_name = 'legacy:globaltravelpost' GROUP BY 1, 2`).catch((e): { author: string | null; pillar: string; n: number }[] => [{ author: `error ${String((e as Error).message)}`, pillar: "?", n: 0 }]);
+    const totals: Record<string, number> = Object.fromEntries(POOL.map((n) => [n, 0]));
+    const pillarAuthors = new Map<string, Set<string>>();
+    const pillarCount = new Map<string, number>();
+    for (const r of byAuthor) {
+      totals[String(r.author)] = (totals[String(r.author)] ?? 0) + Number(r.n);
+      (pillarAuthors.get(r.pillar) ?? pillarAuthors.set(r.pillar, new Set()).get(r.pillar) as Set<string>).add(String(r.author));
+      pillarCount.set(r.pillar, (pillarCount.get(r.pillar) ?? 0) + Number(r.n));
+    }
+    facts.A3_authorTotals = totals;
+    check("A3: zero imported articles authored by GTP Newsroom (and none without an author)", !("GTP Newsroom" in totals) && !("null" in totals) && Object.keys(totals).every((n) => POOL.includes(n)), totals);
+    const tv = POOL.map((n) => totals[n] as number);
+    check("A3: per-author spread <= 1 over all imported articles + events", Math.max(...tv) - Math.min(...tv) <= 1, totals);
+    const thin = [...pillarCount.entries()].filter(([p, c]) => c >= 2 && (pillarAuthors.get(p)?.size ?? 0) < 2).map(([p]) => p);
+    check("A3: every pillar with >= 2 imported articles has >= 2 distinct authors", thin.length === 0, { thin, pillars: Object.fromEntries([...pillarAuthors].map(([p, s2]) => [p, [...s2]])) });
+    const rr = (report("rehearsal") as Doc).authors as { planSpread: number; planTotals: Record<string, number> } | undefined;
+    check("A3: import report carries plan totals with spread <= 1", Boolean(rr) && Number(rr?.planSpread) <= 1 && Object.keys(rr?.planTotals ?? {}).length === 5, rr);
     sliceA = new Map(slugMap("rehearsal").map((e) => [e.legacyId, e.slug]));
     // G13 / S-20: escaped text stays text.
     for (const xid of expected.xssLegacyIds) {

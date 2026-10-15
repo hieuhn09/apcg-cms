@@ -60,8 +60,13 @@
       "Clara Widjaja": "Natalie Ong",
       "Yuki Hamada": "Yuki Hamada"
     },
-    "fallbackName": "GTP Newsroom",
-    "staff": ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada", "GTP Newsroom"],
+    "staff": ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada"],
+    "distribute": {
+      "pool": ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada"],
+      "keepLegacy": false,
+      "groupBy": "country",
+      "maxSpread": 1
+    },
     "createMissing": false
   },
   "formatTags": { "enabled": true, "include": ["guide", "analysis", "review", "interview"] },
