@@ -16,6 +16,7 @@ import {
   MSG,
   ruleMessage,
   isSingleHomePillar,
+  singleHomeSlugsFor,
   singleHomeSlugUnion,
   normalizeTaxonomy,
   taxonomyChanged,
@@ -42,10 +43,15 @@ const V4 = 'pillar rule: "pressroom" is a single-home pillar: it cannot have sub
 const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed there cannot be marked exclusive.';
 
 describe("constants", () => {
-  it("SINGLE_HOME_PILLARS = { brief-asia: [pressroom], gcv: [pressroom] } beside ENGINE_BLOCKED_PILLARS", () => {
-    assert.deepEqual(SINGLE_HOME_PILLARS, { "brief-asia": ["pressroom"], gcv: ["pressroom"] });
-    assert.deepEqual(ENGINE_BLOCKED_PILLARS, { gcv: ["exclusive", "pressroom"], "brief-asia": ["pressroom"] });
-    assert.deepEqual(singleHomeSlugUnion(), ["pressroom"]);
+  it("SINGLE_HOME_PILLARS = { brief-asia: [pressroom], gcv: [pressroom], gtp: [press-room], vowasia: [press-room] } beside ENGINE_BLOCKED_PILLARS", () => {
+    assert.deepEqual(SINGLE_HOME_PILLARS, { "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"] });
+    assert.deepEqual(ENGINE_BLOCKED_PILLARS, {
+      gcv: ["exclusive", "pressroom"],
+      "brief-asia": ["pressroom"],
+      gtp: ["press-room", "events-awards"],
+      vowasia: ["press-room", "real-weddings", "directory"],
+    });
+    assert.deepEqual(singleHomeSlugUnion(), ["pressroom", "press-room"]);
   });
   it("brief-asia and gcv pressroom are engine-blocked; wad pressroom is not; gcv keeps exclusive", () => {
     assert.ok(ENGINE_BLOCKED_PILLARS["brief-asia"]?.includes("pressroom"));
@@ -69,6 +75,77 @@ describe("constants", () => {
     assert.equal(isEngineBlockedPillar("brief-asia", "exclusive"), false);
     assert.equal(isEngineBlockedPillar(undefined, "pressroom"), false);
     assert.equal(isEngineBlockedPillar("brief-asia", ""), false);
+  });
+});
+
+describe("gtp (GlobalTravelPost): press-room single-home + engine-blocked, events-awards engine-blocked only", () => {
+  const G_V1 = 'pillar rule: "press-room" is a single-home pillar: an article filed there cannot also have secondary sections.';
+  const G_V2 = 'pillar rule: "press-room" is a single-home pillar: an article filed there cannot have a sub-section.';
+  const G_V3 = 'pillar rule: "press-room" is a single-home pillar: it cannot be added as a secondary section to another article.';
+  const G_V4 = 'pillar rule: "press-room" is a single-home pillar: it cannot have sub-sections.';
+  it("isSingleHomePillar: exact slug, gtp only", () => {
+    assert.equal(isSingleHomePillar("gtp", "press-room"), true);
+    assert.equal(isSingleHomePillar("gtp", "pressroom"), false);
+    assert.equal(isSingleHomePillar("gtp", "events-awards"), false);
+    assert.equal(isSingleHomePillar("gtp", "news"), false);
+    assert.equal(isSingleHomePillar("brief-asia", "press-room"), false);
+    assert.equal(isSingleHomePillar("wad", "press-room"), false);
+  });
+  it("isEngineBlockedPillar: press-room and events-awards blocked (case/whitespace-insensitive); the four writable pillars and other tenants are not", () => {
+    assert.equal(isEngineBlockedPillar("gtp", "press-room"), true);
+    assert.equal(isEngineBlockedPillar("gtp", " Press-Room "), true);
+    assert.equal(isEngineBlockedPillar("gtp", "events-awards"), true);
+    for (const s of ["news", "destinations", "business-of-travel", "experiences-luxury"]) {
+      assert.equal(isEngineBlockedPillar("gtp", s), false, s);
+    }
+    assert.equal(isEngineBlockedPillar("gcv", "events-awards"), false);
+  });
+  it("checkIntakeSingleHome: V1/V2/V3 for press-room; events-awards is not single-home", () => {
+    assert.equal(checkIntakeSingleHome("gtp", { pillarSlug: "press-room", sections: ["news"] }), G_V1);
+    assert.equal(checkIntakeSingleHome("gtp", { pillarSlug: "press-room", subSectionSlug: "x" }), G_V2);
+    assert.equal(checkIntakeSingleHome("gtp", { pillarSlug: "news", sections: ["press-room"] }), G_V3);
+    assert.equal(
+      checkIntakeSingleHome("gtp", { pillarSlug: "events-awards", sections: ["news"], subSectionSlug: "gtp-events" }),
+      null,
+    );
+  });
+  it("ruleMessage V4, singleHomeSlugsFor and pillarFilterWhere for press-room", () => {
+    assert.equal(ruleMessage("press-room", "V4"), G_V4);
+    assert.deepEqual(singleHomeSlugsFor("gtp"), ["press-room"]);
+    assert.deepEqual(pillarFilterWhere(["press-room"], false), { slug: { not_in: ["press-room"] } });
+  });
+});
+
+describe("vowasia (VowAsia): press-room single-home + engine-blocked; real-weddings, directory engine-blocked only; no events-awards", () => {
+  const VA_V1 = 'pillar rule: "press-room" is a single-home pillar: an article filed there cannot also have secondary sections.';
+  const VA_V2 = 'pillar rule: "press-room" is a single-home pillar: an article filed there cannot have a sub-section.';
+  const VA_V3 = 'pillar rule: "press-room" is a single-home pillar: it cannot be added as a secondary section to another article.';
+  const WRITABLE = ["venues", "destination-weddings", "style", "planning", "wedding-business"];
+  it("isSingleHomePillar: exact slug, vowasia press-room only", () => {
+    assert.equal(isSingleHomePillar("vowasia", "press-room"), true);
+    assert.equal(isSingleHomePillar("vowasia", "pressroom"), false);
+    assert.equal(isSingleHomePillar("vowasia", "Press-Room"), false);
+    for (const s of WRITABLE) assert.equal(isSingleHomePillar("vowasia", s), false, s);
+  });
+  it("isEngineBlockedPillar: press-room blocked (case/whitespace-insensitive); real-weddings and directory blocked; the five other pillars and events-awards are not", () => {
+    assert.equal(isEngineBlockedPillar("vowasia", "press-room"), true);
+    assert.equal(isEngineBlockedPillar("vowasia", " PRESS-ROOM "), true);
+    assert.equal(isEngineBlockedPillar("vowasia", "real-weddings"), true);
+    assert.equal(isEngineBlockedPillar("vowasia", " Directory "), true);
+    for (const s of WRITABLE) assert.equal(isEngineBlockedPillar("vowasia", s), false, s);
+    assert.equal(isEngineBlockedPillar("vowasia", "events-awards"), false);
+    assert.equal(isEngineBlockedPillar("vowasia", "pressroom"), false);
+  });
+  it("checkIntakeSingleHome: V1/V2/V3 for press-room; ordinary pillars pass", () => {
+    assert.equal(checkIntakeSingleHome("vowasia", { pillarSlug: "press-room", sections: ["venues"] }), VA_V1);
+    assert.equal(checkIntakeSingleHome("vowasia", { pillarSlug: "press-room", subSectionSlug: "x" }), VA_V2);
+    assert.equal(checkIntakeSingleHome("vowasia", { pillarSlug: "real-weddings", sections: ["press-room"] }), VA_V3);
+    assert.equal(checkIntakeSingleHome("vowasia", { pillarSlug: "press-room" }), null);
+    assert.equal(checkIntakeSingleHome("vowasia", { pillarSlug: "venues", subSectionSlug: "hotels-resorts" }), null);
+  });
+  it("singleHomeSlugsFor and the union stay exact", () => {
+    assert.deepEqual(singleHomeSlugsFor("vowasia"), ["press-room"]);
+    assert.deepEqual(singleHomeSlugUnion(), ["pressroom", "press-room"]);
   });
 });
 

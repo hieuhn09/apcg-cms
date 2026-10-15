@@ -777,6 +777,20 @@ description; Console shows it fully).
 
 ---
 
+## GTP tenant rules (GlobalTravelPost, gtp-launch P1/P4, 2026-10-12)
+
+PR hieuhn09/apcg-cms#35 MERGED (`925ba0b`). Code verified locally. Status of production steps as of 13-10-26:
+
+- DONE: tenant `gtp` (id 7) created; G17 taxonomy script run (40 rows: 6 pillars, 20 sub-sections, 2 newsletters, 6 authors, 6 tags; 0 articles); read token minted (prefix `9f3af5e9`, label `frontend-preview`, used as CMS_READ_TOKEN by gtp-web on Vercel); engine record `content-engine-gtp` (id 5, writer, tenant gtp only, create_article + update_article, token prefix `41877086`; the Console create form has no hub-flag checkboxes, hub flags live only in /admin, so none are ticked for an intake-only engine; the full token is shown once); `frontendUrl` = https://gtp-web-lac.vercel.app.
+- OPEN: idempotency re-run (expect 40 `exists`); author bios/cities; revalidate webhook (gtp-web lacks REVALIDATE_SECRET, which must equal the shared CENTRAL_SIGNING_SECRET; owner cannot read it; do NOT rotate it; until decided gtp relies on time-based ISR, each save logs a failed best-effort webhook); `frontendUrl` to https://globaltravelpost.com at cutover (P5); migration import on real data.
+- Backlog: `npm ci` reports 37 vulnerabilities (pre-existing; no `npm audit fix` run).
+
+- `src/lib/constants.ts`: `SINGLE_HOME_PILLARS.gtp = ["press-room"]` (exact hyphenated slug; same single-home enforcement and optional author as the Pressroom pillars). `ENGINE_BLOCKED_PILLARS.gtp = ["press-room", "events-awards"]` (the engine checks the PRIMARY pillar only). `events-awards` is engine-blocked but NOT single-home: it keeps sub-sections, secondary sections and a required author. The other four gtp pillars stay engine-writable.
+- Taxonomy source of truth: `scripts/lib/gtp-taxonomy.ts` (tests in `scripts/lib/gtp-taxonomy.test.ts`, now part of `test:single-home`). Production rows come ONLY from the owner script `npm run audit:add-gtp-taxonomy` (gate G17, run 13-10-26); the tenant is created by hand in /admin. `SEED_INCLUDE_GTP=true` is a local-only seed fixture guarded like the Pressroom seed.
+- Migration tooling `scripts/migrate/**` (legacy GTP site to Central): discover, export, validate-mapping, import, rewrite-links, rollback, redirects, verify; run guide `scripts/migrate/GTP-LEGACY.md`, runbook `docs/12-migration.md`. Importer correctness on the real source is UNPROVEN (synthetic fixture only; owner residuals G15/C10/G53). Known: the loader stalls on about 30% of starts (root cause unknown, mitigated by watchdog and retries).
+- Lexical to Markdown conversion loses tables and in-body images and merges quote cites; editors must not rely on them for gtp.
+- `src/hooks/revalidate.ts` was not changed.
+
 ## Security patterns already load-bearing in this API surface
 
 Both verified in `process/general-plans/active/cms-cost-remediation_09-09-26/` and directly in code:

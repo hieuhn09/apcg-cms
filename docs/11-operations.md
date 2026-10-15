@@ -100,6 +100,66 @@ and status.
   UNION ALL SELECT 'v_exclusive', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_exclusive;
   ```
 
+- **GTP rollout (owner-run; GlobalTravelPost, tenant `gtp`):** the rules ship in code
+  (`gtp` in `SINGLE_HOME_PILLARS` (`press-room`) and `ENGINE_BLOCKED_PILLARS`
+  (`press-room`, `events-awards`)) and are inert until the tenant exists. No migration.
+  Steps: (1) merge + deploy; (2) create the tenant in /admin (`docs/07-website-management.md`,
+  `autoPublishEngineDrafts` off, frontend URL empty); (3) print the DB **hostname** (no
+  port) AND the database name with
+  `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb` (see the precaution below); pass the hostname exactly to
+  `--confirm-host`; (4) dry run:
+  `npm run audit:add-gtp-taxonomy -- --confirm-host=<hostname>` and review the plan
+  (6 pillars, 20 sub-sections, 2 newsletters, 6 authors, 6 tags = 40 rows, all `create`);
+  (5) apply from an interactive terminal:
+  `npm run audit:add-gtp-taxonomy -- --apply --confirm-host=<hostname> [--authors-file=./gtp-authors.json]`;
+  (6) re-run the dry run: every row must read `exists`. The script is dry-run by default,
+  never overwrites (differences are printed only), refuses unsafe states (and then writes
+  nothing), and keeps a result log under `migration-data/`. Never run it with a tunnelled
+  production DB open. **No violator SQL is needed**: `press-room` is a new pillar with
+  zero articles. **Rollback:** before any article exists, delete in /admin in this order:
+  authors, tags, newsletters, sub-sections, pillars (the result log lists every id),
+  optionally the tenant; afterwards never delete pillars; suspend the tenant instead. Code
+  rollback = revert the PR. **Seed warning:** `npm run db:seed` is local-only; the gtp
+  fixture (`SEED_INCLUDE_GTP=true`) refuses a non-local database.
+  **Status 13-10-26:** steps (1)-(5) done by the owner against Neon production (40 rows
+  created); step (6) re-run not yet done.
+  **Precaution (incident 13-10-26):** the Neon server holds TWO databases: `neondb` (the
+  real Central CMS database) and `gcv_payload_disabled` (old, EMPTY, 0 tables). The first
+  attempt used a DATABASE_URL ending in `/gcv_payload_disabled`; the script aborted at the
+  tenant lookup ("Failed query: select count(*) from tenants ... params: gtp") and wrote
+  nothing. `--confirm-host` checks only the HOST, so it cannot catch a wrong database
+  name: always print `.pathname` and confirm `/neondb` before any `--apply`. Proposal (not
+  done): make `scripts/lib/local-db-guard.ts` show the database name in its confirmation.
+  **Follow-up (13-10-26, vowasia launch P1):** the new `scripts/lib/central-db-name-guard.ts`
+  hard-checks the name for the vowasia script (below); `local-db-guard.ts` and the gtp
+  script are unchanged.
+
+- **VowAsia rollout (owner-run; tenant `vowasia`):** the rules ship in code (`vowasia` in
+  `SINGLE_HOME_PILLARS` as `["press-room"]` and `ENGINE_BLOCKED_PILLARS` as
+  `["press-room", "real-weddings", "directory"]`) and are inert
+  until the tenant exists. No migration. **Status 13-10-26: code only, nothing applied.**
+  Steps: (1) merge + deploy; (2) create the tenant by hand in /admin
+  (`docs/07-website-management.md`, `autoPublishEngineDrafts` off, frontend URL empty);
+  (3) print host and database name:
+  `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-vowasia-taxonomy -- --confirm-host=<hostname>` and review the plan
+  (8 pillars, 27 sub-sections, 2 newsletters, 6 authors, 6 tags = 49 rows, all `create`);
+  (5) apply from an interactive terminal:
+  `npm run audit:add-vowasia-taxonomy -- --apply --confirm-host=<hostname> [--authors-file=./vowasia-authors.json]`;
+  (6) re-run the dry run: every row must read `exists`. Safety, before Payload loads: the
+  script FIRST prints `database name (new URL(DATABASE_URL).pathname): "<name>"`, then runs
+  the host guard (`--confirm-host`, TTY for `--apply`), then the name guard
+  (`scripts/lib/central-db-name-guard.ts`): a non-local database must be exactly `/neondb`
+  by both the URL path and the Postgres driver's parse, otherwise it refuses (dry run
+  included) and writes nothing; local disposable databases stay allowed. A missing tenant
+  fails harmlessly at the lookup ("tenant "vowasia" not found ... Nothing done.").
+  Same never-overwrite / refuse / result-log behaviour and the same rollback order as the
+  gtp script. The six author names are confirmed by the owner (13-10-26); roles and short
+  bios are in the fixture (no city), editable later; fix names BEFORE `--apply` (renaming later touches every
+  mirror, see the playbook).
+
 ## Token rotation
 
 `tsx scripts/mint-token.ts read --tenant <slug>` / `engine --engine "<name>"`.

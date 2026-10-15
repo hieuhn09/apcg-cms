@@ -28,18 +28,26 @@ const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed t
 
 type Doc = Record<string, unknown>;
 // 10 = brief-asia pressroom (single-home), 11 = brief-asia asia, 12 = wad pressroom, 13 = gcv finance,
-// 14 = gcv pressroom (single-home since GCV Pressroom parity)
+// 14 = gcv pressroom (single-home since GCV Pressroom parity), 15 = gtp press-room (single-home),
+// 16 = gtp events-awards (engine-blocked only, NOT single-home),
+// 17 = vowasia press-room (single-home), 18 = vowasia real-weddings (ordinary)
 const PILLARS: Doc[] = [
   { id: 10, slug: "pressroom", tenant: 1 },
   { id: 11, slug: "asia", tenant: 1 },
   { id: 12, slug: "pressroom", tenant: 2 },
   { id: 13, slug: "finance", tenant: 3 },
   { id: 14, slug: "pressroom", tenant: 3 },
+  { id: 15, slug: "press-room", tenant: 4 },
+  { id: 16, slug: "events-awards", tenant: 4 },
+  { id: 17, slug: "press-room", tenant: 5 },
+  { id: 18, slug: "real-weddings", tenant: 5 },
 ];
 const TENANTS: Doc[] = [
   { id: 1, slug: "brief-asia" },
   { id: 2, slug: "wad" },
   { id: 3, slug: "gcv" },
+  { id: 4, slug: "gtp" },
+  { id: 5, slug: "vowasia" },
 ];
 
 interface FakeReq {
@@ -150,6 +158,19 @@ describe("Articles beforeChange hook: tenant keying negative controls", () => {
   it("no tenant lookup when no referenced slug is in the single-home union (G79b)", async () => {
     const { req } = await run({ operation: "create", data: { pillar: 13, secondarySections: [{ pillar: 11 }] } });
     assert.deepEqual(req.calls.map((c) => c.args.collection), ["pillars"]);
+  });
+});
+
+describe("Articles beforeChange hook: vowasia press-room", () => {
+  const VA = (rule: string) => `pillar rule: "press-room" is a single-home pillar: ${rule}`;
+  it("vowasia press-room IS blocked (V1 secondary, V2 sub-section, V3 as secondary); press-room alone passes", async () => {
+    await rejectsWith(run({ operation: "create", data: { pillar: 17, secondarySections: [{ pillar: 18 }] } }).then((r) => r.out), VA("an article filed there cannot also have secondary sections."));
+    await rejectsWith(run({ operation: "create", data: { pillar: 17, subSection: 4 } }).then((r) => r.out), VA("an article filed there cannot have a sub-section."));
+    await rejectsWith(run({ operation: "create", data: { pillar: 18, secondarySections: [{ pillar: 17 }] } }).then((r) => r.out), VA("it cannot be added as a secondary section to another article."));
+    assert.ok((await run({ operation: "create", data: { pillar: 17 } })).out);
+  });
+  it("an ordinary vowasia pillar keeps its sub-section (only press-room is single-home in the CMS)", async () => {
+    assert.ok((await run({ operation: "create", data: { pillar: 18, subSection: 4 } })).out);
   });
 });
 
@@ -318,6 +339,10 @@ describe("SubSections pillar validate (V4)", () => {
   it("a sub-section under gcv pressroom is refused", async () => {
     assert.equal(await validate(14, { req: makeReq() }), V4);
   });
+  it("a sub-section under vowasia press-room is refused; vowasia real-weddings is fine", async () => {
+    assert.equal(await validate(17, { req: makeReq() }), 'pillar rule: "press-room" is a single-home pillar: it cannot have sub-sections.');
+    assert.equal(await validate(18, { req: makeReq() }), true);
+  });
   it("other pillars (incl. wad pressroom) are fine", async () => {
     assert.equal(await validate(11, { req: makeReq() }), true);
     assert.equal(await validate(12, { req: makeReq() }), true);
@@ -366,6 +391,20 @@ describe("Articles author validate (optional only for single-home)", () => {
   it("a gcv Pressroom article may have no author", async () => {
     assert.equal(await validate(null, opts(14)), true);
     assert.equal(await validate(null, opts(14, makeReq(), "data")), true);
+  });
+  it("a gtp press-room article may have no author", async () => {
+    assert.equal(await validate(null, opts(15)), true);
+    assert.equal(await validate(null, opts(15, makeReq(), "data")), true);
+  });
+  it("a vowasia press-room article may have no author; vowasia real-weddings requires one", async () => {
+    assert.equal(await validate(null, opts(17)), true);
+    assert.equal(await validate(null, opts(17, makeReq(), "data")), true);
+    assert.equal(await validate(null, opts(18)), REQ);
+    assert.equal(await validate(5, opts(18)), true);
+  });
+  it("a gtp events-awards article (engine-blocked, not single-home) requires an author", async () => {
+    assert.equal(await validate(null, opts(16)), REQ);
+    assert.equal(await validate(5, opts(16)), true);
   });
 });
 

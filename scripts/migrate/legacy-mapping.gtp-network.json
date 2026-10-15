@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "_provisional": [
+    "urls.oldOrigin",
+    "urls.articlePathTemplate",
+    "urls.sectionPaths",
+    "urls.extraLegacyPaths",
+    "archivedAs",
+    "formatTags.enabled",
+    "pin",
+    "countries.match"
+  ],
+  "_evidence": "STRUCTURAL mapping for the GTP legacy import (gtp-launch P4 A2/A12/A13). No site id and no image host here: those live in an overlay passed with --mapping-overlay (owner-held for the real run, OD-34). Values listed in _provisional are owner decisions still open; --require-final (implied for any non-local run) refuses them.",
+  "source": {
+    "schema": "public",
+    "tableAllowList": ["articles", "sites", "site_authors", "media_assets", "scraping_sources", "gtp_subscribers", "visa_rules", "events", "press_submissions"],
+    "columns": {
+      "id": "id",
+      "slug": "slug",
+      "title": "title",
+      "dek": "excerpt",
+      "kicker": "kicker",
+      "body": "body_sections",
+      "status": "status",
+      "section": "section",
+      "subsection": "subsection",
+      "tags": "tags",
+      "format": "format",
+      "featured": "featured",
+      "isHero": "is_hero",
+      "readMinutes": "read_minutes",
+      "heroImage": "featured_image",
+      "heroCredit": "featured_image_credit",
+      "seo": "seo",
+      "sourceUrl": "source_url",
+      "byline": "byline",
+      "takeaways": "takeaways",
+      "countries": "countries",
+      "publishedAt": "published_at",
+      "createdAt": "created_at",
+      "updatedAt": "updated_at"
+    }
+  },
+  "body": {
+    "format": "sections",
+    "converter": "html-to-lexical",
+    "lineBreaks": "space"
+  },
+  "status": {
+    "map": { "published": "published", "archived": "archived", "draft": "draft", "rejected": "SKIP" },
+    "unknown": "reject"
+  },
+  "categories": {
+    "map": {
+      "news/destination-marketing": { "pillar": "business-of-travel", "subSection": "destination-marketing" },
+      "news/aviation-business": { "pillar": "business-of-travel", "subSection": "aviation-business" },
+      "business-of-travel/travel-tech": { "pillar": "news", "subSection": "travel-tech" }
+    },
+    "fallback": null,
+    "unmapped": "reject"
+  },
+  "authors": {
+    "resolve": "byColumn",
+    "map": {
+      "Daniel Cheong": "Daniel Cheong",
+      "Priya Nair": "Priya Nair",
+      "Marcus Tan": "Marcus Tan",
+      "Natalie Ong": "Natalie Ong",
+      "Clara Widjaja": "Natalie Ong",
+      "Yuki Hamada": "Yuki Hamada"
+    },
+    "fallbackName": "GTP Newsroom",
+    "staff": ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada", "GTP Newsroom"],
+    "createMissing": false
+  },
+  "formatTags": { "enabled": true, "include": ["guide", "analysis", "review", "interview"] },
+  "countries": { "match": "either" },
+  "readMin": { "wpm": 230 },
+  "pin": { "fromFlags": false, "maxPinned": 0 },
+  "archivedAs": "section",
+  "events": { "enabled": true, "nearMatchThreshold": 0.9, "inactive": "archived" },
+  "slug": {
+    "preserve": true,
+    "dedupe": "numeric-suffix",
+    "reservedSlugs": []
+  },
+  "urls": {
+    "oldOrigin": "https://www.globaltravelpost.com",
+    "articlePathTemplate": "/{section}/{slug}",
+    "sectionPaths": {},
+    "extraLegacyPaths": ["/about-us", "/contact-us", "/privacy-policy", "/terms-and-conditions", "/advertise-with-us"]
+  },
+  "media": {
+    "maxBytes": 20971520,
+    "failureBudgetPercent": 2,
+    "fetchTimeoutMs": 30000,
+    "concurrency": 3,
+    "hotlinkPolicy": "download"
+  }
+}
