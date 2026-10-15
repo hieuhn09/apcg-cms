@@ -173,7 +173,9 @@ builder on an allow-listed table; imports are dry runs unless `--apply`; a
 non-local Central needs `--confirm-host`; provisional owner decisions are fatal
 outside the local rehearsal. All mapping owner decisions were resolved on
 14-10-26 (apex origin, articles at `/article/{slug}`, final static paths); the
-open question is `/studio` and `/visa-tracker`, which have no gtp-web route. Rehearse locally with `npm run rehearse:gtp`.
+old `/studio` and `/visa-tracker` sections are dropped on the new site (Amendment 4): they are in
+`urls.gonePaths` and old links answer 410 Gone, which only takes effect if gtp-web ships the
+generated redirect map at cutover. Rehearse locally with `npm run rehearse:gtp`.
 
 Bylines (Amendment 3, 14-10-26): legacy bylines are not kept. Every imported
 article and industry-calendar listing is credited to one of the 5 web authors

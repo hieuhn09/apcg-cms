@@ -34,12 +34,15 @@ the Phase 5 runbook is authoritative for order and commands.
   pages at `/<section>` (news, destinations, business-of-travel,
   experiences-luxury, press-room, events-awards), static pages at their final
   paths (`/about`, `/contact`, `/privacy`, `/terms`, `/advertise`,
-  `/editorial-standards`, `/studio`, `/licensing`, `/press-room-submit`,
-  `/newsletters`, `/team`, `/visa-tracker`), taken from the live old site's
-  public sitemap and URL probes; `archivedAs`, `formatTags`, `pin` and
-  `countries.match` accepted at their defaults by the owner. Open owner
-  question: `/studio` and `/visa-tracker` have no gtp-web route yet (build,
-  redirect elsewhere, or 410). The rehearsal and unit tests exercise the
+  `/editorial-standards`, `/licensing`, `/press-room-submit`, `/newsletters`,
+  `/team`), taken from the live old site's public sitemap and URL probes;
+  `archivedAs`, `formatTags`, `pin` and `countries.match` accepted at their
+  defaults by the owner. Removed sections (Amendment 4, owner decision
+  14/15-10-26): the new site drops `/studio` and `/visa-tracker`; they are
+  listed in `urls.gonePaths` and the redirect builder emits a 410 Gone rule for
+  each (`{ "status": 410 }` in the gtp-web `redirect-map.json`), never a
+  redirect or a page. The 410 only takes effect at cutover if gtp-web ships
+  the generated redirect map. The rehearsal and unit tests exercise the
   provisional paths with a cloned mapping that carries one marker.
 - Bylines (Amendment 3, owner decision 14-10-26): legacy bylines are NOT kept
   (they were very skewed: Daniel Cheong 705, Priya Nair 569, Marcus Tan 143,
