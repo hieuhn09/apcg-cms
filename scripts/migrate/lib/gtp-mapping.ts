@@ -27,6 +27,7 @@ export const OWNER_DECISION_KEYS = {
   "urls.articlePathTemplate": "OD-24",
   "urls.sectionPaths": "OD-24",
   "urls.extraLegacyPaths": "OD-24",
+  "urls.gonePaths": "OD-24",
   archivedAs: "OD-8",
   "formatTags.enabled": "OD-format-tags",
   pin: "OD-pin",
@@ -52,6 +53,8 @@ export const MAPPING_MESSAGES = {
   createMissing: "mapping: authors.createMissing must be false (the importer never creates authors).",
   fallbackName: "mapping: authors.fallbackName is retired (Amendment 3); every item gets an author from authors.distribute.pool.",
   newsroom: 'mapping: "GTP Newsroom" must not appear in authors (Amendment 3: no article is credited to the newsroom).',
+  gonePath: (p: string) => `mapping: urls.gonePaths entry "${p}" must start with "/".`,
+  goneOverlap: (p: string) => `mapping: "${p}" is listed in both urls.gonePaths and urls.extraLegacyPaths.`,
   pool: "mapping: authors.distribute.pool must be non-empty, unique and a subset of authors.staff.",
 } as const;
 
@@ -178,6 +181,8 @@ export const MappingSchema = z
         articlePathTemplate: z.string().default("/{section}/{slug}"),
         sectionPaths: z.record(z.string(), z.string()).default({}),
         extraLegacyPaths: z.array(z.string()).default([]),
+        // Amendment 4: old paths of sections dropped on the new site; each answers 410 Gone.
+        gonePaths: z.array(z.string()).default([]),
       })
       .strict()
       .prefault({}),
@@ -213,7 +218,7 @@ export const KEY_TABLE: readonly string[] = [
   "countries.match", "readMin.wpm", "pin.fromFlags", "pin.maxPinned", "archivedAs",
   "events.enabled", "events.nearMatchThreshold", "events.inactive",
   "dates.fallback", "dates.timezone", "slug.preserve", "slug.dedupe", "slug.reservedSlugs", "flags.breaking",
-  "urls.oldOrigin", "urls.articlePathTemplate", "urls.sectionPaths", "urls.extraLegacyPaths",
+  "urls.oldOrigin", "urls.articlePathTemplate", "urls.sectionPaths", "urls.extraLegacyPaths", "urls.gonePaths",
   "media.hostAllowlist", "media.hostRewrite", "media.maxBytes", "media.failureBudgetPercent", "media.fetchTimeoutMs",
   "media.concurrency", "media.hotlinkPolicy",
   "redact",
@@ -325,6 +330,10 @@ export function validateMapping(structuralRaw: unknown, overlayRaw: unknown | un
   }
   const pool = m.authors.distribute.pool;
   if (!pool.length || new Set(pool).size !== pool.length || pool.some((n) => !m.authors.staff.includes(n))) throw new MappingError(MAPPING_MESSAGES.pool);
+  for (const p of m.urls.gonePaths) {
+    if (!p.startsWith("/")) throw new MappingError(MAPPING_MESSAGES.gonePath(p));
+    if (m.urls.extraLegacyPaths.includes(p)) throw new MappingError(MAPPING_MESSAGES.goneOverlap(p));
+  }
   const structuralOnly = opts.structuralOnly === true;
   if (!structuralOnly && (!m.source.siteFilter || !m.media.hostAllowlist?.length)) throw new MappingError(MAPPING_MESSAGES.overlayRequired);
   if (opts.requireFinal && prov.length > 0) throw new MappingError(MAPPING_MESSAGES.requireFinal);

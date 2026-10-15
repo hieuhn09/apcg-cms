@@ -134,3 +134,20 @@ test("C1/G45 (A13-R08): a foreign table in source.tableAllowList is a mapping va
   (x.source as Record<string, unknown>).tableAllowList = [];
   assert.throws(() => validateMapping(x, readJson(OVERLAY)), { message: SQL_MESSAGES.allowListEmpty });
 });
+
+test("Amendment 4: urls.gonePaths accepted; a path in both lists or without a leading / is rejected; committed mapping drops /studio and /visa-tracker", () => {
+  const raw = readJson(STRUCT) as Record<string, Record<string, unknown>>;
+  const ov = readJson(OVERLAY);
+  const m = validateMapping(raw, ov).mapping;
+  assert.deepEqual(m.urls.gonePaths, ["/studio", "/visa-tracker"]);
+  for (const p of ["/studio", "/visa-tracker"]) assert.equal(m.urls.extraLegacyPaths.includes(p), false);
+  const both = clone(raw);
+  (both.urls as { extraLegacyPaths: string[] }).extraLegacyPaths.push("/studio");
+  assert.throws(() => validateMapping(both, ov), { message: MAPPING_MESSAGES.goneOverlap("/studio") });
+  const rel = clone(raw);
+  (rel.urls as { gonePaths: string[] }).gonePaths.push("studio");
+  assert.throws(() => validateMapping(rel, ov), { message: MAPPING_MESSAGES.gonePath("studio") });
+  const none = clone(raw);
+  delete (none.urls as Record<string, unknown>).gonePaths;
+  assert.deepEqual(validateMapping(none, ov).mapping.urls.gonePaths, []);
+});

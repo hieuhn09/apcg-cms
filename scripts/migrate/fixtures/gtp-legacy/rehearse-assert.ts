@@ -404,6 +404,7 @@ async function main(): Promise<number> {
     const map = JSON.parse(readFileSync(path.join(emit, "redirect-map.json"), "utf8")) as Record<string, unknown>;
     const rules = JSON.parse(readFileSync(path.join(emit, "redirect-rules.json"), "utf8")) as unknown[];
     const kr = JSON.parse(readFileSync(KNOWN, "utf8")) as KnownRoutes;
+    check("Amendment 4: gtp-web redirect map answers 410 for /studio and /visa-tracker", JSON.stringify(map["/studio"]) === '{"status":410}' && JSON.stringify(map["/visa-tracker"]) === '{"status":410}', { studio: map["/studio"], visa: map["/visa-tracker"] });
     check("G35 emitted files pass validateGtpWebRedirectFiles", validateGtpWebRedirectFiles(map, rules, kr).length === 0, validateGtpWebRedirectFiles(map, rules, kr).slice(0, 5));
     // With the /article/{slug} template a row whose old URL equals its new URL gets no (identity) redirect.
     const rehomedAll = slugMap("rehearsal").filter((e) => e.rehomed && e.status === "published");

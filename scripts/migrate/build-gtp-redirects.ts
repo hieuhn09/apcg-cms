@@ -61,7 +61,7 @@ async function main(): Promise<number> {
     writeJsonSafe(path.join(dir, "redirect-map.json"), files.map);
     writeJsonSafe(path.join(dir, "redirect-rules.json"), files.rules);
   }
-  console.log(`[redirects] rules ${b.rules.length} (map ${Object.keys(files.map).length}, patterns ${files.rules.length}); identityDropped ${b.counts.identityDropped}; collisions ${b.collisions.length}; errors ${b.errors.length}; contract errors ${contract.length}; coverage ${cov.matched}/${cov.total} (${cov.pct}%)`);
+  console.log(`[redirects] rules ${b.rules.length} (map ${Object.keys(files.map).length}, patterns ${files.rules.length}); identityDropped ${b.counts.identityDropped}; gone (410) ${b.counts.gone ?? 0}; collisions ${b.collisions.length}; errors ${b.errors.length}; contract errors ${contract.length}; coverage ${cov.matched}/${cov.total} (${cov.pct}%)`);
   for (const e of [...b.errors, ...contract].slice(0, 20)) console.error(`[redirects] ${e}`);
   if (b.errors.length || contract.length) return 3;
   const min = a.get("min-coverage");

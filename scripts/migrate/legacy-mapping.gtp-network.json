@@ -91,7 +91,8 @@
       "press-room": "/press-room",
       "events-awards": "/events-awards"
     },
-    "extraLegacyPaths": ["/about", "/contact", "/privacy", "/terms", "/advertise", "/editorial-standards", "/studio", "/licensing", "/press-room-submit", "/newsletters", "/team", "/visa-tracker"]
+    "extraLegacyPaths": ["/about", "/contact", "/privacy", "/terms", "/advertise", "/editorial-standards", "/licensing", "/press-room-submit", "/newsletters", "/team"],
+    "gonePaths": ["/studio", "/visa-tracker"]
   },
   "media": {
     "maxBytes": 20971520,
