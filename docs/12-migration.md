@@ -174,3 +174,10 @@ non-local Central needs `--confirm-host`; provisional owner decisions are fatal
 outside the local rehearsal. All mapping owner decisions were resolved on
 14-10-26 (apex origin, articles at `/article/{slug}`, final static paths); the
 open question is `/studio` and `/visa-tracker`, which have no gtp-web route. Rehearse locally with `npm run rehearse:gtp`.
+
+Bylines (Amendment 3, 14-10-26): legacy bylines are not kept. Every imported
+article and industry-calendar listing is credited to one of the 5 web authors
+(Daniel Cheong, Priya Nair, Marcus Tan, Natalie Ong, Yuki Hamada), split evenly
+(counts differ by at most 1), grouped by country + quarter, never by pillar.
+Nothing is credited to "GTP Newsroom"; that Central author row stays unused and
+can be deleted by the owner later. Details: `scripts/migrate/GTP-LEGACY.md`.

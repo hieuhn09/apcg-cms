@@ -41,6 +41,22 @@ the Phase 5 runbook is authoritative for order and commands.
   question: `/studio` and `/visa-tracker` have no gtp-web route yet (build,
   redirect elsewhere, or 410). The rehearsal and unit tests exercise the
   provisional paths with a cloned mapping that carries one marker.
+- Bylines (Amendment 3, owner decision 14-10-26): legacy bylines are NOT kept
+  (they were very skewed: Daniel Cheong 705, Priya Nair 569, Marcus Tan 143,
+  Clara Widjaja 91, ..., 116 empty). `authors.distribute` gives EVERY imported
+  article and every events-awards industry-calendar listing one of the 5 web
+  authors (Daniel Cheong, Priya Nair, Marcus Tan, Natalie Ong, Yuki Hamada),
+  split evenly (per-author counts differ by at most 1), never by pillar.
+  Related items stay together: group = first country + calendar quarter of
+  publishedAt; items without a country fill the rest round-robin by date
+  (`lib/gtp-author-distribution.ts`). The map is computed once per run from
+  the complete planned set and saved as `author-plan.json` in the run dir, so
+  resume and rollback + re-import give the same bylines. The dry run prints
+  the per-author totals, the spread and "pillars with fewer than 2 authors".
+  No article is credited to "GTP Newsroom" (the mapping refuses that name and
+  the retired `authors.fallbackName`); the Central author row "GTP Newsroom"
+  stays unused and the owner may delete it later. The old Clara Widjaja ->
+  Natalie Ong mapping is no longer needed (only read when `keepLegacy: true`).
 - Overlay (`--mapping-overlay <path>`): exactly `source.siteFilter`,
   `media.hostAllowlist`, `media.hostRewrite`. The real overlay is held by the
   owner OUTSIDE the repository (OD-34). The committed
