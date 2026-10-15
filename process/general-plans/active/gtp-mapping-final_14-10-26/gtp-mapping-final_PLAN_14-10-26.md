@@ -26,6 +26,7 @@ at a cloned provisional variant / apex host, light doc edits. 5-6 files. Rehears
 | `scripts/migrate/legacy-mapping.gtp-network.json` | values above |
 | `scripts/migrate/lib/gtp-mapping.test.ts` | G41: assert `provisional.length > 0` on a clone with `_provisional=["urls.articlePathTemplate"]`; committed mapping asserts `provisional.length === 0`. G46: build provisional variant the same way, keep `formatProvisional(...)` match `/urls\.articlePathTemplate .*OD-24/` and the requireFinal throw on it; ADD test: committed mapping passes `validateMapping(raw, overlay, {requireFinal:true})` with 0 markers. No other assertion weakened. |
 | `scripts/migrate/fixtures/gtp-legacy/rehearse-assert.ts` | Step 5 (~l.162-168): run `--structural-only` and `--require-final` against a cloned provisional mapping written to the rehearsal OUT dir (mode 0600) for the "PROVISIONAL list" + "exit 2" checks; ADD check: committed mapping `--require-final` exits 0 with no PROVISIONAL text. G35 (~l.379): same cloned provisional mapping passed via `--mapping` to trigger exit 2. Sitemap host (~l.365-366) -> `https://globaltravelpost.com`. Re-homed check (~l.376): if `oldUrl` normalises to `/article/${slug}` the builder drops the identity redirect, so assert absence-or-equal (map entry undefined when identical, else `/article/<slug>`); pick a rehomed row whose oldUrl differs if one exists. |
+| `scripts/migrate/fixtures/gtp-legacy/seed-gtp-legacy-fixture.ts` | **Added 15-10-26 by owner approval** (see "Owner-approved scope amendment 15-10-26"). Exactly two edits: `OLD_ORIGIN` (~l.22) to `https://globaltravelpost.com`; article-12 internal link (~l.180) to `${OLD_ORIGIN}/article/fixture-${WORDS[50 % WORDS.length]}-story-50`. Fixture data only. |
 | `scripts/migrate/lib/gtp-transform.test.ts` | Verify only (l.~108/111 pass template/origin as plain inputs); expected unchanged. |
 | `scripts/migrate/GTP-LEGACY.md` (~l.20,30,85-86), `docs/12-migration.md` (~l.173) | Replace "provisional / owner-open" wording with resolved values + date; note `/studio`, `/visa-tracker` have no gtp-web route (owner question). |
 | `scripts/migrate/lib/gtp-redirects.ts` | NOT changed (identity-drop behaviour is correct for the new template; STATIC_LEGACY only adds redirects for its own keys). |
@@ -110,3 +111,23 @@ Execute-agent instructions:
 - E3: If rehearsal cannot run, record UNPROVEN checks in PR body; do not claim green.
 
 Test gates: the five rows in Verification Evidence, in that order.
+
+## Owner-approved scope amendment 15-10-26
+
+Status: owner-approved scope, recorded here. The validate-contract above and its `Gate: PASS` lines are unchanged and kept.
+
+1. **Why.** During EXECUTE (commit 2d8c166 on branch `claude/clever-gates-h5xyd8`, pushed as WIP to PR #40) `npm run rehearse:gtp` failed at step 9 ("pass 1 flags exactly the fixture row with an internal link": got `[]` instead of one row, then `invalid input syntax for type integer: "NaN"`). Cause: the fixture seed still writes old-shape internal links. With the new mapping every old URL is `/article/{slug}`, and the importer only flags a link whose path matches a known old URL (`scripts/migrate/lib/import-gtp-main.ts` ~l.645-656). This is a consequence of the approved URL template, not a code bug.
+
+2. **New touchpoint (owner replied "đồng ý bổ sung fixture" on 15-10-26):** `scripts/migrate/fixtures/gtp-legacy/seed-gtp-legacy-fixture.ts`, exactly two edits:
+   - (a) line ~22: `OLD_ORIGIN` from `"https://www.globaltravelpost.com"` to `"https://globaltravelpost.com"`.
+   - (b) line ~180: the article-12 internal link from `${OLD_ORIGIN}/${t50sec}/fixture-${WORDS[50 % WORDS.length]}-story-50` to `${OLD_ORIGIN}/article/fixture-${WORDS[50 % WORDS.length]}-story-50`.
+   - Keep the deliberate dangling link `${OLD_ORIGIN}/news/deleted-story` unchanged.
+   - Fixture data only: no database, no product code. If `t50sec` becomes unused after the edit, remove only that unused binding if lint/typecheck requires it.
+
+3. **Rule for further drift.** Any other rehearsal expectation that turns out to depend on the old URL shape (only visible after step 9) must STOP the run and be reported as NEEDS_CONTEXT. Never weaken or skip a check. Each additional file needs a further owner approval.
+
+4. **Corrections to the plan text.**
+   - (a) `validate-mapping --require-final` prints `PROVISIONAL: none` (the tool always prints that line). The gate is: exit code 0, output contains `PROVISIONAL: none`, and no marker name is listed. This supersedes "no provisional list" wording in the Verification Evidence table and the rehearse-assert "no PROVISIONAL text" check description.
+   - (b) The push of the EXECUTE commit is a normal `git push -u origin claude/clever-gates-h5xyd8`. The branch already contains the plan commit e5c1e94 and the WIP commit 2d8c166, so `--force-with-lease` is no longer needed and must not be used (supersedes the "Commit (EXECUTE)" push note).
+
+5. **Gate.** All five validate-contract gates stay as written, plus the full `npm run rehearse:gtp` must now exit 0 with an empty UNPROVEN list in `scripts/migrate/out/rehearse/rehearse-summary.json`. The existing `Gate: PASS` verdict is kept; this amendment is owner-approved scope, recorded here, and the independent EVL run after EXECUTE is the confirmation.
