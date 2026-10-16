@@ -77,7 +77,7 @@ the Phase 5 runbook is authoritative for order and commands.
 | Import (staged / full) | `... --apply --limit 50 --run-id <id>` then `... --apply --resume --run-id <id>` |
 | Second pass | `npm run migrate:gtp:rewrite-links -- --run-id <id> [--apply]` |
 | Redirects | `npm run migrate:gtp:redirects -- --run-id <id> --mapping-overlay <overlay> --known-routes <file> --emit-gtp-web <dir> --sitemap-urls <file> --min-coverage <pct>` |
-| Parity | `GTP_READ_TOKEN=... npm run migrate:gtp:verify -- --run-id <id> --mapping-overlay <overlay> [--public-base <url>]` |
+| Parity | `GTP_READ_TOKEN=... npm run migrate:gtp:verify -- --run-id <id> --mapping-overlay <overlay> [--public-base <url>] [--batch 500]` |
 | Rollback | `npm run migrate:gtp:rollback -- --run-id <id> [--list-orphans] [--apply] [--include-edited] [--include-orphans]` |
 
 Non-local Central: add `--confirm-host=<host>`; the importer refuses
@@ -87,6 +87,35 @@ Load watchdog: the Payload-booting tools exit 75 when the module graph stalls
 under the tsx loader (seen intermittently in the build environment; the older
 `import-gcv-legacy.ts` shows the same). Nothing has been done at that point:
 re-run the same command.
+
+## Second run (delta migration, Amendment 5)
+
+Use this when the old site got new articles after the first import.
+
+- Use a NEW `--run-id` (never `--resume` the old run) and the SAME `--out`
+  directory as the first run: the first run's directory (its `slug-map.json`)
+  must be present. A fresh run refuses `--apply` when Central holds import rows
+  that no run directory in `--out` has journaled (it would otherwise adopt them).
+- Create-only: every item the earlier run created and that still exists in
+  Central keeps its Central slug and is skipped (`skippedExisting`); nothing
+  already in Central is updated. Edits and deletions made on the old site after
+  the first run are NOT carried over.
+- Authors: existing items keep their real Central author (fixed in
+  `author-plan.json`); only the new items are balanced, so the per-author
+  counts over (existing + new) differ by at most 1 when possible. The report
+  shows the plan totals and the actual totals (existing Central rows + new)
+  with their spread.
+- A new item whose slug is already held by an earlier-run item gets `-2`, `-3`
+  (listed under slugChanged, reason `taken-by-earlier-run`).
+- Rollback of the second run id removes only that run's articles.
+- Dry run first: `planned` must equal the number of new importable articles.
+
+Pagination note (Amendment 5): legacy rows are read page by page in
+(created_at, id) order. The cursor now carries the exact created_at (with
+microseconds) as text; before, it lost the microseconds and re-read rows at
+page edges (the first real run read 1,843 rows for about 1,770, and verify
+reported false count FAILs). Reports now show the true row counts; the result
+no longer depends on `--batch`.
 
 ## Run artifacts (`scripts/migrate/out/<run-id>/`)
 
