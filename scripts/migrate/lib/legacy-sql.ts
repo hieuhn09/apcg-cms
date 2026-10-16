@@ -181,6 +181,8 @@ function render(id: BuilderId, a: BuilderArgs): string {
         ? ` WHERE (${ord.join(", ")}) > (${ord.map((_, i) => (spec.hasCreatedAt && i === 0 ? `$${first + i}::timestamptz` : `$${first + i}`)).join(", ")})`
         : "";
       const limitParam = a.withCursor ? `$${first + n}` : `$${first}`;
+      // Amendment 5: the exact created_at as text (microseconds kept) so the next cursor is lossless.
+      if (spec.hasCreatedAt) cols.push(`${ord[0] as string}::text AS ${q(CURSOR_TS)}`);
       return `SELECT ${cols.join(", ")} FROM ${scoped(schema, t)}${cursor} ORDER BY ${ord.join(", ")} LIMIT ${limitParam}`;
     }
     case "sampleRows": {
@@ -271,12 +273,24 @@ export function siteAuthorsRows(schema: string, siteId: string, allow?: string[]
   return issue("siteAuthorsRows", { schema, allow }, [siteId]);
 }
 
-/** Cursor values for the last row of a keyset page. */
+/**
+ * Extra column every keysetPage on a created_at table returns: the ordering value
+ * `coalesce(created_at, epoch)` rendered by Postgres as text. node-postgres parses
+ * timestamptz into a JS Date (milliseconds), so a cursor built from the Date dropped
+ * the microseconds and the next page re-read the last row (Amendment 5: 73 duplicate
+ * reads on the real legacy DB). The text form round-trips exactly through `::timestamptz`.
+ * Readers strip it before yielding rows.
+ */
+export const CURSOR_TS = "__cursor_ts";
+
+/** Cursor values for the last row of a keyset page (lossless when the row carries CURSOR_TS). */
 export function cursorOf(table: string, row: Record<string, unknown>): unknown[] {
   const t = checkAllow(table, undefined);
   const spec: TableSpec = ALLOWED_TABLES[t];
   const vals = spec.keyColumns.map((k) => row[k]);
   if (!spec.hasCreatedAt) return vals;
+  const exact = row[CURSOR_TS];
+  if (typeof exact === "string" && exact) return [exact, ...vals];
   const c = row.created_at;
   const iso = c instanceof Date ? c.toISOString() : typeof c === "string" && c ? c : EPOCH;
   return [iso, ...vals];
