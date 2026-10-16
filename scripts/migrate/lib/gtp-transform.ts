@@ -199,13 +199,6 @@ export function publishedAtFor(publishedAt: unknown, createdAt: unknown): { iso:
   return { iso: isoOrNull(createdAt), fellBack: true };
 }
 
-export function resolveAuthor(byline: unknown, m: Pick<Mapping, "authors">): { name: string; fallback: boolean } {
-  const b = normaliseWs(str(byline));
-  const target = b ? m.authors.map[b] : undefined;
-  if (target) return { name: target, fallback: false };
-  return { name: m.authors.fallbackName, fallback: true };
-}
-
 /** The importer's OWN "Photo:" strip (shared stripCreditLabel only removes "credit:"). */
 export function stripPhotoLabel(credit: unknown): string {
   return str(credit).replace(/^photo\s*:\s*/i, "").trim();

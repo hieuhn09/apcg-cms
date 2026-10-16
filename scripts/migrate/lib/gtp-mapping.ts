@@ -27,11 +27,15 @@ export const OWNER_DECISION_KEYS = {
   "urls.articlePathTemplate": "OD-24",
   "urls.sectionPaths": "OD-24",
   "urls.extraLegacyPaths": "OD-24",
+  "urls.gonePaths": "OD-24",
   archivedAs: "OD-8",
   "formatTags.enabled": "OD-format-tags",
   pin: "OD-pin",
   "countries.match": "OD-countries",
 } as const;
+
+/** The 5 web authors (Amendment 3 pool, fixed order). */
+export const WEB_AUTHORS = ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada"] as const;
 
 export const OVERLAY_KEYS = ["source.siteFilter", "media.hostAllowlist", "media.hostRewrite"] as const;
 
@@ -47,6 +51,11 @@ export const MAPPING_MESSAGES = {
   pressRoomSub: "mapping: press-room targets never carry a sub-section (single-home).",
   author: (n: string) => `mapping: author target "${n}" is not in authors.staff.`,
   createMissing: "mapping: authors.createMissing must be false (the importer never creates authors).",
+  fallbackName: "mapping: authors.fallbackName is retired (Amendment 3); every item gets an author from authors.distribute.pool.",
+  newsroom: 'mapping: "GTP Newsroom" must not appear in authors (Amendment 3: no article is credited to the newsroom).',
+  gonePath: (p: string) => `mapping: urls.gonePaths entry "${p}" must start with "/".`,
+  goneOverlap: (p: string) => `mapping: "${p}" is listed in both urls.gonePaths and urls.extraLegacyPaths.`,
+  pool: "mapping: authors.distribute.pool must be non-empty, unique and a subset of authors.staff.",
 } as const;
 
 export class MappingError extends Error {
@@ -110,8 +119,17 @@ export const MappingSchema = z
       .object({
         resolve: z.enum(["byColumn", "byJoin", "fixed"]).default("byColumn"),
         map: z.record(z.string(), z.string()).default({}),
-        fallbackName: z.string().default("GTP Newsroom"),
-        staff: z.array(z.string()).default(["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada", "GTP Newsroom"]),
+        staff: z.array(z.string()).default([...WEB_AUTHORS]),
+        // Amendment 3: bylines are distributed evenly over the pool (not by pillar).
+        distribute: z
+          .object({
+            pool: z.array(z.string()).default([...WEB_AUTHORS]),
+            keepLegacy: z.boolean().default(false),
+            groupBy: z.enum(["country", "none"]).default("country"),
+            maxSpread: z.number().int().min(1).default(1),
+          })
+          .strict()
+          .prefault({}),
         createMissing: z.boolean().default(false),
       })
       .strict()
@@ -163,6 +181,8 @@ export const MappingSchema = z
         articlePathTemplate: z.string().default("/{section}/{slug}"),
         sectionPaths: z.record(z.string(), z.string()).default({}),
         extraLegacyPaths: z.array(z.string()).default([]),
+        // Amendment 4: old paths of sections dropped on the new site; each answers 410 Gone.
+        gonePaths: z.array(z.string()).default([]),
       })
       .strict()
       .prefault({}),
@@ -192,13 +212,13 @@ export const KEY_TABLE: readonly string[] = [
   "status.map", "status.unknown",
   "categories.map", "categories.fallback", "categories.unmapped",
   "routing.pressRelease", "routing.events",
-  "authors.resolve", "authors.map", "authors.fallbackName", "authors.staff", "authors.createMissing",
+  "authors.resolve", "authors.map", "authors.staff", "authors.distribute", "authors.createMissing",
   "tags.normalize", "tags.maxPerArticle", "tags.drop", "tags.renames",
   "formatTags.enabled", "formatTags.include",
   "countries.match", "readMin.wpm", "pin.fromFlags", "pin.maxPinned", "archivedAs",
   "events.enabled", "events.nearMatchThreshold", "events.inactive",
   "dates.fallback", "dates.timezone", "slug.preserve", "slug.dedupe", "slug.reservedSlugs", "flags.breaking",
-  "urls.oldOrigin", "urls.articlePathTemplate", "urls.sectionPaths", "urls.extraLegacyPaths",
+  "urls.oldOrigin", "urls.articlePathTemplate", "urls.sectionPaths", "urls.extraLegacyPaths", "urls.gonePaths",
   "media.hostAllowlist", "media.hostRewrite", "media.maxBytes", "media.failureBudgetPercent", "media.fetchTimeoutMs",
   "media.concurrency", "media.hotlinkPolicy",
   "redact",
@@ -284,6 +304,11 @@ export function validateMapping(structuralRaw: unknown, overlayRaw: unknown | un
   for (const key of OVERLAY_KEYS) if (getPath(s, key) !== undefined) throw new MappingError(MAPPING_MESSAGES.structuralHasOverlayKey);
   const overlay = overlayRaw === undefined ? undefined : parseOverlay(overlayRaw);
   const merged = overlay ? deepMerge(structuralRaw, overlay) : structuralRaw;
+  const rawAuthors = (merged as { authors?: Record<string, unknown> } | undefined)?.authors;
+  if (rawAuthors && typeof rawAuthors === "object") {
+    if ("fallbackName" in rawAuthors) throw new MappingError(MAPPING_MESSAGES.fallbackName);
+    if (JSON.stringify(rawAuthors).includes("GTP Newsroom")) throw new MappingError(MAPPING_MESSAGES.newsroom);
+  }
   const parsed = MappingSchema.safeParse(merged);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
@@ -300,8 +325,14 @@ export function validateMapping(structuralRaw: unknown, overlayRaw: unknown | un
     if (!pillars.has(t.pillar)) throw new MappingError(MAPPING_MESSAGES.pillar(t.pillar));
     if (t.pillar === "press-room" && t.subSection) throw new MappingError(MAPPING_MESSAGES.pressRoomSub);
   }
-  for (const target of [...Object.values(m.authors.map), m.authors.fallbackName]) {
+  for (const target of Object.values(m.authors.map)) {
     if (!m.authors.staff.includes(target)) throw new MappingError(MAPPING_MESSAGES.author(target));
+  }
+  const pool = m.authors.distribute.pool;
+  if (!pool.length || new Set(pool).size !== pool.length || pool.some((n) => !m.authors.staff.includes(n))) throw new MappingError(MAPPING_MESSAGES.pool);
+  for (const p of m.urls.gonePaths) {
+    if (!p.startsWith("/")) throw new MappingError(MAPPING_MESSAGES.gonePath(p));
+    if (m.urls.extraLegacyPaths.includes(p)) throw new MappingError(MAPPING_MESSAGES.goneOverlap(p));
   }
   const structuralOnly = opts.structuralOnly === true;
   if (!structuralOnly && (!m.source.siteFilter || !m.media.hostAllowlist?.length)) throw new MappingError(MAPPING_MESSAGES.overlayRequired);

@@ -9,11 +9,18 @@ const ROOT = repoRoot();
 const STRUCT = path.join(ROOT, "scripts/migrate/legacy-mapping.gtp-network.json");
 const OVERLAY = path.join(ROOT, "scripts/migrate/fixtures/gtp-legacy/overlay.fixture.json");
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+// The committed mapping is final (0 markers). Provisional-path checks use a clone carrying one marker.
+const provisionalVariant = (raw: unknown): Record<string, unknown> => {
+  const p = clone(raw) as Record<string, unknown>;
+  p._provisional = ["urls.articlePathTemplate"];
+  return p;
+};
 
 test("C2/G41: the committed structural mapping passes --structural-only and carries no site id or host", () => {
   const raw = readJson(STRUCT) as Record<string, unknown>;
   const r = validateMapping(raw, undefined, { structuralOnly: true });
-  assert.ok(r.provisional.length > 0);
+  assert.equal(r.provisional.length, 0);
+  assert.ok(validateMapping(provisionalVariant(raw), undefined, { structuralOnly: true }).provisional.length > 0);
   assert.equal(r.mapping.source.siteFilter, undefined);
   assert.equal(r.mapping.media.hostAllowlist, undefined);
   const text = JSON.stringify(raw);
@@ -39,7 +46,7 @@ test("C2/G41: merged fixture mapping deep-equals the structural one except the t
 });
 
 test("C2/G46: provisional passes with a printed list; --require-final exits with markers and passes without", () => {
-  const raw = readJson(STRUCT);
+  const raw = provisionalVariant(readJson(STRUCT));
   const ov = readJson(OVERLAY);
   const r = validateMapping(raw, ov);
   assert.match(formatProvisional(r.provisional), /urls\.articlePathTemplate .*OD-24/);
@@ -49,6 +56,11 @@ test("C2/G46: provisional passes with a printed list; --require-final exits with
   assert.equal(validateMapping(fin, ov, { requireFinal: true }).provisional.length, 0);
   delete fin._provisional;
   validateMapping(fin, ov, { requireFinal: true });
+});
+
+test("C2/G46: the committed structural mapping is final: --require-final passes with 0 markers", () => {
+  const r = validateMapping(readJson(STRUCT), readJson(OVERLAY), { requireFinal: true });
+  assert.equal(r.provisional.length, 0);
 });
 
 test("C2/G46: literal TODO fails; a foreign _provisional key fails; unknown keys fail", () => {
@@ -83,6 +95,25 @@ test("C2: pillar outside the 6, press-room sub-section, author outside staff, cr
   const d = clone(raw);
   (d.authors as Record<string, unknown>).createMissing = true;
   assert.throws(() => validateMapping(d, ov), { message: MAPPING_MESSAGES.createMissing });
+  // Amendment 3: no newsroom anywhere in authors; fallbackName retired; pool checked.
+  const e = clone(raw);
+  (e.authors as Record<string, unknown>).fallbackName = "Daniel Cheong";
+  assert.throws(() => validateMapping(e, ov), { message: MAPPING_MESSAGES.fallbackName });
+  const f = clone(raw);
+  (f.authors as { staff: string[] }).staff.push("GTP Newsroom");
+  assert.throws(() => validateMapping(f, ov), { message: MAPPING_MESSAGES.newsroom });
+  const g = clone(raw);
+  (g.authors as { map: Record<string, string> }).map["Simon Ng"] = "GTP Newsroom";
+  assert.throws(() => validateMapping(g, ov), { message: MAPPING_MESSAGES.newsroom });
+  for (const pool of [[], ["Daniel Cheong", "Daniel Cheong"], ["Daniel Cheong", "Simon Ng"]]) {
+    const h = clone(raw);
+    (h.authors as { distribute: { pool: string[] } }).distribute.pool = pool;
+    assert.throws(() => validateMapping(h, ov), { message: MAPPING_MESSAGES.pool });
+  }
+  const i = clone(raw);
+  (i.authors as { distribute: Record<string, unknown> }).distribute.groupBy = "pillar";
+  assert.throws(() => validateMapping(i, ov), /schema error at authors\.distribute\.groupBy/);
+  assert.equal(validateMapping(raw, ov).mapping.authors.distribute.maxSpread, 1);
 });
 
 test("C2/G47: zod schema keys equal the A12-N11 key table; overlay only three keys; non-local rewrite refused", () => {
@@ -102,4 +133,21 @@ test("C1/G45 (A13-R08): a foreign table in source.tableAllowList is a mapping va
   assert.throws(() => validateMapping(x, readJson(OVERLAY)), { message: SQL_MESSAGES.allowListForeign });
   (x.source as Record<string, unknown>).tableAllowList = [];
   assert.throws(() => validateMapping(x, readJson(OVERLAY)), { message: SQL_MESSAGES.allowListEmpty });
+});
+
+test("Amendment 4: urls.gonePaths accepted; a path in both lists or without a leading / is rejected; committed mapping drops /studio and /visa-tracker", () => {
+  const raw = readJson(STRUCT) as Record<string, Record<string, unknown>>;
+  const ov = readJson(OVERLAY);
+  const m = validateMapping(raw, ov).mapping;
+  assert.deepEqual(m.urls.gonePaths, ["/studio", "/visa-tracker"]);
+  for (const p of ["/studio", "/visa-tracker"]) assert.equal(m.urls.extraLegacyPaths.includes(p), false);
+  const both = clone(raw);
+  (both.urls as { extraLegacyPaths: string[] }).extraLegacyPaths.push("/studio");
+  assert.throws(() => validateMapping(both, ov), { message: MAPPING_MESSAGES.goneOverlap("/studio") });
+  const rel = clone(raw);
+  (rel.urls as { gonePaths: string[] }).gonePaths.push("studio");
+  assert.throws(() => validateMapping(rel, ov), { message: MAPPING_MESSAGES.gonePath("studio") });
+  const none = clone(raw);
+  delete (none.urls as Record<string, unknown>).gonePaths;
+  assert.deepEqual(validateMapping(none, ov).mapping.urls.gonePaths, []);
 });

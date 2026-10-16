@@ -11,7 +11,7 @@
  * (assertions, UNPROVEN list, measured facts) into the rehearsal out dir.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import pg from "pg";
 import { assertLocalDb } from "../../../lib/local-db-guard";
@@ -69,6 +69,15 @@ function tool(script: string, args: string[], env: Record<string, string> = {}):
 const T = (n: string) => `scripts/migrate/${n}`;
 const OV = ["--mapping-overlay", OVERLAY];
 const RH = [...OV, "--rehearsal", "--out", OUT];
+// The committed mapping is final; provisional-path checks run against a clone carrying one marker.
+const PROV_MAPPING = path.join(OUT, "legacy-mapping.provisional.json");
+function writeProvisionalMapping(): string {
+  const raw = JSON.parse(readFileSync(path.join(ROOT, T("legacy-mapping.gtp-network.json")), "utf8")) as Record<string, unknown>;
+  raw._provisional = ["urls.articlePathTemplate"];
+  mkdirSync(OUT, { recursive: true });
+  writeFileSync(PROV_MAPPING, JSON.stringify(raw, null, 2) + "\n", { mode: 0o600 });
+  return PROV_MAPPING;
+}
 const importArgs = (runId: string, extra: string[] = []) => [...RH, "--run-id", runId, ...extra];
 
 function helper(action: string, args: Record<string, unknown> = {}): Doc {
@@ -93,6 +102,7 @@ async function q<T = Doc>(url: string, text: string, params: unknown[] = []): Pr
   }
 }
 const MARKER_SQL = "SELECT count(*)::int AS n FROM articles a JOIN tenants t ON t.id = a.tenant_id WHERE t.slug = 'gtp' AND a.origin = 'import' AND a.engine_source_name = 'legacy:globaltravelpost'";
+const POOL = ["Daniel Cheong", "Priya Nair", "Marcus Tan", "Natalie Ong", "Yuki Hamada"];
 const markerCount = async () => Number((await q<{ n: number }>(CENTRAL, MARKER_SQL))[0]?.n);
 const centralCounts = async () =>
   (await q<Doc>(CENTRAL, "SELECT (SELECT count(*) FROM articles)::int AS articles, (SELECT count(*) FROM media)::int AS media, (SELECT count(*) FROM tags)::int AS tags, (SELECT count(*) FROM activity_log)::int AS activity"))[0] as Doc;
@@ -160,12 +170,15 @@ async function main(): Promise<number> {
 
   console.log("\n== step 5: validate-mapping");
   {
-    const s = tool(T("validate-gtp-mapping.ts"), ["--structural-only", "--mapping", T("legacy-mapping.gtp-network.json")]);
+    const prov = writeProvisionalMapping();
+    const s = tool(T("validate-gtp-mapping.ts"), ["--structural-only", "--mapping", prov]);
     const m = tool(T("validate-gtp-mapping.ts"), ["--mapping", T("legacy-mapping.gtp-network.json"), ...OV]);
-    const f = tool(T("validate-gtp-mapping.ts"), ["--mapping", T("legacy-mapping.gtp-network.json"), ...OV, "--require-final"]);
-    check("validate --structural-only exits 0 with PROVISIONAL list", s.code === 0 && /PROVISIONAL/.test(s.out));
+    const f = tool(T("validate-gtp-mapping.ts"), ["--mapping", prov, ...OV, "--require-final"]);
+    const ff = tool(T("validate-gtp-mapping.ts"), ["--mapping", T("legacy-mapping.gtp-network.json"), ...OV, "--require-final"]);
+    check("validate --structural-only exits 0 with PROVISIONAL list (provisional clone)", s.code === 0 && /PROVISIONAL/.test(s.out) && /urls\.articlePathTemplate/.test(s.out));
     check("validate merged fixture mapping exits 0", m.code === 0);
-    check("validate --require-final exits 2 while markers remain", f.code === 2);
+    check("validate --require-final exits 2 while markers remain (provisional clone)", f.code === 2);
+    check("validate --require-final on the committed mapping exits 0 with an empty PROVISIONAL list", ff.code === 0 && /PROVISIONAL: none/.test(ff.out) && !/urls\.articlePathTemplate/.test(ff.out), ff.out.slice(-300));
   }
 
   console.log("\n== step 6 / G30 / G7: default dry run writes nothing");
@@ -211,7 +224,27 @@ async function main(): Promise<number> {
        (SELECT count(*) FROM articles_briefs b WHERE b._parent_id = a.id AND (coalesce(b.label,'') = '' OR coalesce(b.value,'') = '' OR coalesce(b.source,'') = ''))::int AS bad
        FROM articles a JOIN articles_locales l ON l._parent_id = a.id AND l._locale = 'en' JOIN tenants t ON t.id = a.tenant_id LEFT JOIN authors au ON au.id = a.author_id
        WHERE t.slug = 'gtp' AND a.id = ANY($1::int[])`, [slugMap("rehearsal").filter((e) => e.kind === "event").map((e) => Number(e.articleId))]).catch((e): Doc[] => [{ error: String((e as Error).message) }]);
-    check("6b events: briefs 1..4 rows, non-empty label/value/source, author GTP Newsroom, unique slugs", evRows.length === 12 && evRows.every((r) => Number(r.briefs) >= 1 && Number(r.briefs) <= 4 && Number(r.bad) === 0 && r.author === "GTP Newsroom") && new Set(evRows.map((r) => r.slug)).size === 12, evRows.slice(0, 3));
+    check("6b events: briefs 1..4 rows, non-empty label/value/source, author from the 5-author pool, unique slugs", evRows.length === 12 && evRows.every((r) => Number(r.briefs) >= 1 && Number(r.briefs) <= 4 && Number(r.bad) === 0 && POOL.includes(String(r.author))) && new Set(evRows.map((r) => r.slug)).size === 12, evRows.slice(0, 3));
+    // Amendment 3: bylines spread evenly over the 5 web authors, never by pillar, never the newsroom.
+    const byAuthor = await q<{ author: string | null; pillar: string; n: number }>(CENTRAL, `SELECT au.name AS author, p.slug AS pillar, count(*)::int AS n FROM articles a JOIN tenants t ON t.id = a.tenant_id
+       LEFT JOIN authors au ON au.id = a.author_id LEFT JOIN pillars p ON p.id = a.pillar_id
+       WHERE t.slug = 'gtp' AND a.origin = 'import' AND a.engine_source_name = 'legacy:globaltravelpost' GROUP BY 1, 2`).catch((e): { author: string | null; pillar: string; n: number }[] => [{ author: `error ${String((e as Error).message)}`, pillar: "?", n: 0 }]);
+    const totals: Record<string, number> = Object.fromEntries(POOL.map((n) => [n, 0]));
+    const pillarAuthors = new Map<string, Set<string>>();
+    const pillarCount = new Map<string, number>();
+    for (const r of byAuthor) {
+      totals[String(r.author)] = (totals[String(r.author)] ?? 0) + Number(r.n);
+      (pillarAuthors.get(r.pillar) ?? pillarAuthors.set(r.pillar, new Set()).get(r.pillar) as Set<string>).add(String(r.author));
+      pillarCount.set(r.pillar, (pillarCount.get(r.pillar) ?? 0) + Number(r.n));
+    }
+    facts.A3_authorTotals = totals;
+    check("A3: zero imported articles authored by GTP Newsroom (and none without an author)", !("GTP Newsroom" in totals) && !("null" in totals) && Object.keys(totals).every((n) => POOL.includes(n)), totals);
+    const tv = POOL.map((n) => totals[n] as number);
+    check("A3: per-author spread <= 1 over all imported articles + events", Math.max(...tv) - Math.min(...tv) <= 1, totals);
+    const thin = [...pillarCount.entries()].filter(([p, c]) => c >= 2 && (pillarAuthors.get(p)?.size ?? 0) < 2).map(([p]) => p);
+    check("A3: every pillar with >= 2 imported articles has >= 2 distinct authors", thin.length === 0, { thin, pillars: Object.fromEntries([...pillarAuthors].map(([p, s2]) => [p, [...s2]])) });
+    const rr = (report("rehearsal") as Doc).authors as { planSpread: number; planTotals: Record<string, number> } | undefined;
+    check("A3: import report carries plan totals with spread <= 1", Boolean(rr) && Number(rr?.planSpread) <= 1 && Object.keys(rr?.planTotals ?? {}).length === 5, rr);
     sliceA = new Map(slugMap("rehearsal").map((e) => [e.legacyId, e.slug]));
     // G13 / S-20: escaped text stays text.
     for (const xid of expected.xssLegacyIds) {
@@ -362,8 +395,8 @@ async function main(): Promise<number> {
     check("G31 pass 2 re-recorded the rollback baseline", fl !== undefined && fr !== undefined && new Date(fl.baselineUpdatedAt).toISOString() === new Date(fr.updated_at as string | Date).toISOString() && Number(fl.baselineVersion) === Number(fr.version));
 
     const sitemap = path.join(OUT, "sitemap-urls.txt");
-    const urls = slugMap("rehearsal").filter((e) => e.oldUrl && e.status === "published").map((e) => `https://www.globaltravelpost.com${e.oldUrl}`);
-    urls.push("https://www.globaltravelpost.com/never-existed", "https://www.globaltravelpost.com/NEWS/");
+    const urls = slugMap("rehearsal").filter((e) => e.oldUrl && e.status === "published").map((e) => `https://globaltravelpost.com${e.oldUrl}`);
+    urls.push("https://globaltravelpost.com/never-existed", "https://globaltravelpost.com/NEWS/");
     (await import("node:fs")).writeFileSync(sitemap, urls.join("\n") + "\n", { mode: 0o600 });
     const emit = path.join(OUT, "gtp-web");
     const rr = tool(T("build-gtp-redirects.ts"), ["--run-id", "rehearsal", ...RH, "--known-routes", KNOWN, "--emit-gtp-web", emit, "--sitemap-urls", sitemap]);
@@ -371,12 +404,17 @@ async function main(): Promise<number> {
     const map = JSON.parse(readFileSync(path.join(emit, "redirect-map.json"), "utf8")) as Record<string, unknown>;
     const rules = JSON.parse(readFileSync(path.join(emit, "redirect-rules.json"), "utf8")) as unknown[];
     const kr = JSON.parse(readFileSync(KNOWN, "utf8")) as KnownRoutes;
+    check("Amendment 4: gtp-web redirect map answers 410 for /studio and /visa-tracker", JSON.stringify(map["/studio"]) === '{"status":410}' && JSON.stringify(map["/visa-tracker"]) === '{"status":410}', { studio: map["/studio"], visa: map["/visa-tracker"] });
     check("G35 emitted files pass validateGtpWebRedirectFiles", validateGtpWebRedirectFiles(map, rules, kr).length === 0, validateGtpWebRedirectFiles(map, rules, kr).slice(0, 5));
-    const rehomed = slugMap("rehearsal").find((e) => e.rehomed && e.status === "published");
-    check("G35 re-homed published row: from = ORIGINAL old URL", !rehomed || map[normaliseKey(rehomed.oldUrl ?? "") ?? ""] === `/article/${rehomed.slug}`, rehomed?.oldUrl);
+    // With the /article/{slug} template a row whose old URL equals its new URL gets no (identity) redirect.
+    const rehomedAll = slugMap("rehearsal").filter((e) => e.rehomed && e.status === "published");
+    const rehomed = rehomedAll.find((e) => normaliseKey(e.oldUrl ?? "") !== `/article/${e.slug}`) ?? rehomedAll[0];
+    const rhKey = rehomed ? normaliseKey(rehomed.oldUrl ?? "") ?? "" : "";
+    const rhIdentity = rhKey === `/article/${rehomed?.slug}`;
+    check("G35 re-homed published row: from = ORIGINAL old URL (identity redirect dropped)", !rehomed || (rhIdentity ? map[rhKey] === undefined || map[rhKey] === `/article/${rehomed.slug}` : map[rhKey] === `/article/${rehomed.slug}`), rehomed?.oldUrl);
     const arch = slugMap("rehearsal").find((e) => e.status === "archived" && e.oldUrl);
     check("G35 archived row -> section page of its NEW location", !arch || map[normaliseKey(arch.oldUrl ?? "") ?? ""] === (arch.subSection ? `/${arch.pillar}/${arch.subSection}` : `/${arch.pillar}`), arch);
-    check("G35 redirects with no --rehearsal and provisional values exits 2", tool(T("build-gtp-redirects.ts"), ["--run-id", "rehearsal", ...OV, "--out", OUT, "--known-routes", KNOWN]).code === 2);
+    check("G35 redirects with no --rehearsal and provisional values exits 2", tool(T("build-gtp-redirects.ts"), ["--run-id", "rehearsal", "--mapping", writeProvisionalMapping(), ...OV, "--out", OUT, "--known-routes", KNOWN]).code === 2);
     const cov = readFileSync(path.join(runDir("rehearsal"), "redirect-coverage.md"), "utf8");
     check("coverage reported for the supplied URL list", /supplied URL list: \d+ URLs, matched \d+/.test(cov));
     facts.redirects = { mapEntries: Object.keys(map).length, patterns: rules.length, coverage: (/supplied URL list: .*$/m.exec(cov) ?? [""])[0] };
