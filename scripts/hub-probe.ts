@@ -19,6 +19,17 @@
  * filter shows up as a number mismatch rather than a plausible-looking list.
  *
  * NEVER point this at a deployed database. It writes fixtures.
+ *
+ * Flags by phase: --setup/--check/--paging = CMS-1; --setup2/--check2 = CMS-2;
+ * --setup3/--check3 = CMS-3; --setup4/--check4 = CMS-4; --check5 = CMS-4b;
+ * --setup6/--check6 = P5.1; --setup7/--check7 = P5.2; --setup8/--check8 = P5.3
+ * (images: POST /api/hub/media; see the --check8 section near the end);
+ * --setup9/--check9 = P5.4 (live edit: PATCH /api/hub/articles/{id}/live; see the
+ * --check9 section at the end).
+ * --setup10/--check10 = P5.6 (preview mint: POST /api/hub/articles/{id}/preview; see the
+ * --check10 section right before the dispatch).
+ * --check11 = P5.6 (pen name / tag create: POST /api/hub/authors, POST /api/hub/tags; see the
+ * --check11 section right before the dispatch; f10 from a chặng-2 --setup10).
  */
 
 import "./lib/env";
@@ -5602,9 +5613,13 @@ async function check6() {
       const plain = await getA(art.id);
       const xyz = await getA(art.id, "&view=xyz");
       const edit = await getA(art.id, "&view=edit");
-      expect(`T ${k}: no view ⇒ no edit key, view=xyz byte-identical to no view; view=edit ⇒ edit has only {editable,editableReason}, article from MAIN`, [
+      // P5.4 D6 (b): the published fixture (manual, published, lastEngine null) now carries a `live` block whose
+      // `editable` is false; its reason depends on the server env (feature_disabled or not_hub_authored) ⇒ not pinned.
+      const liveBlock = (edit.body.edit as Doc | undefined)?.live as Doc | undefined;
+      expect(`T ${k}: no view ⇒ no edit key, view=xyz byte-identical to no view; view=edit ⇒ edit has only {editable,editableReason}${k === "published" ? " + live (editable false)" : ""}, article from MAIN`, [
         "edit" in plain.body, plain.text === xyz.text, Object.keys((edit.body.edit as Doc | undefined) ?? {}).sort(), JSON.stringify(edit.body.article) === JSON.stringify(plain.body.article),
-      ], [false, true, ["editable", "editableReason"], true]);
+        k === "published" ? liveBlock?.editable : null,
+      ], [false, true, k === "published" ? ["editable", "editableReason", "live"] : ["editable", "editableReason"], true, k === "published" ? false : null]);
     }
     const rel = await getA(s6.articles.manualDraftRelationBody.id, "&view=edit");
     expect("T relationship body ⇒ editable true, bodyEditable false", [(rel.body.edit as Doc | undefined)?.editable, (rel.body.edit as Doc | undefined)?.bodyEditable], [true, false]);
@@ -8932,6 +8947,12 @@ async function check7UnitB(expect: Expect7): Promise<void> {
     expect("K10-U2: latest scheduled but NOT hub-authored (CMS-admin schedule) ⇒ edit {editable false, editableReason status} only, latest NOT returned", await load(mk(sched, { hubAuthor: false })), [{ editable: false, editableReason: "status" }, null]);
     expect("K10-U3: hub-authored scheduled article stored WITHOUT an hour ⇒ scheduledFor null", await load(mk({ ...sched, scheduledFor: null })), [{ editable: false, editableReason: "scheduled", scheduledFor: null, version: 4 }, "Latest title"]);
     expect("K10-U4: main row published ⇒ status, latest never used", await load(mk(sched, { main: { workflowStatus: "published" } })), [{ editable: false, editableReason: "status" }, null]);
+    // P5.4 D6 (a): the same row WITH tenantSlug + an explicit live list ⇒ the `live` block (independent of the probe's env).
+    {
+      const s = mk(sched, { main: { workflowStatus: "published" } });
+      const r = await sel.loadHubArticleEdit({ payload: s.payload as never, mainDoc: s.articles.get(5)!.main, tenantId: 1, tenantSlug: "gcv", liveTenants: ["gcv"] } as never);
+      expect("K10-U4b (P5.4 D6 a): main row published + tenantSlug gcv + liveTenants [gcv] ⇒ status + live {editable false, reason scheduled, version}, latest never used", [r.edit, r.latest ? (r.latest as Doc).title : null], [{ editable: false, editableReason: "status", live: { editable: false, reason: "scheduled", version: 3 } }, null]);
+    }
     expect("K10-U5: HUB_ARTICLE_EDIT_SELECT selects scheduledFor (and still version / lastEngine)", [(sel.HUB_ARTICLE_EDIT_SELECT as Doc).scheduledFor ?? null, (sel.HUB_ARTICLE_EDIT_SELECT as Doc).version ?? null, (sel.HUB_ARTICLE_EDIT_SELECT as Doc).lastEngine ?? null], [true, true, true]);
   }
 }
@@ -9673,6 +9694,2644 @@ async function check7Hooks(e: { expect: Expect7; payload: P; s6: Setup6; f7: Set
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// APCGHub P5.3 (--setup8 / --check8) — images: `POST /api/hub/media?tenant=`
+// (+ later: hero / view=edit / body tokens). LOCAL DISPOSABLE POSTGRES + LOCAL
+// SERVER ONLY: `guard8` (assertLocalTargets + assertLocalDb) runs FIRST in every
+// mode, `--unit-only` included, before any DB / HTTP call (exit 2, "refusing").
+//
+//   npx tsx scripts/hub-probe.ts --setup8 --in <f6> --out <f8>
+//       reuses the --setup6 engines; adds a public read token per granted tenant
+//       (label probe8, sha256 stored, raw only in <f8>.public-<slug>.token, 0600).
+//   npx tsx scripts/hub-probe.ts --check8 --unit-only
+//   npx tsx scripts/hub-probe.ts --check8 --in <f8> [--only U,C,P3,…]
+//       C  = the media route over real HTTP (HUB_PROBE_BASE, default :3000 —
+//            export HUB_PROBE_BASE=http://localhost:3508)
+//       P3 = createTenantMedia through the route: sizes, prefix, re-encode (EXIF
+//            gone, alpha kept, mime kept), progressive 10-scan JPEG passes,
+//            JPEG with 65 SOS markers refused fast
+// Groups are added step by step (plan E11): only the groups that exist run.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface Setup8 {
+  version: 1;
+  setup6: string;
+  publicReadTokenFile: Record<string, string>;
+}
+
+const P8_ACTOR = { role: "editor", id: "hub-user-8" } as const;
+const P8_HUMAN = { email: "p8@example.invalid", role: "editor", id: "hub-user-8" } as const;
+
+/**
+ * Review M2: the probe and the fixture must never reach the real R2 bucket.
+ * `payload.config.ts` turns on storage-s3 when the R2_* credentials are set (and
+ * `scripts/lib/env.ts` may load them from `.env.local`), so any non-empty R2_*
+ * variable is refused — exit 2, "refusing" — before Payload is built.
+ */
+const R2_ENV_NAMES = ["R2_BUCKET", "R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_PUBLIC_BASE_URL"] as const;
+
+function assertNoR2(tag: string): void {
+  const set = R2_ENV_NAMES.filter((n) => (process.env[n] ?? "").trim() !== "");
+  if (set.length > 0) {
+    console.error(`[${tag}] refusing: R2 storage env must be unset for a local probe (set: ${set.join(", ")})`);
+    process.exit(2);
+  }
+}
+
+function guard8(): void {
+  assertLocalTargets();
+  assertNoR2("probe8");
+  try {
+    assertLocalDb(process.env.DATABASE_URL);
+  } catch (e) {
+    refuseLocalDb6(e);
+  }
+}
+
+async function setup8() {
+  guard8();
+  const inFile = arg("in");
+  const out = arg("out");
+  if (!inFile || !out) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup8 --in <file from --setup6> --out <f8>");
+    process.exit(2);
+  }
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const payload = await getPayload({ config });
+  const files: Record<string, string> = {};
+  for (const slug of SETUP6_TENANTS) {
+    const id = s6.tenants[slug]!.id;
+    const tok = randomBytes(24).toString("hex");
+    const tDoc = (await payload.findByID({ collection: "tenants", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const prev = ((tDoc.readTokens as Doc[] | undefined) ?? []).filter((r) => r.label !== "probe8");
+    await payload.update({
+      collection: "tenants",
+      id,
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { readTokens: [...prev, { label: "probe8", tokenHash: sha256Hex6(tok), tokenPrefix: tok.slice(0, 6), status: "active" }] } as never,
+    });
+    const f = `${out}.public-${slug}.token`;
+    writeFileSync(f, tok, { mode: 0o600 });
+    files[slug] = f;
+  }
+  const f8: Setup8 = { version: 1, setup6: inFile, publicReadTokenFile: files };
+  writeFileSync(out, JSON.stringify(f8, null, 2), { mode: 0o600 });
+  console.log(`[setup8] wrote ${out} (reuses the --setup6 engines; one public read token per tenant in 0600 files, not printed)`);
+  process.exit(0);
+}
+
+// ── image fixtures (built at run time; nothing written to the repo) ──────────
+
+const u16be8 = (n: number) => Buffer.from([(n >> 8) & 0xff, n & 0xff]);
+const u32be8 = (n: number) => {
+  const b = Buffer.alloc(4);
+  b.writeUInt32BE(n >>> 0);
+  return b;
+};
+const pngChunk8 = (type: string, data: Buffer) => Buffer.concat([u32be8(data.length), Buffer.from(type, "latin1"), data, Buffer.alloc(4)]);
+const PNG_SIG8 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+function pngHeader8(w: number, h: number, cgbi = false): Buffer {
+  return Buffer.concat([
+    PNG_SIG8,
+    ...(cgbi ? [pngChunk8("CgBI", Buffer.from([0x50, 0, 0x20, 6]))] : []),
+    pngChunk8("IHDR", Buffer.concat([u32be8(w), u32be8(h), Buffer.from([8, 6, 0, 0, 0])])),
+    pngChunk8("IEND", Buffer.alloc(0)),
+  ]);
+}
+const jseg8 = (m: number, p: Buffer) => Buffer.concat([Buffer.from([0xff, m]), u16be8(p.length + 2), p]);
+const jsof8 = (w: number, h: number) => jseg8(0xc0, Buffer.concat([Buffer.from([8]), u16be8(h), u16be8(w), Buffer.from([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1])]));
+function jpegThumbBig8(): Buffer {
+  const thumb = Buffer.concat([Buffer.from([0xff, 0xd8]), jsof8(160, 120), Buffer.from([0xff, 0xd9])]);
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    jseg8(0xe1, Buffer.concat([Buffer.from("Exif\0\0", "latin1"), thumb])),
+    jsof8(5000, 5000),
+    jseg8(0xda, Buffer.from([3, 1, 0, 2, 0x11, 3, 0x11, 0, 0x3f, 0])),
+    Buffer.from([0x12, 0x34, 0xff, 0xd9]),
+  ]);
+}
+const jpegBadLen8 = (len: number) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), u16be8(len), Buffer.alloc(256, 0x41)]);
+
+type Sharp8 = typeof import("sharp");
+async function loadSharp8(): Promise<Sharp8> {
+  return ((await import("sharp")) as unknown as { default: Sharp8 }).default;
+}
+
+/** A multipart body exactly as the hub sends it (standard FormData, runtime boundary). */
+async function multipart8(parts: [string, string | { data: Buffer; type: string; name?: string }][]): Promise<{ body: Buffer; type: string }> {
+  const fd = new FormData();
+  for (const [k, v] of parts) {
+    if (typeof v === "string") fd.append(k, v);
+    else fd.append(k, new Blob([new Uint8Array(v.data)], { type: v.type }), v.name ?? "upload.bin");
+  }
+  const r = new Response(fd);
+  return { body: Buffer.from(await r.arrayBuffer()), type: r.headers.get("content-type") ?? "" };
+}
+
+// ── --check8 unit group (no DB, no server) ───────────────────────────────────
+
+async function check8Unit(expect: (label: string, actual: unknown, wanted: unknown) => void): Promise<void> {
+  const v = await import("../src/lib/hub-media-validate");
+  expect("U-1: the frozen media error table has 12 rows (401/403 auth = one row)", v.HUB_MEDIA_ERROR_TABLE.length, 12);
+  expect("U-2: byte limits", [v.HUB_MEDIA_LIMITS.fileBytes, v.HUB_MEDIA_LIMITS.requestBytes, v.HUB_MEDIA_LIMITS.maxEdge, v.HUB_MEDIA_LIMITS.maxPixels, v.HUB_MEDIA_LIMITS.maxJpegScans], [4_000_000, 4_065_536, 4096, 16_800_000, 64]);
+  expect("U-3: closed multipart field set", [...v.HUB_MEDIA_FORM_FIELDS], ["file", "alt", "credit", "articleId", "actorRole", "actorId"]);
+  expect("U-4: header readers on hand-built headers (PNG 4096×4096 ok, CgBI unreadable, JPEG thumb 160×120 + SOF 5000×5000)", [
+    v.readImageSize(pngHeader8(4096, 4096), "image/png"),
+    v.readImageSize(pngHeader8(10, 10, true), "image/png"),
+    v.readImageSize(jpegThumbBig8(), "image/jpeg"),
+    v.readImageSize(jpegBadLen8(0), "image/jpeg"),
+    v.readImageSize(jpegBadLen8(1), "image/jpeg"),
+  ], [{ ok: true, width: 4096, height: 4096 }, { ok: false }, { ok: true, width: 5000, height: 5000 }, { ok: false }, { ok: false }]);
+  const h = await import("../src/lib/hub-author-handlers");
+  expect("U-5: the editable-article helper is exported (shared by PATCH and the media route)", typeof h.loadHubEditableArticle, "function");
+
+  // ── 1.7 (T5 / E8): hero id + lead caption parsing (pure) ──
+  const inp = await import("../src/lib/hub-author-input");
+  const lim = await import("../src/lib/hub-author-limits");
+  const refs = await import("../src/lib/hub-author-refs");
+  expect("U-6: heroImageId / leadImageCaption are draft field keys; CMS-only limits 500 / 30 live in hub-author-refs (not HUB_AUTHOR_LIMITS)", [
+    (inp.HUB_DRAFT_FIELD_KEYS as readonly string[]).slice(-2), refs.MEDIA_LEAD_CAPTION_MAX, refs.MEDIA_BODY_MAX,
+    "leadImageCaption" in lim.HUB_AUTHOR_LIMITS,
+  ], [["heroImageId", "leadImageCaption"], 500, 30, false]);
+  const mid = (v: unknown) => { const r = inp.checkMediaId(v); return r.ok ? r.value : r.code; };
+  expect("U-7: (E8) checkMediaId: 1 / int4 max ok; 2147483648, 2^53+2, Infinity (1e400) ⇒ out_of_range; 0, -1, 1.5, NaN, \"5\", null-less types ⇒ type", [
+    mid(1), mid(2147483647), mid(2147483648), mid(9007199254740994), mid(JSON.parse("1e400")), mid(0), mid(-1), mid(1.5), mid(NaN), mid("5"), mid(true), mid(-Infinity),
+  ], [1, 2147483647, "out_of_range", "out_of_range", "out_of_range", "type", "type", "type", "type", "type", "type", "type"]);
+  const cr = (extra: Record<string, unknown>) => {
+    const r = inp.parseCreateBody({ tenant: "gcv", title: "T", actor: { email: "a@b.c", role: "editor" }, ...extra });
+    return r.ok ? { heroImageId: r.value.heroImageId, leadImageCaption: r.value.leadImageCaption } : [r.status, (r.body as Doc).fields ?? (r.body as Doc).reason];
+  };
+  expect("U-8: parse: hero null / id kept; caption trimmed, \"\" ⇒ null, 501 ⇒ too_long, C0 ⇒ c0, bidi ⇒ bidi, number ⇒ type; heroImageId 0 ⇒ type", [
+    cr({ heroImageId: null, leadImageCaption: "  cap  " }), cr({ heroImageId: 7, leadImageCaption: "" }), cr({ leadImageCaption: "x".repeat(501) }),
+    cr({ leadImageCaption: "a\u0001b" }), cr({ leadImageCaption: "a\u202eb" }), cr({ leadImageCaption: 5 }), cr({ heroImageId: 0 }), cr({ heroImageId: "7" }),
+  ], [
+    { heroImageId: null, leadImageCaption: "cap" }, { heroImageId: 7, leadImageCaption: null }, [422, { leadImageCaption: "too_long" }],
+    [422, { leadImageCaption: "c0" }], [422, { leadImageCaption: "bidi" }], [422, { leadImageCaption: "type" }], [422, { heroImageId: "type" }], [422, { heroImageId: "type" }],
+  ]);
+  expect("U-9: HUB_FIELD_CODES still 23 (no code added by P5.3)", lim.HUB_FIELD_CODES.length, 23);
+
+  // ── 1.8 (T9): the view=edit media block (pure) ──
+  const sel = await import("../src/lib/hub-article-edit-select");
+  const md = (id: number, tenant: unknown, extra: Doc = {}) => ({ id, tenant, url: `/api/media/file/m${id}.png`, alt: `alt ${id}`, width: 10, height: 20, credit: "c", filename: "SECRET", ...extra });
+  const up = (value: unknown, relationTo = "media") => ({ type: "upload", relationTo, value, version: 3, format: "", fields: null });
+  const doc = (kids: unknown[], extra: Doc = {}) => ({ body: { root: { type: "root", children: kids } }, ...extra });
+  expect("U-10: media block: hero of this tenant {id,url,alt,width,height,credit}; other tenant ⇒ null; caption \"\" ⇒ null; body ids distinct in tree order, other tenant / unpopulated / non-media dropped, keys {id,url,alt,width,height}", [
+    sel.hubEditMediaBlock(doc([], { heroImage: md(1, { id: 7 }), leadImageCaption: "" }), 7),
+    sel.hubEditMediaBlock(doc([], { heroImage: md(1, 8), leadImageCaption: "Cap" }), 7).hero,
+    sel.hubEditMediaBlock(doc([up(md(3, 7)), { type: "paragraph", children: [up(md(4, { id: 7 }))] }, up(md(3, 7)), up(md(5, 9)), up(6), up(md(8, 7), "videoMedia"), up(null)]), 7).bodyMedia.map((m) => [m.id, Object.keys(m)]),
+  ], [
+    { hero: { id: 1, url: "/api/media/file/m1.png", alt: "alt 1", width: 10, height: 20, credit: "c" }, leadImageCaption: null, bodyMedia: [], tooMany: false },
+    null,
+    [[3, ["id", "url", "alt", "width", "height"]], [4, ["id", "url", "alt", "width", "height"]]],
+  ]);
+  const many = (n: number) => doc(Array.from({ length: n }, (_, i) => up(md(100 + i, 7))));
+  expect("U-11: 30 distinct body ids ⇒ listed; 31 ⇒ tooMany (body locked, list empty, nothing cut); duplicates count once", [
+    sel.hubEditMediaBlock(many(30), 7).bodyMedia.length, sel.hubEditMediaBlock(many(30), 7).tooMany,
+    sel.hubEditMediaBlock(many(31), 7).tooMany, sel.hubEditMediaBlock(many(31), 7).bodyMedia.length,
+    sel.hubEditMediaBlock(doc([...many(30).body.root.children, up(md(100, 7))]), 7).tooMany,
+  ], [30, false, true, 0, false]);
+  expect("U-12: HUB_ARTICLE_EDIT_SELECT adds leadImageCaption (heroImage from the detail select)", [(sel.HUB_ARTICLE_EDIT_SELECT as Doc).leadImageCaption, (sel.HUB_ARTICLE_EDIT_SELECT as Doc).heroImage], [true, true]);
+  const mdm = await import("../src/lib/hub-article-markdown");
+  const conv = () => "DEFAULT EXPORT";
+  const lexV = { root: { type: "root", children: [up(5, "videoMedia")] } };
+  expect("U-13: mediaTokens export throws (upload not media) ⇒ fallback to the default export, REPORTED as tokenFallback (review M2), bodyState ok, no error; without the flag the default converter is used", [
+    await mdm.hubArticleBodyToMarkdown(lexV, { loadEditorConfig: async () => ({}) as never, convert: conv, mediaTokens: true }),
+    await mdm.hubArticleBodyToMarkdown(lexV, { loadEditorConfig: async () => ({}) as never, convert: conv }),
+  ], [{ bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok", tokenFallback: true, tokenFallbackName: "Error" }, { bodyMarkdown: "DEFAULT EXPORT", bodyState: "ok" }]);
+  {
+    // Review-3 M2: the fence trackers are linear (old `(.*)$` tail: 200,000 backticks + \r = 20 s).
+    const tm = await import("../src/lib/hub-author-media-token");
+    const times: Record<string, number> = {};
+    for (const [n, t] of [["bt+CR", "`"], ["bt+LS", "`"], ["til+PS", "~"]] as const) {
+      const tail = n.endsWith("CR") ? "\r" : n.endsWith("LS") ? "\u2028" : "\u2029";
+      const t0 = performance.now();
+      tm.findMediaTokenLines(`${t.repeat(100_000)}${tail}x\n\n![](cms-media:5)`);
+      times[n] = performance.now() - t0;
+    }
+    console.log(`OBS   U-17 timings (ms): ${JSON.stringify(times)}`);
+    expect("U-17: (review-3 M2) 100,000 backticks/tildes + \\r / U+2028 / U+2029 on one line: fence tracker < 200 ms each", Object.values(times).every((ms) => ms < 200), true);
+  }
+  expect("U-14: a body of ONLY one upload node is not empty", mdm.isEmptyBody({ root: { type: "root", children: [up(5)] } }), false);
+  // Review M2 (CMS-2): the invariant "bodyEditable:true ⇒ the token export did not fall back".
+  const yes = { editable: true, editableReason: "ok", bodyEditable: true, version: 3 } as unknown as Parameters<typeof sel.applyBodyTokenFallback>[0];
+  expect("U-15: (review M2) applyBodyTokenFallback: fallback ⇒ bodyEditable false (other keys kept); no fallback ⇒ same object; not-editable edit untouched", [
+    sel.applyBodyTokenFallback(yes, true), sel.applyBodyTokenFallback(yes, false) === yes,
+    sel.applyBodyTokenFallback({ editable: false, editableReason: "status" }, true),
+  ], [{ editable: true, editableReason: "ok", bodyEditable: false, version: 3 }, true, { editable: false, editableReason: "status" }]);
+  expect("U-16: (review NIT 5) mapWriteError: ValidationError path heroImage ⇒ key heroImageId (other paths unchanged)",
+    h.mapWriteError({ name: "ValidationError", data: { errors: [{ path: "heroImage" }, { path: "title" }] } }),
+    { kind: "invalid", status: 422, fields: { heroImageId: "invalid", title: "invalid" } });
+}
+
+// ── --check8 ─────────────────────────────────────────────────────────────────
+
+async function check8() {
+  guard8();
+  const { state, expect } = makeExpect();
+  const only = (arg("only") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const want = (g: string) => only.length === 0 || only.includes(g);
+  if (flag("unit-only")) {
+    await check8Unit(expect);
+    console.log(`\n[check8] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup8 --in <f6> --out <f8> | --check8 --in <f8> [--only U,C,P3] | --check8 --unit-only");
+    process.exit(2);
+  }
+  if (want("U")) await check8Unit(expect);
+  const f8 = JSON.parse(readFileSync(inFile, "utf8")) as Setup8;
+  const s6 = JSON.parse(readFileSync(f8.setup6, "utf8")) as Setup6;
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const author = tok(s6.engines.author.tokenFile);
+  const noauthor = tok(s6.engines.noauthor.tokenFile);
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const rows = async (q: unknown) => ((await db.execute(q)) as { rows?: Doc[] }).rows ?? [];
+  const sharp = await loadSharp8();
+  const run = runId6();
+  let seq = 0;
+
+  type Reply = { status: number; body: Doc; text: string; ms: number };
+  const send = async (path: string, init: { method: string; headers?: Record<string, string>; body?: BodyInit; duplex?: "half" }, token: string | null = author): Promise<Reply> => {
+    const t0 = performance.now();
+    const res = await fetch(`${BASE}${path}`, {
+      ...init,
+      headers: { ...(init.headers ?? {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      signal: AbortSignal.timeout(60_000),
+    } as RequestInit);
+    const text = await res.text();
+    let body: Doc = {};
+    try {
+      body = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, body, text, ms: Math.round(performance.now() - t0) };
+  };
+  const upload = async (
+    tenant: string | null,
+    parts: [string, string | { data: Buffer; type: string; name?: string }][],
+    o: { token?: string | null } = {},
+  ): Promise<Reply> => {
+    const mp = await multipart8(parts);
+    const q = tenant === null ? "" : `?tenant=${encodeURIComponent(tenant)}`;
+    return send(`/api/hub/media${q}`, { method: "POST", headers: { "content-type": mp.type, "content-length": String(mp.body.length) }, body: new Uint8Array(mp.body) }, o.token === undefined ? author : o.token);
+  };
+  const mkDraft = async (tenant: string) => {
+    const slug = `p8-${run}-${seq++}`;
+    const r = await send("/api/hub/articles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant, title: `P8 ${slug}`, slug, actor: P8_HUMAN }) });
+    if (r.status !== 201) throw new Error(`mkDraft ${tenant} ⇒ ${r.status} ${r.text.slice(0, 200)}`);
+    return r.body.id as number;
+  };
+  const exact = (r: Reply) => [r.status, r.text];
+  const frozen = (status: number, body: Doc) => [status, JSON.stringify(body)];
+  const BAD = frozen(400, { ok: false, status: "bad_request", reason: "invalid media upload request" });
+  const NF = frozen(404, { ok: false, status: "not_found", reason: "article not found for tenant" });
+  const TYPE = frozen(415, { ok: false, status: "media_type", reason: "only JPEG, PNG or WebP images are accepted" });
+  const DIMS = frozen(422, { ok: false, status: "media_dimensions", reason: "image exceeds 4096 px per edge or 16800000 pixels" });
+  const BIG = frozen(413, { ok: false, status: "too_large", reason: "request body exceeds 4065536 bytes" });
+
+  const gcvDraft = await mkDraft("gcv");
+  const dtwDraft = await mkDraft("dtw");
+  const realJpeg = await sharp({ create: { width: 1800, height: 1200, channels: 3, background: { r: 120, g: 160, b: 200 } } })
+    .jpeg({ quality: 80 })
+    .withExif({ IFD0: { Copyright: "p8 owner", ImageDescription: "p8 gps 10.77,106.70" }, IFD3: { GPSLatitudeRef: "N", GPSLongitudeRef: "E" } })
+    .toBuffer();
+  const smallPng = await sharp({ create: { width: 40, height: 30, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0.4 } } }).png().toBuffer();
+  const base = (file: { data: Buffer; type: string }, articleId: number | string = gcvDraft): [string, string | { data: Buffer; type: string }][] => [
+    ["file", file],
+    ["alt", "P8 alt"],
+    ["articleId", String(articleId)],
+    ["actorRole", P8_ACTOR.role],
+    ["actorId", P8_ACTOR.id],
+  ];
+  const withAlt = (alt: string) => base({ data: smallPng, type: "image/png" }).map(([k, v]) => (k === "alt" ? [k, alt] : [k, v])) as [string, string | { data: Buffer; type: string }][];
+
+  if (want("C")) {
+    // Happy path + response allowlist + Activity Log (D1 / E9).
+    const log0 = Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'media_uploaded'`))[0]?.n);
+    const ok = await upload("gcv", [...base({ data: realJpeg, type: "image/jpeg" }), ["credit", "P8 credit"]]);
+    const media = (ok.body.media ?? {}) as Doc;
+    expect("C-1: 201 + response allowlist exactly {ok, media:{id, alt, credit, mimeType, width, height, filesize, url, sizes}}", [
+      ok.status, Object.keys(ok.body), Object.keys(media), media.alt, media.credit, media.mimeType, media.width, media.height,
+      Object.keys((media.sizes ?? {}) as Doc), typeof media.url === "string" && (media.url as string).startsWith("/api/media/file/hub-"),
+    ], [201, ["ok", "media"], ["id", "alt", "credit", "mimeType", "width", "height", "filesize", "url", "sizes"], "P8 alt", "P8 credit", "image/jpeg", 1800, 1200, ["thumbnail", "card", "hero"], true]);
+    const mid = media.id as number;
+    const mrow = (await rows(sql`SELECT tenant_id, prefix, filename, mime_type FROM media WHERE id = ${mid}`))[0] ?? {};
+    expect("C-2: (AC1) media row: tenant = gcv from the TOKEN grant, prefix = gcv set by the server, server file name hub-<uuid>.jpg", [
+      Number(mrow.tenant_id), mrow.prefix, /^hub-[0-9a-f-]{36}\.jpg$/.test(String(mrow.filename)), mrow.mime_type,
+    ], [s6.tenants.gcv!.id, "gcv", true, "image/jpeg"]);
+    const logs = await rows(sql`SELECT tenant_id, actor_type, actor_engine_id, target_collection, target_id, detail FROM activity_log WHERE event_type = 'media_uploaded' AND target_id = ${String(mid)}`);
+    const lg = logs[0] ?? {};
+    const detail = (lg.detail ?? {}) as Doc;
+    const dtext = JSON.stringify(lg);
+    expect("C-3: (AC17 / D1 / E9) exactly one media_uploaded row; tenant column set; targetCollection media; detail {via:hub, actor:{role,id}, articleId}; no email, no token", [
+      Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'media_uploaded'`))[0]?.n) - log0, logs.length,
+      Number(lg.tenant_id), lg.actor_type, Number(lg.actor_engine_id), lg.target_collection, Object.keys(detail).sort(), detail.via, sortKeys6(detail.actor), detail.articleId,
+      dtext.includes("@"), dtext.includes(author),
+    ], [1, 1, s6.tenants.gcv!.id, "engine", s6.engines.author.id, "media", ["actor", "articleId", "via"], "hub", { id: "hub-user-8", role: "editor" }, gcvDraft, false, false]);
+
+    // Review M3: the rejected requests C-4..C-17 must create NO media row, NO
+    // media_uploaded row and NO integration_error row (C-1 is counted above).
+    const snap8 = async () => {
+      const r = (await rows(sql`SELECT
+        (SELECT count(*)::int FROM media WHERE filename LIKE 'hub-%') AS media,
+        (SELECT count(*)::int FROM activity_log WHERE event_type = 'media_uploaded') AS uploaded,
+        (SELECT count(*)::int FROM activity_log WHERE event_type = 'integration_error') AS interr`))[0] ?? {};
+      return { media: Number(r.media), uploaded: Number(r.uploaded), interr: Number(r.interr) };
+    };
+    const beforeRejections = await snap8();
+    expect("C-4: no token ⇒ 401", exact(await upload("gcv", base({ data: smallPng, type: "image/png" }), { token: null })), frozen(401, { ok: false, status: "unauthorized" }));
+    const ks = await upload("gcv", base({ data: smallPng, type: "image/png" }), { token: noauthor });
+    expect("C-5: (kill-switch) hubAuthor off ⇒ 403 frozen body", exact(ks), frozen(403, { ok: false, status: "forbidden", reason: "hub author not allowed for this engine" }));
+    expect("C-6: tenant missing / empty ⇒ 400", [exact(await upload(null, base({ data: smallPng, type: "image/png" }))), exact(await upload("", base({ data: smallPng, type: "image/png" }))), exact(await upload("  ", base({ data: smallPng, type: "image/png" })))], [BAD, BAD, BAD]);
+    const wad = await upload("wad", base({ data: smallPng, type: "image/png" }));
+    expect("C-7: tenant outside the grant ⇒ 403 forbidden + allowedTenants (resolveHubWriteTenant shape)", [wad.status, wad.body.status, wad.body.reason, Array.isArray(wad.body.allowedTenants) && !(wad.body.allowedTenants as string[]).includes("wad")], [403, "forbidden", "tenant not in allowed scope", true]);
+    // features.articles off for world-travel-brief (restored in finally).
+    const wtbId = s6.tenants["world-travel-brief"]!.id;
+    const tw = (await payload.findByID({ collection: "tenants", id: wtbId, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const feats = (tw.features ?? {}) as Doc;
+    try {
+      await payload.update({ collection: "tenants", id: wtbId, overrideAccess: true, context: { disableRevalidate: true }, data: { features: { ...feats, articles: false } } as never });
+      expect("C-8: tenant with features.articles off ⇒ 403 feature_disabled (frozen)", exact(await upload("world-travel-brief", base({ data: smallPng, type: "image/png" }))), frozen(403, { ok: false, status: "feature_disabled", reason: "articles feature disabled for tenant" }));
+    } finally {
+      await payload.update({ collection: "tenants", id: wtbId, overrideAccess: true, context: { disableRevalidate: true }, data: { features: feats } as never });
+    }
+
+    // 411: a streamed body has no Content-Length.
+    const mp = await multipart8(base({ data: smallPng, type: "image/png" }));
+    const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(mp.body)); c.close(); } });
+    expect("C-9: no Content-Length ⇒ 411 (frozen)", exact(await send("/api/hub/media?tenant=gcv", { method: "POST", headers: { "content-type": mp.type }, body: stream, duplex: "half" })), frozen(411, { ok: false, status: "length_required", reason: "Content-Length header is required" }));
+    // 413 by Content-Length (real oversize body; refused before it is read) and by file size.
+    const huge = await upload("gcv", base({ data: Buffer.concat([pngHeader8(10, 10), Buffer.alloc(4_065_600)]), type: "image/png" }));
+    const fat = await upload("gcv", base({ data: Buffer.concat([pngHeader8(10, 10), Buffer.alloc(4_000_001 - pngHeader8(10, 10).length)]), type: "image/png" }));
+    expect("C-10: request > 4,065,536 B ⇒ 413; file 4,000,001 B in a smaller request ⇒ 413 — one frozen body (status too_large)", [exact(huge), exact(fat)], [BIG, BIG]);
+
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="9" height="9"/>');
+    const gif = Buffer.from("GIF89a\x0a\x00\x0a\x00\x00\x00\x00;", "latin1");
+    expect("C-11: (AC4) SVG declared image/jpeg, SVG as svg+xml, GIF, PNG declared jpeg, PNG CgBI ⇒ 415", [
+      exact(await upload("gcv", base({ data: svg, type: "image/jpeg" }))),
+      exact(await upload("gcv", base({ data: svg, type: "image/svg+xml" }))),
+      exact(await upload("gcv", base({ data: gif, type: "image/gif" }))),
+      exact(await upload("gcv", base({ data: smallPng, type: "image/jpeg" }))),
+      exact(await upload("gcv", base({ data: pngHeader8(10, 10, true), type: "image/png" }))),
+    ], [TYPE, TYPE, TYPE, TYPE, TYPE]);
+    const t0 = performance.now();
+    const len0 = await upload("gcv", base({ data: jpegBadLen8(0), type: "image/jpeg" }));
+    const len1 = await upload("gcv", base({ data: jpegBadLen8(1), type: "image/jpeg" }));
+    expect("C-12: JPEG segment length 0 / 1 ⇒ 415 in finite time", [exact(len0), exact(len1), performance.now() - t0 < 10_000], [TYPE, TYPE, true]);
+    expect("C-13: (AC4) PNG header 20000×20000 and 4097×100, JPEG with EXIF thumbnail 160×120 + real SOF 5000×5000 ⇒ 422 media_dimensions", [
+      exact(await upload("gcv", base({ data: pngHeader8(20000, 20000), type: "image/png" }))),
+      exact(await upload("gcv", base({ data: pngHeader8(4097, 100), type: "image/png" }))),
+      exact(await upload("gcv", base({ data: jpegThumbBig8(), type: "image/jpeg" }))),
+    ], [DIMS, DIMS, DIMS]);
+    expect("C-14: (AC19) alt with C0 / bidi / CR / LF / `]` / 301 chars ⇒ 400; blank alt ⇒ 422 alt_required", [
+      exact(await upload("gcv", withAlt("a\u0001b"))), exact(await upload("gcv", withAlt("a‮b"))), exact(await upload("gcv", withAlt("a\rb"))),
+      exact(await upload("gcv", withAlt("a\nb"))), exact(await upload("gcv", withAlt("a](https://x.test/i.png)"))), exact(await upload("gcv", withAlt("x".repeat(301)))),
+      exact(await upload("gcv", withAlt("   "))),
+    ], [BAD, BAD, BAD, BAD, BAD, BAD, frozen(422, { ok: false, status: "alt_required", reason: "alt text is required" })]);
+    const pngFile = { data: smallPng, type: "image/png" };
+    expect("C-15: (AC19) unknown field (email), alt twice, articleId missing, actorRole viewer ⇒ 400", [
+      exact(await upload("gcv", [...base(pngFile), ["email", "p8@example.invalid"]])),
+      exact(await upload("gcv", [...base(pngFile), ["alt", "again"]])),
+      exact(await upload("gcv", base(pngFile).filter(([k]) => k !== "articleId"))),
+      exact(await upload("gcv", base(pngFile).map(([k, v]) => (k === "actorRole" ? [k, "viewer"] : [k, v])) as [string, string][])),
+    ], [BAD, BAD, BAD, BAD]);
+    const before16 = await snap8();
+    expect("C-16: articleId 'abc', 20 digits, 400 digits, another tenant's draft, a non-existent id ⇒ 404 (frozen, = PATCH body)", [
+      exact(await upload("gcv", base(pngFile, "abc"))), exact(await upload("gcv", base(pngFile, "9".repeat(20)))), exact(await upload("gcv", base(pngFile, "9".repeat(400)))),
+      exact(await upload("gcv", base(pngFile, dtwDraft))), exact(await upload("gcv", base(pngFile, 2147483646))),
+    ], [NF, NF, NF, NF, NF]);
+    expect("C-16b: (gap hub-id-over-int4-returns-500) the 20 / 400-digit articleId cases wrote 0 integration_error rows", (await snap8()).interr - before16.interr, 0);
+    const ne = async (id: number) => (await upload("dtw", base(pngFile, id))).body.reason;
+    expect("C-17: not editable: engine article ⇒ origin; main published (hub draft re-saved) ⇒ status; manual draft by a CMS user ⇒ not_hub_authored (422)", [
+      await ne(s6.articles.engine.id), await ne(s6.articles.hubDraftPublishedThenSavedDraft.id), await ne(s6.articles.manualDraftByCmsUser.id),
+      (await upload("dtw", base(pngFile, s6.articles.engine.id))).status,
+    ], ["origin", "status", "not_hub_authored", 422]);
+    expect("C-18: (review M3) the rejected requests C-4..C-17 created 0 media rows, 0 media_uploaded rows, 0 integration_error rows", await snap8(), beforeRejections);
+  }
+
+  if (want("P3")) {
+    const prog = await sharp({ create: { width: 900, height: 600, channels: 3, background: "#808080" } }).jpeg({ quality: 85, progressive: true }).toBuffer();
+    const v = await import("../src/lib/hub-media-validate");
+    const scans = v.countJpegScans(prog);
+    const r10 = await upload("gcv", base({ data: prog, type: "image/jpeg" }));
+    expect("P3-1: a real progressive JPEG (sharp/libjpeg scan script) passes", [scans >= 2 && scans <= 64, r10.status], [true, 201]);
+    const extra: Buffer[] = [];
+    for (let i = 0; i < 70 - scans; i++) extra.push(Buffer.from([0xff, 0xff, 0xda, 0x00, 0x08, 1, 1, 0, 0, 0x3f, 0]));
+    const many = Buffer.concat([prog, ...extra]);
+    const t0 = performance.now();
+    const r65 = await upload("gcv", base({ data: many, type: "image/jpeg" }));
+    const ms = Math.round(performance.now() - t0);
+    console.log(`OBS   P3: 70-SOS JPEG (FF FF DA fill form) refused in ${ms} ms (server round-trip)`);
+    expect("P3-2: (E6) > 64 SOS markers (each with FF fill) ⇒ 415 in < 1 s", [v.countJpegScans(many) > 64, exact(r65), ms < 1000], [true, TYPE, true]);
+    const src = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: { r: 10, g: 200, b: 10 } } })
+      .jpeg({ quality: 80 })
+      .withExif({ IFD0: { Copyright: "p8 gps owner" }, IFD3: { GPSLatitudeRef: "S", GPSLongitudeRef: "W" } })
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const r = await upload("gcv", base({ data: src, type: "image/jpeg" }));
+    const m = (r.body.media ?? {}) as Doc;
+    const fileRes = await fetch(`${BASE}${m.url as string}`);
+    const stored = Buffer.from(await fileRes.arrayBuffer());
+    const meta = await sharp(stored).metadata();
+    expect("P3-3: (AC27 / D5) stored original re-encoded: EXIF/GPS gone, orientation applied (2000×1000 o6 ⇒ 1000×2000), mime kept; sizes thumbnail+card (no hero: 1000 wide < 1600)", [
+      r.status, fileRes.status, meta.format, meta.exif === undefined, meta.orientation ?? null, [meta.width, meta.height], [m.width, m.height], Object.keys((m.sizes ?? {}) as Doc),
+    ], [201, 200, "jpeg", true, null, [1000, 2000], [1000, 2000], ["thumbnail", "card"]]);
+    const pr = await upload("gcv", base({ data: smallPng, type: "image/png" }));
+    const pm = (pr.body.media ?? {}) as Doc;
+    const pmeta = await sharp(Buffer.from(await (await fetch(`${BASE}${pm.url as string}`)).arrayBuffer())).metadata();
+    expect("P3-4: (AC27) PNG with alpha stays PNG with alpha; a 40×30 image gets no larger size (sizes absent)", [pr.status, pm.mimeType, pmeta.format, pmeta.hasAlpha, "sizes" in pm], [201, "image/png", "png", true, false]);
+    const wb = await sharp({ create: { width: 1700, height: 900, channels: 3, background: "#123456" } }).webp({ quality: 80 }).toBuffer();
+    const wr = await upload("gcv", base({ data: wb, type: "image/webp" }));
+    expect("P3-5: WebP accepted, stays WebP, ≥1600 wide ⇒ hero size", [wr.status, ((wr.body.media ?? {}) as Doc).mimeType, Object.keys((((wr.body.media ?? {}) as Doc).sizes ?? {}) as Doc)], [201, "image/webp", ["thumbnail", "card", "hero"]]);
+  }
+
+  // ── shared by P2 / P4 / P7 / E8 (steps 1.7 / 1.8) ──
+  const getEdit = async (id: number, tenant: string, view = "&view=edit") => send(`/api/hub/articles/${id}?tenant=${tenant}${view}`, { method: "GET" });
+  const versionOf = async (id: number, tenant: string) => ((await getEdit(id, tenant)).body.edit as Doc | undefined)?.version as number;
+  const patchRaw = async (id: number, tenant: string, json: string) => send(`/api/hub/articles/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: json });
+  const patch = async (id: number, tenant: string, fields: Doc) =>
+    patchRaw(id, tenant, JSON.stringify({ tenant, expectedVersion: await versionOf(id, tenant), actor: P8_HUMAN, ...fields }));
+  const interr = async () => Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'integration_error'`))[0]?.n);
+  const latestDoc = async (id: number) => (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true })) as unknown as Doc;
+  const uploadCount = (body: unknown): number => {
+    let n = 0;
+    const st: unknown[] = [((body ?? {}) as Doc).root];
+    while (st.length) {
+      const x = st.pop() as Doc | undefined;
+      if (!x || typeof x !== "object") continue;
+      if (x.type === "upload") n++;
+      if (Array.isArray(x.children)) st.push(...(x.children as unknown[]));
+    }
+    return n;
+  };
+  const upNode = (id: number, i: number) => ({ type: "upload", version: 3, format: "", id: (0x2000000 + i).toString(16).padStart(24, "0"), fields: null, relationTo: "media", value: id });
+  const paraNode = (t: string) => ({ type: "paragraph", version: 1, direction: null, format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: t, format: 0, detail: 0, mode: "normal", style: "" }] });
+  const lexOf = (kids: unknown[]) => ({ root: { type: "root", version: 1, direction: null, format: "", indent: 0, children: kids } });
+  const tamper8 = (id: number, data: Doc) => payload.update({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, data: data as never, context: { disableRevalidate: true } });
+  const localMedia = async (tenantSlug: string, alt: string) => {
+    const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: "#aa3355" } }).png().toBuffer();
+    const d = (await payload.create({
+      collection: "media", overrideAccess: true, depth: 0, context: { disableRevalidate: true },
+      data: { tenant: s6.tenants[tenantSlug]!.id, prefix: tenantSlug, alt } as never,
+      file: { data: png, mimetype: "image/png", name: `p8-local-${run}-${seq++}.png`, size: png.length },
+    })) as unknown as Doc;
+    return d.id as number;
+  };
+  const uploaded = async (tenant: string, draft: number, alt = "P8 alt") => {
+    const r = await upload(tenant, base({ data: smallPng, type: "image/png" }, draft).map(([k, v]) => (k === "alt" ? [k, alt] : [k, v])) as [string, string | { data: Buffer; type: string }][]);
+    if (r.status !== 201) throw new Error(`upload ${tenant} ⇒ ${r.status} ${r.text.slice(0, 200)}`);
+    return (r.body.media as Doc).id as number;
+  };
+
+  if (want("P4") || want("E8")) {
+    const gMedia = await uploaded("gcv", gcvDraft, "P4 gcv hero");
+    const dMedia = await uploaded("dtw", dtwDraft, "P4 dtw media");
+    const fields = (r: Reply) => [r.status, (r.body.fields ?? r.body.status) as unknown];
+    if (want("P4")) {
+      expect("P4-1: (AC6) PATCH heroImageId = a media of ANOTHER tenant ⇒ 422 fields.heroImageId unknown_ref (tenant not revealed)", fields(await patch(gcvDraft, "gcv", { heroImageId: dMedia })), [422, { heroImageId: "unknown_ref" }]);
+      expect("P4-2: PATCH heroImageId = a non-existent id (int4) ⇒ 422 unknown_ref", fields(await patch(gcvDraft, "gcv", { heroImageId: 2147483646 })), [422, { heroImageId: "unknown_ref" }]);
+      const t = `p8-${run}-${seq++}`;
+      const cr = await send("/api/hub/articles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", title: `P8 ${t}`, slug: t, actor: P8_HUMAN, heroImageId: dMedia }) });
+      expect("P4-3: POST with another tenant's heroImageId ⇒ 422 unknown_ref, no article created", [fields(cr), (await payload.find({ collection: "articles", draft: true, where: { slug: { equals: t } }, depth: 0, limit: 1, overrideAccess: true })).totalDocs], [[422, { heroImageId: "unknown_ref" }], 0]);
+      const ok = await patch(gcvDraft, "gcv", { heroImageId: gMedia, leadImageCaption: "  P4 caption  " });
+      const lt = await latestDoc(gcvDraft);
+      expect("P4-4: PATCH own-tenant hero + caption ⇒ 200, changed [heroImageId, leadImageCaption]; latest draft holds them (caption trimmed)", [ok.status, ok.body.changed, lt.heroImage, lt.leadImageCaption], [200, ["heroImageId", "leadImageCaption"], gMedia, "P4 caption"]);
+      const again = await patch(gcvDraft, "gcv", { heroImageId: gMedia, leadImageCaption: "P4 caption" });
+      expect("P4-5: same values again ⇒ 200 changed [] (no write)", [again.status, again.body.changed], [200, []]);
+      const clr = await patch(gcvDraft, "gcv", { heroImageId: null, leadImageCaption: null });
+      const lc = await latestDoc(gcvDraft);
+      expect("P4-6: heroImageId null + caption null ⇒ 200, hero and caption cleared", [clr.status, clr.body.changed, lc.heroImage ?? null, lc.leadImageCaption ?? null], [200, ["heroImageId", "leadImageCaption"], null, null]);
+      const t2 = `p8-${run}-${seq++}`;
+      const cr2 = await send("/api/hub/articles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", title: `P8 ${t2}`, slug: t2, actor: P8_HUMAN, heroImageId: gMedia, leadImageCaption: "Cap" }) });
+      const l2 = cr2.status === 201 ? await latestDoc(cr2.body.id as number) : {};
+      expect("P4-7: POST with own-tenant hero + caption ⇒ 201, stored", [cr2.status, l2.heroImage, l2.leadImageCaption], [201, gMedia, "Cap"]);
+      expect("P4-8: (AC7, articleId part) media route with another tenant's article ⇒ 404 (frozen)", exact(await upload("gcv", base({ data: smallPng, type: "image/png" }, dtwDraft))), NF);
+      // R12 (read-only measurement): anonymous REST read of media lists other tenants' rows.
+      const anon = await send("/api/media?limit=200&depth=0", { method: "GET" }, null);
+      const docs = ((anon.body.docs ?? []) as Doc[]);
+      const tenantsSeen = [...new Set(docs.map((d) => String(d.tenant)))].length;
+      console.log(`OBS   P4 R12: anonymous GET /api/media ⇒ ${anon.status}, ${docs.length} rows visible (totalDocs ${String(anon.body.totalDocs)}), ${tenantsSeen} distinct tenants, hub-uploaded rows visible: ${docs.filter((d) => /^hub-/.test(String(d.filename))).length} (gap hub-p5-3-media-public-read; Media.ts not changed)`);
+    }
+    if (want("E8")) {
+      const i0 = await interr();
+      const v = await versionOf(gcvDraft, "gcv");
+      const head = `{"tenant":"gcv","expectedVersion":${v},"actor":${JSON.stringify(P8_HUMAN)},`;
+      const codeOf = async (json: string) => { const r = await patchRaw(gcvDraft, "gcv", json); return [r.status, ((r.body.fields ?? {}) as Doc).heroImageId ?? r.body.status]; };
+      expect("E8-1: heroImageId 2147483648 / 9007199254740994 (2^53+2) / 1e400 (Infinity) / 20 / 400 digits ⇒ 422 out_of_range", [
+        await codeOf(`${head}"heroImageId":2147483648}`), await codeOf(`${head}"heroImageId":9007199254740994}`), await codeOf(`${head}"heroImageId":1e400}`),
+        await codeOf(`${head}"heroImageId":${"9".repeat(20)}}`), await codeOf(`${head}"heroImageId":${"9".repeat(400)}}`),
+      ], [[422, "out_of_range"], [422, "out_of_range"], [422, "out_of_range"], [422, "out_of_range"], [422, "out_of_range"]]);
+      expect("E8-2: heroImageId 0 / -1 / 1.5 / \"5\" ⇒ 422 type (0 is type, unlike authorId)", [
+        await codeOf(`${head}"heroImageId":0}`), await codeOf(`${head}"heroImageId":-1}`), await codeOf(`${head}"heroImageId":1.5}`), await codeOf(`${head}"heroImageId":"5"}`),
+      ], [[422, "type"], [422, "type"], [422, "type"], [422, "type"]]);
+      const capCode = async (c: unknown) => { const r = await patch(gcvDraft, "gcv", { leadImageCaption: c }); return [r.status, ((r.body.fields ?? {}) as Doc).leadImageCaption ?? r.body.status]; };
+      expect("E8-3: leadImageCaption 501 chars ⇒ too_long; C0 ⇒ c0; bidi ⇒ bidi; number ⇒ type", [await capCode("x".repeat(501)), await capCode("a\u0001b"), await capCode("a\u202eb"), await capCode(5)], [[422, "too_long"], [422, "c0"], [422, "bidi"], [422, "type"]]);
+      expect("E8-4: (gap hub-id-over-int4-returns-500) none of the E8 requests wrote an integration_error row", (await interr()) - i0, 0);
+    }
+  }
+
+  if (want("P2") || want("P7")) {
+    const gA = await uploaded("gcv", gcvDraft, "P2 alt A");
+    const gB = await uploaded("gcv", gcvDraft, "P2 alt B");
+    const dX = await uploaded("dtw", dtwDraft, "P2 dtw");
+    const inj = await localMedia("gcv", "a](https://x.test/i.png)\n\n![b");
+    const art = await mkDraft("gcv");
+    const kids = [paraNode("Intro paragraph."), upNode(gA, 0), paraNode("Middle paragraph."), upNode(gB, 1), upNode(dX, 2), upNode(gA, 3), upNode(inj, 4), paraNode("Outro paragraph.")];
+    await tamper8(art, { body: lexOf(kids) });
+    const okHero = await patch(art, "gcv", { heroImageId: gA, leadImageCaption: "P2 caption" });
+    if (okHero.status !== 200) throw new Error(`P2 hero patch ⇒ ${okHero.status} ${okHero.text.slice(0, 200)}`);
+    if (want("P2")) {
+      const i0 = await interr();
+      const e = await getEdit(art, "gcv");
+      const ed = (e.body.edit ?? {}) as Doc;
+      const bm = String(((e.body.article ?? {}) as Doc).bodyMarkdown ?? "");
+      const hero = ed.hero as Doc | null;
+      expect("P2-1: (AC9) view=edit editable: 15 sanitizer keys + hero, leadImageCaption, bodyMedia", [e.status, ed.editable, Object.keys(ed).length, Object.keys(ed).slice(-3)], [200, true, 18, ["hero", "leadImageCaption", "bodyMedia"]]);
+      expect("P2-2: edit.hero = own media {id,url,alt,width,height,credit} with the RAW url; leadImageCaption", [hero && Object.keys(hero), hero?.id, typeof hero?.url === "string" && (hero.url as string).startsWith("/api/media/file/hub-"), hero?.alt, ed.leadImageCaption], [["id", "url", "alt", "width", "height", "credit"], gA, true, "P2 alt A", "P2 caption"]);
+      const bmi = ((ed.bodyMedia ?? []) as Doc[]);
+      expect("P2-3: edit.bodyMedia = distinct own-tenant ids in tree order (other tenant dropped), keys {id,url,alt,width,height}", [bmi.map((m) => m.id), bmi.every((m) => Object.keys(m).join() === "id,url,alt,width,height")], [[gA, gB, inj], true]);
+      expect("P2-4: article.bodyMarkdown carries canonical tokens (alt never re-emitted; no placeholder, no \"relation to\"); the injected alt does not leak", [
+        bm.split("\n").filter((l) => l.startsWith("![")), bm.includes("\u0001"), /relation to/.test(bm), bm.includes("x.test"),
+      ], [[`![](cms-media:${gA})`, `![](cms-media:${gB})`, `![](cms-media:${dX})`, `![](cms-media:${gA})`, `![](cms-media:${inj})`], false, false, false]);
+      console.log(`OBS   P2 alt-injection vector (measurement): media ${inj} alt ${JSON.stringify("a](https://x.test/i.png)\n\n![b")} ⇒ bodyMedia alt ${JSON.stringify(bmi.find((m) => m.id === inj)?.alt)} (raw; the hub must escape it)`);
+      const plain = await getEdit(art, "gcv", "");
+      const pbm = String(((plain.body.article ?? {}) as Doc).bodyMarkdown ?? "");
+      expect("P2-5: default read (no view) unchanged: no edit key, no cms-media token, article from the MAIN row (a draft's hero lives in the latest version ⇒ heroImage null)", [
+        "edit" in plain.body, pbm.includes("cms-media:"), ((plain.body.article ?? {}) as Doc).heroImage,
+      ], [false, false, null]);
+      await tamper8(art, { heroImage: dX });
+      const foreign = await getEdit(art, "gcv");
+      expect("P2-6: hero stored as another tenant's media (written outside the hub) ⇒ edit.hero null", (foreign.body.edit as Doc).hero, null);
+      expect("P2-6b: (review M1) the same response carries NO url / alt / caption / credit of that media anywhere (article.heroImage null; no 'P4 dtw' / 'P2 dtw' alt, no foreign file name)", [
+        ((foreign.body.article ?? {}) as Doc).heroImage, foreign.text.includes("P2 dtw"), foreign.text.includes(String((await payload.findByID({ collection: "media", id: dX, depth: 0, overrideAccess: true }) as unknown as Doc).filename)),
+      ], [null, false, false]);
+      {
+        // Review-3 M3: the SCHEDULED branch answers article.* from the latest doc too.
+        const sch = await mkDraft("gcv");
+        const when = new Date(Math.ceil((Date.now() + 3 * 3600_000) / 60_000) * 60_000).toISOString();
+        await tamper8(sch, { heroImage: dX, leadImageCaption: "P2 scheduled caption", workflowStatus: "scheduled", scheduledFor: when, publishedAt: when, _status: "draft" });
+        const sr = await getEdit(sch, "gcv");
+        const dxDoc = (await payload.findByID({ collection: "media", id: dX, depth: 0, overrideAccess: true })) as unknown as Doc;
+        expect("P2-6c: (review-3 M3) foreign hero + SCHEDULED hub draft ⇒ editableReason scheduled; article.heroImage null; no url / alt / caption / credit / file name of that media anywhere", [
+          sr.status, ((sr.body.edit ?? {}) as Doc).editableReason, ((sr.body.article ?? {}) as Doc).heroImage, sr.text.includes("P2 dtw"), sr.text.includes(String(dxDoc.filename)),
+          typeof dxDoc.url === "string" && sr.text.includes(String(dxDoc.url)), typeof dxDoc.credit === "string" && dxDoc.credit !== "" && sr.text.includes(String(dxDoc.credit)),
+        ], [200, "scheduled", null, false, false, false, false]);
+      }
+      await tamper8(art, { heroImage: gA });
+      const m31 = [];
+      for (let i = 0; i < 31; i++) m31.push(await localMedia("gcv", `p2 many ${i}`));
+      const big = await mkDraft("gcv");
+      await tamper8(big, { body: lexOf(m31.map((id, i) => upNode(id, i))) });
+      const be = ((await getEdit(big, "gcv")).body.edit ?? {}) as Doc;
+      expect("P2-7: 31 distinct body media ⇒ bodyEditable false, bodyMedia [] (locked, not cut)", [be.editable, be.bodyEditable, be.bodyMedia], [true, false, []]);
+      const rel = await getEdit(s6.articles.manualDraftRelationBody.id, "dtw");
+      const re = (rel.body.edit ?? {}) as Doc;
+      expect("P2-8: relationship-node body (no upload) ⇒ editable, bodyEditable false as before, hero null, bodyMedia [], body still exported", [re.editable, re.bodyEditable, re.hero, re.bodyMedia, String(((rel.body.article ?? {}) as Doc).bodyMarkdown ?? "").length > 0], [true, false, null, [], true]);
+      expect("P2-9: the view=edit reads above wrote 0 integration_error rows", (await interr()) - i0, 0);
+      // Public read (depth 2) of the 0.1 baseline fixture (published dtw article with hero + body upload).
+      const pubTok = readFileSync(f8.publicReadTokenFile.dtw!, "utf8").trim();
+      const fx = ((await payload.find({ collection: "articles", depth: 0, limit: 1, sort: "-id", overrideAccess: true, where: { and: [{ tenant: { equals: s6.tenants.dtw!.id } }, { workflowStatus: { equals: "published" } }, { heroImage: { exists: true } }] } })).docs[0] as unknown as Doc | undefined);
+      if (fx) {
+        const pub = await send(`/api/public/articles/${encodeURIComponent(String(fx.slug))}`, { method: "GET" }, pubTok);
+        const pa = ((pub.body.article ?? pub.body.doc ?? pub.body) as Doc);
+        expect("P2-10: (AC10) public read: heroImage has a media url; the body text carries a populated media url", [pub.status, typeof ((pa.heroImage ?? {}) as Doc).url === "string", pub.text.includes("/api/media/file/")], [200, true, true]);
+      } else console.log("OBS   P2-10 skipped: no published dtw article with a hero (run scripts/p53-baseline-fixture.ts first)");
+    }
+    if (want("P7")) {
+      const e = await getEdit(art, "gcv");
+      const ed = (e.body.edit ?? {}) as Doc;
+      expect("P7-1: (part, 1.8) saved body with upload nodes ⇒ view=edit editable, tokens in bodyMarkdown, bodyMedia listed", [ed.editable, String(((e.body.article ?? {}) as Doc).bodyMarkdown).includes(`![](cms-media:${gA})`), ((ed.bodyMedia ?? []) as Doc[]).length], [true, true, 3]);
+      const bm7 = String(((e.body.article ?? {}) as Doc).bodyMarkdown ?? "");
+      expect("P7-0: (AC25, step 2.2) a saved body with upload nodes is bodyEditable:true AND (review M2 invariant) its bodyMarkdown carries a token for every upload node (no fallback)", [
+        ed.bodyEditable, [gA, gB, dX, inj].every((m) => bm7.includes(`![](cms-media:${m})`)), bm7.includes("relation to"),
+      ], [true, true, false]);
+      const n0 = uploadCount((await latestDoc(art)).body);
+      const t = await patch(art, "gcv", { title: `P7 text-only ${run}` });
+      expect("P7-2: PATCH a text field only (no bodyMarkdown) ⇒ 200; the stored upload nodes are kept", [t.status, t.body.changed, uploadCount((await latestDoc(art)).body), n0], [200, ["title"], n0, 5]);
+    }
+  }
+
+  // ── step 2.2 (branch B): body image tokens on the WRITE path, E8, AC25, K4 / D7 ──
+  if (want("B") || want("P7") || want("K4")) {
+    const writeTok = tok(s6.engines.writeonly.tokenFile);
+    const fxg = s6.fixtures.gcv!;
+    const post = (fields: Doc) => send("/api/hub/articles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", actor: P8_HUMAN, ...fields }) });
+    const newSlug = () => `p8-${run}-${seq++}`;
+    const full = (md: string) => ({ title: `P8 body ${seq}`, slug: newSlug(), pillarSlug: fxg.pillars[0], subSectionSlug: fxg.subsections.find((x) => x.pillar === fxg.pillars[0])?.slug, authorId: fxg.authors[0], bodyMarkdown: md });
+    const m1 = await uploaded("gcv", gcvDraft, "B own 1");
+    const m2 = await uploaded("gcv", gcvDraft, "B own 2");
+    const dM = await uploaded("dtw", dtwDraft, "B dtw");
+    const tokLine = (id: number | string) => `![](cms-media:${id})`;
+    const md1 = `Intro.\n\n${tokLine(m1)}\n\nOutro.`;
+    const fieldsOf = (r: Reply) => [r.status, (r.body.fields ?? r.body.status) as unknown];
+
+    if (want("B")) {
+      const i0 = await interr();
+      const c = await post(full(`Intro.\n\n![typed alt is ignored](cms-media:${m1})\n\nOutro.`));
+      const id = c.body.id as number;
+      const lt = await latestDoc(id);
+      const ups = (((lt.body ?? {}) as Doc).root as Doc)?.children as Doc[] | undefined;
+      expect("B-1: (AC11) POST with a body token ⇒ 201; stored tree = paragraph, upload{relationTo:media, value:m1}, paragraph", [
+        c.status, (ups ?? []).map((n) => n.type), (ups ?? []).filter((n) => n.type === "upload").map((n) => [n.relationTo, n.value]),
+      ], [201, ["paragraph", "upload", "paragraph"], [["media", m1]]]);
+      const ve = await getEdit(id, "gcv");
+      const ed = (ve.body.edit ?? {}) as Doc;
+      expect("B-2: (AC12 / AC25) view=edit: bodyEditable true, bodyMarkdown = canonical token (typed alt dropped), bodyMedia [m1]", [
+        ed.bodyEditable, ((ve.body.article ?? {}) as Doc).bodyMarkdown, ((ed.bodyMedia ?? []) as Doc[]).map((m) => m.id),
+      ], [true, md1, [m1]]);
+      const same = await patch(id, "gcv", { bodyMarkdown: md1 });
+      expect("B-3: PATCH the same canonical body ⇒ 200 changed [] (round-trip stable, no write)", [same.status, same.body.changed], [200, []]);
+      const sw = await patch(id, "gcv", { bodyMarkdown: `Intro.\n\n${tokLine(m2)}\n\nOutro.` });
+      const lt2 = await latestDoc(id);
+      expect("B-4: (E4) PATCH swapping the image id ⇒ 200 changed [bodyMarkdown]; stored upload value = m2", [sw.status, sw.body.changed, uploadCount(lt2.body), JSON.stringify(lt2.body).includes(`"value":${m2}`)], [200, ["bodyMarkdown"], 1, true]);
+      const n0 = uploadCount(lt2.body);
+      expect("B-5: (AC6 / AC7) body token of ANOTHER tenant's media / a non-existent id ⇒ 422 fields.bodyMarkdown unknown_ref; nothing stored", [
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine(dM)}` })), fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine(2147483646)}` })),
+        fieldsOf(await post(full(`A.\n\n${tokLine(dM)}`))), uploadCount((await latestDoc(id)).body),
+      ], [[422, { bodyMarkdown: "unknown_ref" }], [422, { bodyMarkdown: "unknown_ref" }], [422, { bodyMarkdown: "unknown_ref" }], n0]);
+      const big = (n: number, from: number) => Array.from({ length: n }, (_, i) => tokLine(from + i)).join("\n\n");
+      expect("B-6: (E8) body token ids of 11 / 20 / 400 digits (PATCH) and 2147483648 / 20 digits (POST) ⇒ 422 out_of_range BEFORE the id query", [
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine("1".repeat(11))}` })), fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine("9".repeat(20))}` })),
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine("7".repeat(400))}` })),
+        fieldsOf(await post(full(tokLine(2147483648)))), fieldsOf(await post(full(tokLine("9".repeat(20))))),
+      ], [[422, { bodyMarkdown: "out_of_range" }], [422, { bodyMarkdown: "out_of_range" }], [422, { bodyMarkdown: "out_of_range" }], [422, { bodyMarkdown: "out_of_range" }], [422, { bodyMarkdown: "out_of_range" }]]);
+      expect("B-7: (T5) 31 distinct ids ⇒ too_many (counted before the tenant filter); 30 distinct ids that do not exist ⇒ unknown_ref; a repeated id counts once", [
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: big(31, 2000000000) })), fieldsOf(await patch(id, "gcv", { bodyMarkdown: big(30, 2000000000) })),
+        (await patch(id, "gcv", { bodyMarkdown: Array.from({ length: 31 }, () => tokLine(m1)).join("\n\n") })).status,
+      ], [[422, { bodyMarkdown: "too_many" }], [422, { bodyMarkdown: "unknown_ref" }], 200]);
+      const imgOf = async (md: string) => fieldsOf(await patch(id, "gcv", { bodyMarkdown: md }));
+      expect("B-8: (T8 a / E10, real HTTP) token mid-sentence, in a list, indented 2 spaces between paragraphs, CRLF between paragraphs, inside a 4-backtick fence, with a title, alt containing `]` ⇒ 422 image", [
+        await imgOf(`See ${tokLine(m1)} here.`), await imgOf(`- ${tokLine(m1)}`), await imgOf(`A.\n\n  ${tokLine(m1)}\n\nB.`), await imgOf(`A.\r\n\r\n${tokLine(m1)}\r\n\r\nB.`),
+        await imgOf("````\n```\n\n" + tokLine(m1) + "\n\n```\n````"), await imgOf(`A.\n\n![](cms-media:${m1} "t")`), await imgOf(`A.\n\n![a]b](cms-media:${m1})`),
+      ], Array.from({ length: 7 }, () => [422, { bodyMarkdown: "image" }]));
+      const iW = await interr();
+      expect("B-8b: (review-3 M1, real HTTP) neighbour line of only spaces BEFORE / spaces AFTER / a TAB ⇒ 422 image (pure stage, not `node`); strictly empty neighbours ⇒ 200", [
+        await imgOf(`A.\n  \n${tokLine(m1)}\n\nB.`), await imgOf(`A.\n\n${tokLine(m1)}\n   \nB.`), await imgOf(`A.\n\t\n${tokLine(m1)}\n\nB.`),
+        (await patch(id, "gcv", { bodyMarkdown: `A.\n\n${tokLine(m1)}\n\nB.` })).status, (await interr()) - iW,
+      ], [[422, { bodyMarkdown: "image" }], [422, { bodyMarkdown: "image" }], [422, { bodyMarkdown: "image" }], 200, 0]);
+      const own21: number[] = [];
+      for (let i = 0; i < 21; i++) own21.push(await localMedia("gcv", `B 21 ${i}`));
+      const oneUnit = own21.map(tokLine).join("\n");
+      const sep = await patch(id, "gcv", { bodyMarkdown: own21.map(tokLine).join("\n\n") });
+      expect("B-9: 21 images on consecutive lines (one paragraph unit) ⇒ the existing 1b limit (behaviour recorded); 21 images each its own paragraph ⇒ 200, 21 upload nodes", [
+        fieldsOf(await patch(id, "gcv", { bodyMarkdown: oneUnit })), sep.status, uploadCount((await latestDoc(id)).body),
+      ], [[422, { bodyMarkdown: "too_large" }], 200, 21]);
+      expect("B-10: (E8) the B requests wrote 0 integration_error rows", (await interr()) - i0, 0);
+    }
+
+    if (want("P7")) {
+      const i0 = await interr();
+      // Image-only body (AC25 / P7): not empty, editable, publish does not fail `required`.
+      const c = await post(full(tokLine(m1)));
+      const id = c.body.id as number;
+      const ve = (await getEdit(id, "gcv")).body;
+      const ed = (ve.edit ?? {}) as Doc;
+      const pub = await send(`/api/hub/articles/${id}/publish`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", expectedVersion: ed.version, actor: P8_HUMAN }) }, writeTok);
+      const main = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      if (pub.status !== 200) console.log(`OBS   P7 image-only publish ⇒ ${pub.status} ${pub.text.slice(0, 300)} (gap hub-p5-3-image-only-body-required if 'required')`);
+      expect("P7-3: body of ONLY one image: POST 201, bodyEditable true, publish (hub write token) ⇒ 200, main row published with 1 upload node (no `required` error)", [
+        c.status, ed.bodyEditable, pub.status, main.workflowStatus, uploadCount(main.body),
+      ], [201, true, 200, "published", 1]);
+      // videoMedia upload node + a deleted media: the token export throws ⇒ default export, bodyEditable false, 0 integration_error.
+      const v1 = await mkDraft("gcv");
+      await tamper8(v1, { body: lexOf([paraNode("Video body."), { ...upNode(m1, 0), relationTo: "videoMedia" }]) });
+      const vr = (await getEdit(v1, "gcv")).body;
+      const gone = await localMedia("gcv", "P7 gone");
+      const d1 = await mkDraft("gcv");
+      await tamper8(d1, { body: lexOf([paraNode("Deleted media body."), upNode(gone, 0), paraNode("End.")]) });
+      await payload.delete({ collection: "media", id: gone, overrideAccess: true, context: { disableRevalidate: true } });
+      const dr = (await getEdit(d1, "gcv")).body;
+      console.log(`OBS   P7 deleted media: bodyEditable=${String(((dr.edit ?? {}) as Doc).bodyEditable)} bodyMarkdown=${JSON.stringify(((dr.article ?? {}) as Doc).bodyMarkdown)} bodyMedia=${JSON.stringify(((dr.edit ?? {}) as Doc).bodyMedia)}`);
+      expect("P7-4: (T9) body with a videoMedia upload node ⇒ editable, bodyEditable false, bodyMarkdown from the DEFAULT export (no cms-media token), bodyState ok", [
+        ((vr.edit ?? {}) as Doc).editable, ((vr.edit ?? {}) as Doc).bodyEditable, String(((vr.article ?? {}) as Doc).bodyMarkdown).includes("cms-media:"), ((vr.article ?? {}) as Doc).bodyState,
+      ], [true, false, false, "ok"]);
+      expect("P7-5: (T9) body whose media was deleted ⇒ bodyEditable false (a save could only fail), no token for the deleted id", [
+        ((dr.edit ?? {}) as Doc).bodyEditable, String(((dr.article ?? {}) as Doc).bodyMarkdown).includes(`cms-media:${gone}`),
+      ], [false, false]);
+      expect("P7-6: the P7 reads / writes wrote 0 integration_error rows", (await interr()) - i0, 0);
+    }
+
+    if (want("K4")) {
+      // D7: the cron's non-draft update must accept a body with an upload node.
+      const c = await post(full(`K4 intro.\n\n${tokLine(m1)}\n\nK4 outro.`));
+      const id = c.body.id as number;
+      const n0 = uploadCount((await latestDoc(id)).body);
+      expect("K4-0: the draft tree really holds an upload node BEFORE scheduling", [c.status, n0 >= 1], [201, true]);
+      const ev = ((await getEdit(id, "gcv")).body.edit as Doc).version;
+      const at = new Date(Math.ceil((Date.now() + 2 * 3600_000) / 60_000) * 60_000).toISOString();
+      const sc = await send(`/api/hub/articles/${id}/schedule`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tenant: "gcv", expectedVersion: ev, actor: P8_HUMAN, scheduledFor: at }) }, writeTok);
+      const raw = await latestDoc(id);
+      let cronUpdate: unknown = "ok";
+      try {
+        // EXACTLY the update of src/app/api/cron/publish-scheduled/route.ts (one article only, no global cron run).
+        await payload.update({ collection: "articles", id, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: raw.publishedAt ?? raw.scheduledFor ?? new Date().toISOString() } as never });
+      } catch (e) {
+        cronUpdate = { name: (e as Error).name, message: (e as Error).message.slice(0, 300) };
+      }
+      const main = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      console.log(`OBS   K4 cron-style non-draft update: ${JSON.stringify(cronUpdate)}`);
+      expect("K4-1: (D7) schedule ⇒ 200 scheduled; the cron's non-draft update ACCEPTS the upload node: main row published, upload node kept", [
+        sc.status, raw.workflowStatus, cronUpdate, main.workflowStatus, main._status, uploadCount(main.body),
+      ], [200, "scheduled", "ok", "published", "published", n0]);
+    }
+  }
+
+  if (want("P1")) await check8P1(expect, payload);
+
+  console.log(`\n[check8] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(state.failures === 0 ? 0 : 1);
+}
+
+/**
+ * P1 (step 1.6, plan §5.1): the candidate token module + the REAL Lexical
+ * converters of this CMS, run inside `runWithHardTimeout` (no DB, no async inside).
+ * Prints PASS/FAIL per criterion (i)–(iv) for branch B, the branch-A observation
+ * and the T8 (a) vectors. NOT wired into the write path yet (that is 2.2).
+ */
+async function check8P1(expect: (label: string, actual: unknown, wanted: unknown) => void, payload: P): Promise<void> {
+  const tokenMod = await import("../src/lib/hub-author-media-token");
+  const coreMod = await import("../src/lib/hub-author-convert-core");
+  const bodyMod = await import("../src/lib/hub-author-body");
+  const mdMod = await import("../src/lib/hub-article-markdown");
+  const cfg = (await mdMod.loadHubEditorConfig(payload.config)) as Parameters<typeof coreMod.lexicalConverters>[0];
+  const real = coreMod.lexicalConverters(cfg);
+  const conv = tokenMod.mediaTokenConverters(real);
+  const kids = (lex: unknown) => (((lex as Doc).root as Doc)?.children ?? []) as Doc[];
+  const obs8 = (label: string, v: unknown) => console.log(`OBS   ${label}  ${JSON.stringify(v)}`);
+
+  const MD0 = "Intro paragraph.\n\n![any typed alt](cms-media:5)\n\nOutro paragraph.";
+  const MD1 = "Intro paragraph.\n\n![](cms-media:5)\n\nOutro paragraph.";
+  type P1Out = { types: string[]; up: Doc | null; md0Out: string; md1Out: string; md2: string; equal: boolean; equalRaw: boolean; populated: string; tokenAltInMd1: boolean };
+  const p1 = (a: { conv: typeof conv; real: typeof real; MD0: string; MD1: string; lte: typeof coreMod.lexicalTreesEqual }): P1Out => {
+    const lex0 = a.conv.toLexical(a.MD0) as Doc;
+    const ks = ((lex0.root as Doc).children as Doc[]) ?? [];
+    const up = ks.find((n) => n.type === "upload") ?? null;
+    const md0Out = a.conv.toMarkdown(lex0);
+    const lex1 = a.conv.toLexical(a.MD1);
+    const md1Out = a.conv.toMarkdown(lex1);
+    const lex2 = a.conv.toLexical(md1Out);
+    const md2 = a.conv.toMarkdown(lex2);
+    const populated = (lex1 as Doc);
+    const popKids = (((populated.root as Doc).children as Doc[]) ?? []).map((n) => (n.type === "upload" ? { ...n, value: { id: 5, url: "/api/media/file/x.png", alt: "pop alt", mimeType: "image/png", filename: "x.png" } } : n));
+    const popLex = { ...populated, root: { ...(populated.root as Doc), children: popKids } };
+    return {
+      types: ks.map((n) => String(n.type)),
+      up: up ? { type: up.type, relationTo: up.relationTo, value: up.value } : null,
+      md0Out,
+      md1Out,
+      md2,
+      equal: a.lte(lex1, lex2),
+      equalRaw: JSON.stringify(lex1) === JSON.stringify(lex2),
+      populated: a.conv.toMarkdown(popLex),
+      tokenAltInMd1: md0Out.includes("any typed alt"),
+    };
+  };
+  let r: P1Out | null = null;
+  let err: unknown = null;
+  try {
+    r = bodyMod.runWithHardTimeout(p1, { conv, real, MD0, MD1, lte: coreMod.lexicalTreesEqual }, 5000);
+  } catch (e) {
+    err = e;
+  }
+  obs8("P1 raw result", r ?? { error: (err as Error | null)?.message ?? String(err) });
+  const i = r !== null && r.types.join(",") === "paragraph,upload,paragraph" && JSON.stringify(r.up) === JSON.stringify({ type: "upload", relationTo: "media", value: 5 });
+  const ii = r !== null && r.md0Out === MD1 && !r.tokenAltInMd1;
+  const iii = r !== null && r.md1Out === MD1 && r.md2 === MD1 && r.equal && r.populated === MD1;
+  const iv = r !== null && err === null;
+  expect("P1 (i) `![<any alt>](cms-media:5)` imports to upload{relationTo:media, value:5} as a root child", i, true);
+  expect("P1 (ii) export is the canonical `![](cms-media:5)` (typed alt not re-emitted)", ii, true);
+  expect("P1 (iii) md1 → lex → md1 identical; lexicalTreesEqual(lex1, lex2) true; populated value exports the same string", iii, true);
+  expect("P1 (iv) ran entirely inside runWithHardTimeout (vm, sync, no DB)", iv, true);
+  console.log(`OBS   P1 VERDICT branch B: ${i && ii && iii && iv ? "VALID (all 4 criteria)" : "NOT valid"}`);
+  // E4 note: the CURRENT comparator does not look at value / relationTo (COMPARED_KEYS).
+  const changedId = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 6, format: "" }] } };
+  const sameId = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 5, format: "" }] } };
+  const popSame = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: { id: 5, url: "/x" }, format: "", id: "ffffffffffffffffffffffff" }] } };
+  const otherRel = { root: { type: "root", children: [{ type: "upload", relationTo: "videoMedia", value: 5, format: "" }] } };
+  expect("P1 (E4) lexicalTreesEqual: upload 5 vs 6 ⇒ false (a changed image IS a change); number 5 vs populated {id:5} with another node id ⇒ true; media vs videoMedia ⇒ false", [
+    coreMod.lexicalTreesEqual(sameId, changedId), coreMod.lexicalTreesEqual(sameId, popSame), coreMod.lexicalTreesEqual(sameId, otherRel),
+  ], [false, true, false]);
+  const ck = (n: Doc) => coreMod.checkLexicalTree({ root: { type: "root", children: [n] } });
+  expect("P1 checkLexicalTree: {upload, relationTo:media, value:1} ⇒ ok; videoMedia / no relationTo / value 0 / value object / value \"1\" ⇒ node", [
+    ck({ type: "upload", relationTo: "media", value: 1 }).ok, ck({ type: "upload", relationTo: "videoMedia", value: 1 }), ck({ type: "upload", value: 1 }),
+    ck({ type: "upload", relationTo: "media", value: 0 }), ck({ type: "upload", relationTo: "media", value: { id: 1 } }), ck({ type: "upload", relationTo: "media", value: "1" }),
+  ], [true, { ok: false, code: "node" }, { ok: false, code: "node" }, { ok: false, code: "node" }, { ok: false, code: "node" }, { ok: false, code: "node" }]);
+  // 2.2: the REAL write path (convertBodyGuarded = hubBodyConverters in ONE vm call) and round-trip.
+  const g = bodyMod.convertBodyGuarded(cfg as never, MD0);
+  const gl = (g as { lexical?: unknown }).lexical;
+  expect("P1 (2.2) convertBodyGuarded(real) on `![typed](cms-media:5)`: ok, stored tree = paragraph, upload{media,5}, paragraph; markdownOut canonical; isRoundTripSafeBody(stored) and (populated) true", [
+    g.ok, g.ok ? kids(gl).map((n) => String(n.type)) : null, g.ok ? (g as { markdownOut: string }).markdownOut : null,
+    g.ok && bodyMod.isRoundTripSafeBody(cfg as never, gl),
+    g.ok && bodyMod.isRoundTripSafeBody(cfg as never, { ...(gl as Doc), root: { ...((gl as Doc).root as Doc), children: kids(gl).map((n) => (n.type === "upload" ? { ...n, value: { id: 5, url: "/x" } } : n)) } }),
+  ], [true, ["paragraph", "upload", "paragraph"], MD1, true, true]);
+  const fence4 = "````\n```\n\n![](cms-media:5)\n\n```\n````";
+  expect("P1 (review-1 M1) token inside a 4-backtick fence: no token id, pure check says image (validateBodyPure), never reaches conversion", [tokenMod.extractMediaIds(fence4), bodyMod.validateBodyPure(fence4)], [[], { ok: false, code: "image" }]);
+  const refsMod = await import("../src/lib/hub-author-refs");
+  const lexIds = (ids: unknown[]) => ({ root: { type: "root", children: ids.map((v) => ({ type: "upload", relationTo: "media", value: v })) } });
+  expect("P1 (T8 c) bodyMediaIdsMatch: equal set ⇒ true (order / duplicates free); extra / missing / malformed id ⇒ false", [
+    refsMod.bodyMediaIdsMatch(lexIds([5, 9, 5]), ["9", "5"]), refsMod.bodyMediaIdsMatch(lexIds([5, 9]), ["5"]), refsMod.bodyMediaIdsMatch(lexIds([5]), ["5", "9"]),
+    refsMod.bodyMediaIdsMatch(lexIds([null]), []), refsMod.bodyMediaIdsMatch(lexIds([]), []),
+  ], [true, false, false, false, true]);
+
+  // Branch A: does a plain Markdown image with a CMS media URL import as an upload node with an id, without DB?
+  let aTypes: unknown = null;
+  try {
+    aTypes = bodyMod.runWithHardTimeout((a: { real: typeof real }) => {
+      const lex = a.real.toLexical("Intro.\n\n![alt](/api/media/file/hub-x.png)\n\nOutro.") as Doc;
+      return (((lex.root as Doc).children as Doc[]) ?? []).map((n) => ({ type: n.type, kids: ((n.children as Doc[]) ?? []).map((c) => c.type) }));
+    }, { real }, 5000);
+  } catch (e) {
+    aTypes = { error: (e as Error).message };
+  }
+  const aValid = JSON.stringify(aTypes).includes('"upload"');
+  obs8("P1 branch A: real import of `![alt](/api/media/file/hub-x.png)` (node types)", aTypes);
+  console.log(`OBS   P1 VERDICT branch A: ${aValid ? "imports an upload node (check id)" : "NOT valid (no upload node from a URL image)"}`);
+  // Payload's own transformer (observation only): `![media:5]()` placeholder round-trip.
+  try {
+    const nat = bodyMod.runWithHardTimeout((a: { real: typeof real }) => {
+      const lex = a.real.toLexical("![media:5]()") as Doc;
+      return { kids: (((lex.root as Doc).children as Doc[]) ?? []).map((n) => ({ type: n.type, relationTo: n.relationTo, value: n.value })), back: a.real.toMarkdown(lex) };
+    }, { real }, 5000);
+    obs8("P1 native Payload placeholder `![media:5]()` (UploadMarkdownTransformer, not used by the plan)", nat);
+  } catch (e) {
+    obs8("P1 native placeholder threw", (e as Error).message);
+  }
+
+  // T8 (a) vectors on the module: non-token forms ⇒ not a token ⇒ the generic image check still says `image`.
+  const isImg = (md: string) => tokenMod.withoutMediaTokenLines(md).includes("![");
+  const vec: Record<string, string> = {
+    "mid-sentence": "Text ![](cms-media:5) text", list: "- ![](cms-media:5)", quote: "> ![](cms-media:5)", heading: "## ![](cms-media:5)",
+    "link label": "[![](cms-media:5)](https://x.test)", "wrapped in link": "[x](https://x.test) ![](cms-media:5)", "two tokens": "![](cms-media:5)![](cms-media:6)",
+    reference: "![a][r]\n\n[r]: cms-media:1", title: '![](cms-media:5 "t")', "code span": "`![](cms-media:5)`", "id 0": "![](cms-media:0)", "id 01": "![](cms-media:01)",
+    "list + 2-space indent": "- item\n\n  ![](cms-media:5)", "fence w/ blank line": "```\n\n![](cms-media:5)\n\n```", "CRLF mid-body": "A.\r\n\r\n![](cms-media:5)\r\n\r\nB.",
+    "U+2028 after": "A.\n\n![](cms-media:5) \n\nB.", "U+2029 after": "A.\n\n![](cms-media:5) \n\nB.", "indent 1": "A.\n\n ![](cms-media:5)\n\nB.",
+    "indent 3": "A.\n\n   ![](cms-media:5)\n\nB.", "indent 4": "A.\n\n    ![](cms-media:5)\n\nB.", "alt with ]": "![a]b](cms-media:5)",
+  };
+  const bad = Object.entries(vec).filter(([, md]) => tokenMod.extractMediaIds(md).length !== 0 || !isImg(md)).map(([k]) => k);
+  expect(`P1 T8(a): ${Object.keys(vec).length} non-token vectors ⇒ no token id, still \`image\``, bad, []);
+  // Review-3 M1: Lexical joins a spaces/tabs-only line to the token's paragraph, so the tracker
+  // must NOT treat it as blank (else: a DB lookup, then a generic 422 node). Real converter shown too.
+  const wsNb = ["A.\n  \n![](cms-media:5)\n\nB.", "A.\n\n![](cms-media:5)\n  \nB.", "A.\n\t\n![](cms-media:5)\n\nB."];
+  expect("P1 T8(a): (review-3 M1) neighbour line of only spaces / tabs (before, after, tab) ⇒ NOT a token, pure check says image; strictly empty neighbours ⇒ token", [
+    wsNb.map((md) => [tokenMod.extractMediaIds(md), bodyMod.validateBodyPure(md)]), tokenMod.extractMediaIds("A.\n\n![](cms-media:5)\n\nB."),
+  ], [wsNb.map(() => [[], { ok: false, code: "image" }]), ["5"]]);
+  const wsLex = bodyMod.runWithHardTimeout((a: { real: typeof real }) => (((a.real.toLexical("A.\n  \n\u0002x\n\nB.") as Doc).root as Doc).children as Doc[]).length, { real }, 5000);
+  obs8("P1 review-3 M1: real importer root paragraphs of `A.\\n  \\n<line>\\n\\nB.` (whitespace line joins the next line)", wsLex);
+  expect("P1 T8(a): `!\\[` (escaped) is plain text: no token, no `![`", [tokenMod.extractMediaIds("!\\[](cms-media:5)"), isImg("!\\[](cms-media:5)")], [[], false]);
+  const d11 = "1".repeat(11), d20 = "9".repeat(20), d400 = "7".repeat(400);
+  expect("P1 ids above int4 (11 / 20 / 400 digits) keep the token shape (pass the image check; refs must report out_of_range at 2.2)", [tokenMod.extractMediaIds(`![](cms-media:${d11})\n\n![](cms-media:${d20})\n\n![](cms-media:${d400})`).map((s) => s.length), isImg(`![](cms-media:${d400})`)], [[11, 20, 400], false]);
+  const lex2 = { root: { type: "root", children: [{ type: "upload", relationTo: "media", value: 5 }, { type: "upload", relationTo: "media", value: 9 }] } };
+  const checked = new Set(["5"]);
+  const outside = tokenMod.uploadIdsInTree(lex2).filter((x) => !checked.has(x));
+  expect("P1 lex2 holds an upload id outside the tenant-checked set ⇒ detected (would be unknown_ref at 2.2)", outside, ["9"]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APCGHub P5.4 (--setup9 / --check9) — live edit of a published hub article:
+// `PATCH /api/hub/articles/{id}/live` + the `edit.live` block of `view=edit`.
+// LOCAL DISPOSABLE POSTGRES + LOCAL SERVER ONLY: `guard9` (assertLocalTargets +
+// assertNoR2 + assertLocalDb) runs FIRST in every mode, `--unit-only` included,
+// before any DB / HTTP call (exit 2, "refusing").
+//
+//   npx tsx scripts/hub-probe.ts --setup9 --in <f6> --out <f9>
+//       reuses the --setup6 engines (writeonly = the hub write key, author = the
+//       author key); creates the fixtures (a)–(r) of the plan §5 step 1 through the
+//       real routes (/api/hub/articles, /publish, /schedule, /status, /api/hub/media)
+//       and the Local API; tenant p54-hook (frontendUrl = the fake webhook server on
+//       127.0.0.1:$P54_HOOK_PORT, default 3599); grants of writeonly / author / both /
+//       writenoread = every fixture tenant except `wad` (the out-of-grant control).
+//       The server must run with HUB_LIVE_EDIT_TENANTS = dtw,gcv,world-travel-brief,p54-hook
+//       (brief-asia = the switch-off control) and a test CENTRAL_SIGNING_SECRET / CRON_SECRET.
+//   npx tsx scripts/hub-probe.ts --check9 --unit-only
+//   npx tsx scripts/hub-probe.ts --check9 --in <f9>            (23 groups; never --only in a gate run)
+//       re-applies the fixture grants at the start and restores the --setup6 grants of
+//       writeonly / author in `finally` (FIN-2); prints `groups executed N/23, skipped M`
+//       and exits ≠ 0 unless all 23 groups ran and passed. `P54_SELFTEST_DROP_GROUP=<g>`
+//       drops one group (self-test of the counter only).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const P9_GROUPS = ["P1", "P2", "P3", "P3b", "P3c", "P3d", "P4", "P4b", "P5", "P6", "P7", "P8", "P8b", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16", "P17", "P18"] as const;
+const P9_ACTOR = { email: "p9@example.invalid", role: "editor", id: "hub-user-9" } as const;
+const P9_LIVE_TENANTS = ["dtw", "gcv", "world-travel-brief", "p54-hook"] as const;
+const P9_HOOK_TENANT = "p54-hook";
+const P9_CONTROL_TENANT = "brief-asia";
+const P9_OUT_OF_GRANT = "wad";
+const P9_FIXTURE_TENANTS = ["dtw", "gcv", "world-travel-brief", P9_HOOK_TENANT, P9_CONTROL_TENANT] as const;
+type P9Article = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "k" | "l" | "m" | "n";
+
+interface Setup9 {
+  version: 1;
+  setup6: string;
+  out: string;
+  hookPort: number;
+  liveTenants: string[];
+  controlTenant: string;
+  outOfGrantTenant: string;
+  hookTenant: string;
+  translationTenant: string;
+  plainTenant: string;
+  tenants: Record<string, number>;
+  engines: Record<"both" | "writenoread", { id: number; name: string; tokenFile: string }>;
+  originalGrants: Record<"writeonly" | "author", number[]>;
+  fixtureGrant: number[];
+  fixtures: Record<string, { pillar: string; pillarOther: string | null; sub: string | null; tags: string[]; cities: string[]; authors: number[] }>;
+  articles: Record<P9Article, { id: number; tenant: string; slug: string }>;
+  media: { h: number; spare: number; hFile: string };
+  publicReadTokenFile: Record<string, string>;
+}
+
+function guard9(): void {
+  assertLocalTargets();
+  assertNoR2("probe9");
+  try {
+    assertLocalDb(process.env.DATABASE_URL);
+  } catch (e) {
+    refuseLocalDb6(e);
+  }
+}
+
+type Reply9 = { status: number; text: string; body: Doc; ms: number };
+
+async function call9(method: string, path: string, body: unknown, token: string | null, raw?: string): Promise<Reply9> {
+  const t0 = performance.now();
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { ...(body !== undefined || raw !== undefined ? { "content-type": "application/json" } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const text = await res.text();
+  let parsed: Doc = {};
+  try {
+    parsed = JSON.parse(text) as Doc;
+  } catch {
+    /* non-JSON */
+  }
+  return { status: res.status, text, body: parsed, ms: Math.round(performance.now() - t0) };
+}
+
+const P9_PNG = async (r: number) => {
+  const sharp = await loadSharp8();
+  return sharp({ create: { width: 64, height: 48, channels: 3, background: { r, g: 120, b: 160 } } }).png().toBuffer();
+};
+
+async function setup9() {
+  guard9();
+  const inFile = arg("in");
+  const out = arg("out");
+  if (!inFile || !out) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup9 --in <file from --setup6> --out <f9>");
+    process.exit(2);
+  }
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const payload = await getPayload({ config });
+  const tenants = await tenantsBySlug(payload);
+  const hookPort = Number(process.env.P54_HOOK_PORT ?? 3599);
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const author = tok(s6.engines.author.tokenFile);
+  const write = tok(s6.engines.writeonly.tokenFile);
+
+  // (j) the webhook tenant (created once; frontendUrl = the fake webhook server).
+  if (!tenants.has(P9_HOOK_TENANT)) {
+    const t = (await payload.create({
+      collection: "tenants",
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { name: "P54 Hook", slug: P9_HOOK_TENANT, status: "active", defaultLanguage: "en", supportedLanguages: ["en"], frontendUrl: `http://127.0.0.1:${hookPort}`, features: { articles: true, translations: false } } as never,
+    })) as unknown as { id: number };
+    tenants.set(P9_HOOK_TENANT, t.id);
+  } else {
+    await payload.update({ collection: "tenants", id: tenants.get(P9_HOOK_TENANT)!, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: `http://127.0.0.1:${hookPort}` } as never });
+  }
+  // Every tenant's frontendUrl must be null or a local 127.0.0.1 address BEFORE any article is created.
+  const allT = (await payload.find({ collection: "tenants", limit: 100, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+  const badUrl = allT.filter((t) => t.frontendUrl != null && t.frontendUrl !== "" && !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(String(t.frontendUrl)));
+  if (badUrl.length) {
+    console.error(`[setup9] refusing: tenant frontendUrl not local: ${badUrl.map((t) => t.slug).join(", ")}`);
+    process.exit(2);
+  }
+  const tid = (s: string) => need(tenants, s);
+  const fixtureGrant = P9_FIXTURE_TENANTS.map((s) => tid(s));
+  if (fixtureGrant.includes(tid(P9_OUT_OF_GRANT))) throw new Error("fixture grant must exclude wad");
+
+  // (r) grants: writeonly / author (originals recorded), (o) both, (p) writenoread.
+  const grantOf = async (id: number) => (((await payload.findByID({ collection: "content-engines", id, depth: 0, overrideAccess: true })) as unknown as Doc).allowedTenants as unknown[] ?? []).map((x) => Number(toId6(x)));
+  const originalGrants = { writeonly: await grantOf(s6.engines.writeonly.id), author: await grantOf(s6.engines.author.id) };
+  const prev = existsSyncSafe(out) ? (JSON.parse(readFileSync(out, "utf8")) as Partial<Setup9>) : null;
+  if (prev?.originalGrants) Object.assign(originalGrants, prev.originalGrants);
+  const engines = {} as Setup9["engines"];
+  for (const [key, flags] of [["both", { hubRead: true, hubWrite: true, hubAuthor: true }], ["writenoread", { hubRead: false, hubWrite: true, hubAuthor: false }]] as const) {
+    const name = `apcghub-p54-${key}`;
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", allowedTenants: fixtureGrant, ...flags };
+    let id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else id = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", allowedActions: ["import"], ...data } as never })) as unknown as { id: number }).id;
+    const tokenFile = `${out}.${key}.token`;
+    writeFileSync(tokenFile, token, { mode: 0o600 });
+    engines[key] = { id, name, tokenFile };
+  }
+  for (const id of [s6.engines.writeonly.id, s6.engines.author.id]) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: { allowedTenants: fixtureGrant } as never });
+  const readBack = [await grantOf(s6.engines.writeonly.id), await grantOf(s6.engines.author.id), await grantOf(engines.both.id), await grantOf(engines.writenoread.id)].map((g) => [...g].sort((x, y) => x - y));
+  const want = [...fixtureGrant].sort((x, y) => x - y);
+  if (!readBack.every((g) => JSON.stringify(g) === JSON.stringify(want))) throw new Error(`grant read-back mismatch: ${JSON.stringify(readBack)}`);
+
+  // Taxonomy on the two new fixture tenants (dtw / gcv / wtb come from --setup6).
+  const fixtures: Setup9["fixtures"] = {};
+  for (const slug of ["dtw", "gcv", "world-travel-brief"] as const) {
+    const f = s6.fixtures[slug]!;
+    fixtures[slug] = { pillar: "p6-main", pillarOther: "p6-other", sub: "p6-sub", tags: f.tags, cities: f.cities, authors: f.authors };
+  }
+  for (const slug of [P9_HOOK_TENANT, P9_CONTROL_TENANT] as const) {
+    const id = tid(slug);
+    await ensurePillar(payload, id, "p9-main", "P9 Main", 95);
+    const a1 = await ensureAuthor(payload, id, "p9-author-1", "P9 Author One");
+    fixtures[slug] = { pillar: "p9-main", pillarOther: null, sub: null, tags: [], cities: [], authors: [a1] };
+  }
+
+  // Public read tokens (probe9, sha256 stored, raw in 0600 files).
+  const publicReadTokenFile: Record<string, string> = {};
+  for (const slug of P9_FIXTURE_TENANTS) {
+    const id = tid(slug);
+    const t = randomBytes(24).toString("hex");
+    const tDoc = (await payload.findByID({ collection: "tenants", id, depth: 0, overrideAccess: true })) as unknown as Doc;
+    const rest = ((tDoc.readTokens as Doc[] | undefined) ?? []).filter((r) => r.label !== "probe9");
+    await payload.update({ collection: "tenants", id, overrideAccess: true, context: { disableRevalidate: true }, data: { readTokens: [...rest, { label: "probe9", tokenHash: sha256Hex6(t), tokenPrefix: t.slice(0, 6), status: "active" }] } as never });
+    const f = `${out}.public-${slug}.token`;
+    writeFileSync(f, t, { mode: 0o600 });
+    publicReadTokenFile[slug] = f;
+  }
+
+  const run = runId6();
+  let seq = 0;
+  const draft = async (tenant: string, extra: Doc = {}) => {
+    const fx = fixtures[tenant]!;
+    const slug = `p9-${run}-${seq++}`;
+    const r = await call9("POST", "/api/hub/articles", {
+      tenant, title: `P9 ${tenant} ${slug}`, slug, actor: P9_ACTOR, pillarSlug: fx.pillar, ...(fx.sub ? { subSectionSlug: fx.sub } : {}), authorId: fx.authors[0],
+      bodyMarkdown: "P9 fixture body: a published hub article.", ...extra,
+    }, author);
+    if (r.status !== 201) throw new Error(`setup9 draft ${tenant} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return { id: r.body.id as number, version: r.body.version as number, slug, tenant };
+  };
+  const publish = async <D extends { id: number; version: number; tenant: string }>(d: D): Promise<D> => {
+    const r = await call9("POST", `/api/hub/articles/${d.id}/publish`, { tenant: d.tenant, expectedVersion: d.version, actor: P9_ACTOR }, write);
+    if (r.status !== 200) throw new Error(`setup9 publish ${d.id} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return d;
+  };
+  const latestV = async (id: number) => ((await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true })) as unknown as Doc).version as number;
+  const arts = {} as Setup9["articles"];
+  const keep = (k: P9Article, d: { id: number; tenant: string; slug: string }) => {
+    arts[k] = { id: d.id, tenant: d.tenant, slug: d.slug };
+  };
+  const hubCtx = { hubWrite: { actor: P9_ACTOR, reason: "probe9 fixture" }, engineId: s6.engines.writeonly.id, disableRevalidate: true };
+
+  keep("a", await publish(await draft("gcv")));
+  const b = await publish(await draft("gcv"));
+  await payload.update({ collection: "articles", id: b.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: "P9 B SECRET DRAFT TITLE" } as never });
+  keep("b", b);
+  const c = await draft("gcv");
+  const at = new Date(Math.ceil((Date.now() + 120 * 60_000) / 60_000) * 60_000).toISOString();
+  const cs = await call9("POST", `/api/hub/articles/${c.id}/schedule`, { tenant: "gcv", expectedVersion: c.version, actor: P9_ACTOR, scheduledFor: at }, write);
+  if (cs.status !== 200) throw new Error(`setup9 schedule (c) ⇒ ${cs.status} ${cs.text.slice(0, 200)}`);
+  keep("c", c);
+  const d = await publish(await draft("gcv"));
+  await payload.update({ collection: "articles", id: d.id, overrideAccess: true, depth: 0, context: hubCtx, data: { workflowStatus: "hidden" } as never });
+  keep("d", d);
+  const e = await publish(await draft("gcv"));
+  const es = await call9("POST", `/api/hub/articles/${e.id}/status`, { tenant: "gcv", to: "archived", expectedStatus: "published", reason: "probe9 hide", actor: P9_ACTOR }, write);
+  if (es.status !== 200) throw new Error(`setup9 hide (e) ⇒ ${es.status} ${es.text.slice(0, 200)}`);
+  keep("e", e);
+  const fSlug = `p9-${run}-engine`;
+  const fr = await call9("POST", "/api/engine/intake", { publicationId: "dtw", title: `P9 engine ${run}`, pillarSlug: "p6-main", body_markdown: "P9 engine body.", byline: "P9 Engine Byline", slug: fSlug, engineDraftId: `p9-eng-${run}` }, process.env.SEED_ENGINE_TOKEN ?? null);
+  if (fr.status !== 201) throw new Error(`setup9 intake (f) ⇒ ${fr.status} ${fr.text.slice(0, 200)}`);
+  arts.f = { id: fr.body.id as number, tenant: "dtw", slug: fSlug };
+  const gSlug = `p9-${run}-cmshand`;
+  const g = (await payload.create({
+    collection: "articles", overrideAccess: true, locale: "en", context: { disableRevalidate: true },
+    data: { tenant: tid("gcv"), title: `P9 CMS hand ${run}`, slug: gSlug, origin: "manual", _status: "published", workflowStatus: "published", pillar: (await ensurePillar(payload, tid("gcv"), "p6-main", "P6 Main", 90)), author: fixtures.gcv!.authors[0], readMin: 2, body: { root: { type: "root", version: 1, direction: "ltr", format: "", indent: 0, children: [{ type: "paragraph", version: 1, direction: "ltr", format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: "CMS hand body.", format: 0, detail: 0, mode: "normal", style: "" }] }] } } } as never,
+  })) as unknown as { id: number };
+  arts.g = { id: g.id, tenant: "gcv", slug: gSlug };
+  // (h) published with a body image (P5.3 media route) + one spare media of gcv not in the body.
+  const hd = await draft("gcv");
+  const mpH = await multipart8([["file", { data: await P9_PNG(10), type: "image/png" }], ["alt", "P9 alt"], ["articleId", String(hd.id)], ["actorRole", "editor"], ["actorId", "hub-user-9"]]);
+  const mh = await fetch(`${BASE}/api/hub/media?tenant=gcv`, { method: "POST", headers: { "content-type": mpH.type, "content-length": String(mpH.body.length), authorization: `Bearer ${author}` }, body: new Uint8Array(mpH.body) });
+  const mhBody = (await mh.json()) as Doc;
+  if (mh.status !== 201) throw new Error(`setup9 media (h) ⇒ ${mh.status} ${JSON.stringify(mhBody).slice(0, 200)}`);
+  const mpS = await multipart8([["file", { data: await P9_PNG(200), type: "image/png" }], ["alt", "P9 spare"], ["articleId", String(hd.id)], ["actorRole", "editor"], ["actorId", "hub-user-9"]]);
+  const ms = await fetch(`${BASE}/api/hub/media?tenant=gcv`, { method: "POST", headers: { "content-type": mpS.type, "content-length": String(mpS.body.length), authorization: `Bearer ${author}` }, body: new Uint8Array(mpS.body) });
+  const msBody = (await ms.json()) as Doc;
+  if (ms.status !== 201) throw new Error(`setup9 media (spare) ⇒ ${ms.status}`);
+  const media = mhBody.media as Doc;
+  const mUrl = String(media.url ?? "");
+  const mRow = (await rawDb(payload).execute(sql`SELECT filename FROM media WHERE id = ${media.id as number}`)) as { rows?: Doc[] };
+  const hFile = String(mRow.rows?.[0]?.filename ?? "");
+  if (!mUrl.startsWith("/api/media/file/") || !hFile || !existsSyncSafe(`media/${hFile}`)) {
+    console.error(`[setup9] refusing: fixture (h) media is not on local disk (url=${mUrl.slice(0, 40)}, file=${hFile ? "named" : "none"}) — R2 must be off`);
+    process.exit(2);
+  }
+  const hv = await latestV(hd.id);
+  const hp = await call9("PATCH", `/api/hub/articles/${hd.id}`, { tenant: "gcv", expectedVersion: hv, actor: P9_ACTOR, bodyMarkdown: `P9 image intro.\n\n![](cms-media:${media.id as number})\n\nP9 image outro.` }, author);
+  if (hp.status !== 200) throw new Error(`setup9 (h) body ⇒ ${hp.status} ${hp.text.slice(0, 200)}`);
+  keep("h", await publish({ ...hd, version: hp.body.version as number }));
+  keep("i", await publish(await draft("world-travel-brief", fixtures["world-travel-brief"]!.cities.length ? { citySlugs: fixtures["world-travel-brief"]!.cities } : {})));
+  // (k) scheduled, then published with EXACTLY the cron's update (scheduledFor stays).
+  const k = await draft("gcv");
+  const ks = await call9("POST", `/api/hub/articles/${k.id}/schedule`, { tenant: "gcv", expectedVersion: k.version, actor: P9_ACTOR, scheduledFor: at }, write);
+  if (ks.status !== 200) throw new Error(`setup9 schedule (k) ⇒ ${ks.status}`);
+  const kRaw = (await payload.findByID({ collection: "articles", id: k.id, draft: true, depth: 0, overrideAccess: true })) as unknown as Doc;
+  await payload.update({ collection: "articles", id: k.id, overrideAccess: true, data: { _status: "published", workflowStatus: "published", publishedAt: kRaw.publishedAt ?? kRaw.scheduledFor ?? new Date().toISOString() } as never });
+  keep("k", k);
+  // (l) published with a body node that is not Markdown (relationship).
+  const l = await draft("gcv");
+  await payload.update({
+    collection: "articles", id: l.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true },
+    data: { body: { root: { type: "root", version: 1, direction: "ltr", format: "", indent: 0, children: [{ type: "paragraph", version: 1, direction: "ltr", format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: "Relation:", format: 0, detail: 0, mode: "normal", style: "" }] }, { type: "relationship", format: "", version: 2, relationTo: "articles", value: arts.a.id }] } } } as never,
+  });
+  keep("l", await publish({ ...l, version: await latestV(l.id) }));
+  keep("m", await publish(await draft(P9_CONTROL_TENANT)));
+  keep("n", await draft("gcv"));
+
+  const f9: Setup9 = {
+    version: 1, setup6: inFile, out, hookPort, liveTenants: [...P9_LIVE_TENANTS], controlTenant: P9_CONTROL_TENANT, outOfGrantTenant: P9_OUT_OF_GRANT,
+    hookTenant: P9_HOOK_TENANT, translationTenant: "world-travel-brief", plainTenant: "gcv",
+    tenants: Object.fromEntries([...P9_FIXTURE_TENANTS, P9_OUT_OF_GRANT].map((s) => [s, tid(s)])),
+    engines, originalGrants, fixtureGrant, fixtures, articles: arts, media: { h: media.id as number, spare: (msBody.media as Doc).id as number, hFile }, publicReadTokenFile,
+  };
+  writeFileSync(out, JSON.stringify(f9, null, 2), { mode: 0o600 });
+  console.log(`[setup9] wrote ${out} (fixtures a–n, engines both / writenoread, grants = ${P9_FIXTURE_TENANTS.join(",")}; ${P9_OUT_OF_GRANT} out of grant; ${P9_CONTROL_TENANT} = switch-off control; tokens in 0600 files, not printed)`);
+  process.exit(0);
+}
+
+function existsSyncSafe(p: string): boolean {
+  try {
+    readFileSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── --check9 --unit-only ─────────────────────────────────────────────────────
+
+async function check9Unit(expect: (label: string, actual: unknown, wanted: unknown) => void): Promise<void> {
+  const purem = await import("../src/lib/hub-author-live-pure");
+  const input = await import("../src/lib/hub-author-input");
+  const limits = await import("../src/lib/hub-author-limits");
+  const core = await import("../src/lib/hub-author-live-core");
+  expect("U-1: HUB_LIVE_FIELD_KEYS = HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption (15)", [purem.HUB_LIVE_FIELD_KEYS.length, [...purem.HUB_LIVE_FIELD_KEYS]], [15, input.HUB_DRAFT_FIELD_KEYS.filter((k) => !["slug", "heroImageId", "leadImageCaption"].includes(k))]);
+  expect("U-2: HUB_FIELD_CODES still 23 (no new code, hard stop 9)", limits.HUB_FIELD_CODES.length, 23);
+  expect("U-3: LIVE_KEY_COLUMNS covers exactly the 15 live keys", Object.keys(core.LIVE_KEY_COLUMNS).sort(), [...purem.HUB_LIVE_FIELD_KEYS].sort());
+  const env = (raw: string | undefined) => purem.liveEditTenants(raw === undefined ? {} : { HUB_LIVE_EDIT_TENANTS: raw }).includes("world-travel-brief");
+  expect("U-4: liveEditTenants — 8 env vectors (unset, '', ' ', wtb, *, WORLD-TRAVEL-BRIEF, 'gcv,,world-travel-brief', 'world-travel-brief ,gcv')", [undefined, "", " ", "wtb", "*", "WORLD-TRAVEL-BRIEF", "gcv,,world-travel-brief", "world-travel-brief ,gcv"].map(env), [false, false, false, false, false, false, true, true]);
+  const g = (main: Doc, latest: Doc, hub = true) => purem.liveGateReason({ main, latest, isHubAuthored: hub });
+  const M = { origin: "manual", workflowStatus: "published", _status: "published", version: 3, engineDraftId: null };
+  expect("U-5: liveGateReason table (ok, engine, scheduled main / latest, hidden, archived, draft, diverged version / _status, CMS-hand, engineDraftId)", [
+    g(M, M), g({ ...M, origin: "engine" }, M), g({ ...M, workflowStatus: "scheduled" }, M), g(M, { ...M, workflowStatus: "scheduled" }), g({ ...M, workflowStatus: "hidden" }, M), g({ ...M, workflowStatus: "archived" }, M),
+    g({ ...M, workflowStatus: "draft", _status: "draft" }, M), g(M, { ...M, version: 4 }), g(M, { ...M, _status: "draft" }), g(M, M, false), g({ ...M, engineDraftId: "x" }, M),
+  ], [null, "origin", "scheduled", "scheduled", "status", "status", "status", "draft_diverged", "draft_diverged", "not_hub_authored", "not_hub_authored"]);
+  const pl = (fields: unknown) => {
+    const r = purem.parseLiveBody({ tenant: "gcv", expectedVersion: 3, actor: { email: "a@b.co", role: "editor" }, fields });
+    return r.ok ? "ok" : [r.status, r.body.status, (r.body as Doc).reason ?? (r.body as Doc).field ?? null];
+  };
+  expect("U-6: parseLiveBody locks: slug / heroImageId / leadImageCaption / flags.breaking|aiAssisted|sponsored|affiliate; deepDive editable", [
+    pl({ slug: "x" }), pl({ heroImageId: 1 }), pl({ leadImageCaption: "c" }), pl({ flags: { breaking: false } }), pl({ flags: { aiAssisted: true } }), pl({ flags: { sponsored: false } }), pl({ flags: { affiliate: false } }), pl({ flags: { deepDive: true } }),
+  ], [[422, "not_live_editable", "slug_locked"], [422, "not_live_editable", "media_locked"], [422, "not_live_editable", "media_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], "ok"]);
+  expect("U-7: parseLiveBody structure 400s (fields.tenant / fields.actor / fields.__proto__ / missing actor)", [
+    pl({ tenant: "x" }), pl({ actor: {} }), pl(JSON.parse('{"__proto__":{"a":1}}')),
+    (() => { const r = purem.parseLiveBody({ tenant: "gcv", expectedVersion: 3, fields: {} }); return r.ok ? "ok" : [r.status, (r.body as Doc).field]; })(),
+  ], [[400, "bad_request", "unknown field: fields.tenant"], [400, "bad_request", "unknown field: fields.actor"], [400, "bad_request", "unknown field: fields.__proto__"], [400, "actor"]]);
+  // guard9 self-tests: each child must exit EXACTLY 2 with "refusing" on stderr.
+  const child = (env: Record<string, string>) => {
+    const r = spawnSync("npx", ["tsx", "scripts/hub-probe.ts", "--check9", "--unit-only"], { env: { ...process.env, P54_GUARD_CHILD: "1", ...env }, encoding: "utf8", timeout: 120_000 });
+    return [r.status, /refusing/.test(r.stderr ?? "")];
+  };
+  if (process.env.P54_GUARD_CHILD !== "1") {
+    expect("U-8: guard9 self-tests (R2_BUCKET=x / HUB_PROBE_BASE=https://x.example / DATABASE_URL=db.example.com / ?host=evil) ⇒ exit 2 + 'refusing'", [
+      child({ R2_BUCKET: "x" }), child({ HUB_PROBE_BASE: "https://x.example" }), child({ DATABASE_URL: "postgres://u@db.example.com/x" }), child({ DATABASE_URL: "postgres://u@localhost/x?host=evil" }),
+    ], [[2, true], [2, true], [2, true], [2, true]]);
+  }
+}
+
+// ── --check9 --in <f9> ───────────────────────────────────────────────────────
+
+async function check9() {
+  guard9();
+  const { state, expect } = makeExpect();
+  if (flag("unit-only")) {
+    await check9Unit(expect);
+    console.log(`\n[check9] ${state.failures === 0 ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(state.failures === 0 ? 0 : 1);
+  }
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup9 --in <f6> --out <f9> | --check9 --in <f9> | --check9 --unit-only");
+    process.exit(2);
+  }
+  const only = (arg("only") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const drop = (process.env.P54_SELFTEST_DROP_GROUP ?? "").trim();
+  const s9 = JSON.parse(readFileSync(inFile, "utf8")) as Setup9;
+  const s6 = JSON.parse(readFileSync(s9.setup6, "utf8")) as Setup6;
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const T = {
+    author: tok(s6.engines.author.tokenFile),
+    write: tok(s6.engines.writeonly.tokenFile),
+    both: tok(s9.engines.both.tokenFile),
+    writenoread: tok(s9.engines.writenoread.tokenFile),
+  };
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const rows = async (q: unknown) => ((await db.execute(q)) as { rows?: Doc[] }).rows ?? [];
+  const core = await import("../src/lib/hub-author-live-core");
+  const input = await import("../src/lib/hub-author-input");
+  const { verifySigned } = await import("../src/lib/crypto");
+  const A = s9.articles;
+  const fx = (t: string) => s9.fixtures[t]!;
+  const run = runId6();
+  let seq = 0;
+  const executed: string[] = [];
+
+  // ── helpers ──
+  const mainOf = async (id: number) => (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const latestOf = async (id: number) => (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const mainAll = async (id: number) => (await payload.findByID({ collection: "articles", id, depth: 0, locale: "all" as never, overrideAccess: true, disableErrors: true })) as unknown as Doc;
+  const rowSnap = async (id: number) => JSON.stringify((await rows(sql`SELECT a.version::int AS v, a._status::text AS s, a.workflow_status::text AS w, a.published_at AS p, a.updated_at AS u, l.title AS t, l.dek AS d, l.slug AS g FROM articles a LEFT JOIN articles_locales l ON l._parent_id = a.id AND l._locale = 'en' WHERE a.id = ${id}`))[0] ?? null);
+  const verCount = async (id: number) => Number((await rows(sql`SELECT count(*)::int AS n FROM _articles_v WHERE parent_id = ${id}`))[0]?.n ?? 0);
+  const actCount = async (id: number) => Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE target_id = ${String(id)} AND event_type = 'human_edit'`))[0]?.n ?? 0);
+  const maxLog = async () => Number((await rows(sql`SELECT coalesce(max(id), 0)::int AS m FROM activity_log`))[0]?.m ?? 0);
+  const interr = async () => Number((await rows(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'integration_error'`))[0]?.n ?? 0);
+  const jobs = async (id: number) => (await rows(sql`SELECT target_locale::text AS l, source_version::int AS v FROM translation_jobs WHERE article_id = ${id} ORDER BY id`)) as { l: string; v: number }[];
+  const pubTok = (t: string) => tok(s9.publicReadTokenFile[t]!);
+  const pubGet = (t: string, slug: string) => call9("GET", `/api/public/articles/${encodeURIComponent(slug)}`, undefined, pubTok(t));
+  const sha = (s: string) => sha256Hex6(s);
+  const live = (id: number, tenant: string, expectedVersion: number | undefined, fields: unknown, token: string | null = T.write) =>
+    call9("PATCH", `/api/hub/articles/${id}/live`, { tenant, expectedVersion, actor: P9_ACTOR, fields }, token);
+  const liveRaw = (id: number | string, body: unknown, token: string | null = T.write) => call9("PATCH", `/api/hub/articles/${id}/live`, body, token);
+  const getEdit = (id: number, tenant: string, view = "&view=edit") => call9("GET", `/api/hub/articles/${id}?tenant=${tenant}${view}`, undefined, T.author);
+  const vOf = async (id: number) => (await mainOf(id)).version as number;
+  const mkDraft = async (tenant: string, extra: Doc = {}) => {
+    const f = fx(tenant);
+    const slug = `p9c-${run}-${seq++}`;
+    const r = await call9("POST", "/api/hub/articles", {
+      tenant, title: `P9C ${tenant} ${slug}`, slug, actor: P9_ACTOR, pillarSlug: f.pillar, ...(f.sub ? { subSectionSlug: f.sub } : {}), authorId: f.authors[0],
+      bodyMarkdown: "P9C body text for a live edit.", ...extra,
+    }, T.author);
+    if (r.status !== 201) throw new Error(`mkDraft ${tenant} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return { id: r.body.id as number, version: r.body.version as number, slug, tenant };
+  };
+  const mkPublished = async (tenant: string, extra: Doc = {}) => {
+    const d = await mkDraft(tenant, extra);
+    const r = await call9("POST", `/api/hub/articles/${d.id}/publish`, { tenant, expectedVersion: d.version, actor: P9_ACTOR }, T.write);
+    if (r.status !== 200) throw new Error(`publish ${d.id} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    return { ...d, version: await vOf(d.id) };
+  };
+  const inproc = async (id: number, tenant: string, expectedVersion: number, fields: unknown, d: Doc = {}) => {
+    const req = new Request(`${BASE}/api/hub/articles/${id}/live`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${T.write}`, "content-type": "application/json" },
+      body: JSON.stringify({ tenant, expectedVersion, actor: P9_ACTOR, fields }),
+    });
+    const res = await core.handleHubLiveUpdateWith(req, { params: Promise.resolve({ id: String(id) }) }, { getPayload: async () => payload, liveTenants: s9.liveTenants, ...d } as never);
+    const text = await res.text();
+    let body: Doc = {};
+    try {
+      body = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, text, body };
+  };
+  const noLock = { lockRow: async () => {} };
+  const DIVERGED = [409, { ok: false, status: "draft_diverged", reason: "article has unpublished changes" }];
+  const NLE = (reason: string) => [422, { ok: false, status: "not_live_editable", reason }];
+  const pair = (r: { status: number; body: Doc }) => [r.status, r.body];
+  const group = async (name: (typeof P9_GROUPS)[number], fn: () => Promise<void>) => {
+    if (only.length && !only.includes(name)) return;
+    if (drop === name) return;
+    executed.push(name);
+    console.log(`\n── ${name} ──`);
+    try {
+      await fn();
+    } catch (e) {
+      expect(`${name}: group threw`, `${(e as Error)?.name}: ${String((e as Error)?.message).slice(0, 300)}`, "no exception");
+    }
+  };
+
+  // The fake webhook server (P10 / P11): a child process on 127.0.0.1:<hookPort>; on each POST it
+  // GETs the public detail of the signed slug (tenant read token by the signed tenant) and logs both.
+  const hookLog = `${inFile}.hooks.jsonl`;
+  writeFileSync(hookLog, "", { mode: 0o600 });
+  const { spawn } = await import("node:child_process");
+  const hookSrc = `
+    const http = require("http"), fs = require("fs");
+    const port = Number(process.env.P54_HOOK_PORT), out = process.env.P54_HOOK_OUT, base = process.env.P54_BASE, pre = process.env.P54_TOKEN_PREFIX;
+    http.createServer((req, res) => {
+      let b = ""; req.on("data", (c) => (b += c));
+      req.on("end", async () => {
+        let token = null, seen = null;
+        try { token = JSON.parse(b).token; } catch {}
+        try {
+          const claims = JSON.parse(Buffer.from(String(token).split(".")[0].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+          const t = fs.readFileSync(pre + ".public-" + claims.tenant + ".token", "utf8").trim();
+          const r = await fetch(base + "/api/public/articles/" + encodeURIComponent(claims.slug), { headers: { authorization: "Bearer " + t } });
+          const j = await r.json().catch(() => null);
+          seen = { status: r.status, title: j && j.doc ? j.doc.title : null };
+        } catch (e) { seen = { error: String(e && e.name) }; }
+        fs.appendFileSync(out, JSON.stringify({ at: Date.now(), path: req.url, token, seen }) + "\\n");
+        res.writeHead(200, { "content-type": "application/json" }); res.end('{"ok":true}');
+      });
+    }).listen(port, "127.0.0.1", () => console.log("hook up"));`;
+  const hook = spawn(process.execPath, ["-e", hookSrc], { env: { ...process.env, P54_HOOK_PORT: String(s9.hookPort), P54_HOOK_OUT: hookLog, P54_BASE: BASE, P54_TOKEN_PREFIX: s9.out }, stdio: ["ignore", "pipe", "pipe"] });
+  await new Promise<void>((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error("hook server did not start")), 10_000);
+    hook.stdout.on("data", (d: Buffer) => {
+      if (String(d).includes("hook up")) {
+        clearTimeout(to);
+        resolve();
+      }
+    });
+  });
+  const hooks = () =>
+    readFileSync(hookLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { at: number; path: string; token: string; seen: Doc });
+  const claimsOf = (t: string) => {
+    try {
+      return JSON.parse(Buffer.from(t.split(".")[0]!.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")) as Doc;
+    } catch {
+      return {};
+    }
+  };
+
+  // Re-apply the fixture grants (a previous --check9 restored the --setup6 ones).
+  const setGrant = (id: number, ids: number[]) => payload.update({ collection: "content-engines", id, overrideAccess: true, data: { allowedTenants: ids } as never });
+  await setGrant(s6.engines.writeonly.id, s9.fixtureGrant);
+  await setGrant(s6.engines.author.id, s9.fixtureGrant);
+  const wtbId = s9.tenants["world-travel-brief"]!;
+  const wtbDoc = (await payload.findByID({ collection: "tenants", id: wtbId, depth: 0, overrideAccess: true })) as unknown as Doc;
+  const wtbFrontend = (wtbDoc.frontendUrl as string | null | undefined) ?? null;
+
+  try {
+    // ══ P1 — after /publish: main + latest published, same version ═════════
+    await group("P1", async () => {
+      const a = A.a.id;
+      const m = await mainOf(a);
+      const l = await latestOf(a);
+      const ua = (await rows(sql`SELECT updated_at AS u FROM articles WHERE id = ${a}`))[0]?.u;
+      const uv = (await rows(sql`SELECT updated_at AS u FROM _articles_v WHERE parent_id = ${a} AND latest = true ORDER BY id DESC LIMIT 1`))[0]?.u;
+      console.log(`OBS   P1 updatedAt main=${String(ua)} newest version row=${String(uv)} (recorded, not decided — CMS-9)`);
+      expect("P1: (AC2) after /publish: main _status + workflowStatus published, latest _status published, latest.version === main.version", [m._status, m.workflowStatus, l._status, l.version === m.version], ["published", "published", "published", true]);
+    });
+
+    // ══ P2 — the happy path, every key, body identity, D12 controls ═══════
+    await group("P2", async () => {
+      const a = A.a.id;
+      const v0 = await vOf(a);
+      const ver0 = await verCount(a);
+      const act0 = await actCount(a);
+      const r = await live(a, "gcv", v0, { title: `P9 A title ${run}`, bodyMarkdown: `P9 A body edited live ${run}.` });
+      const m = await mainOf(a);
+      expect("P2-1: (AC1) title + body ⇒ 200, version (read back) = +1, changed [title, bodyMarkdown], still published, +1 _articles_v, +1 human_edit", [
+        r.status, r.body.version, r.body.changed, m.version, m._status, m.workflowStatus, (await verCount(a)) - ver0, (await actCount(a)) - act0,
+      ], [200, v0 + 1, ["title", "bodyMarkdown"], v0 + 1, "published", "published", 1, 1]);
+      // Every live key, one at a time (CMS3-1). Current values from view=edit (slugs) + the main row (ids / text).
+      const f = fx("gcv");
+      const cur = async () => ((await getEdit(a, "gcv")).body.edit as Doc).live as Doc;
+      // Re-run safety (not asserted): start from no secondary row, so the pillar flip can never duplicate it.
+      if (((await cur()).secondary as unknown[]).length) await live(a, "gcv", await vOf(a), { secondary: [] });
+      const flip = <T,>(x: T, y: T, now: unknown) => (JSON.stringify(now) === JSON.stringify(x) ? y : x);
+      const steps: [string, (c: Doc, m: Doc) => Doc, string[]][] = [
+        ["title", (_c, mm) => ({ title: `${String(mm.title)} +` }), ["title"]],
+        ["dek", (_c, mm) => ({ dek: mm.dek === "P9 dek one" ? "P9 dek two" : "P9 dek one" }), ["dek"]],
+        ["bodyMarkdown", (_c, mm) => ({ bodyMarkdown: `P9 body ${String(mm.version)}.` }), ["bodyMarkdown"]],
+        ["takeaways", (_c, mm) => ({ takeaways: mm.takeaways === "k1" ? ["k2"] : ["k1"] }), ["takeaways"]],
+        ["readMin", (_c, mm) => ({ readMin: mm.readMin === 7 ? 8 : 7 }), ["readMin"]],
+        ["pillarSlug", (c) => ({ pillarSlug: c.pillarSlug === "p6-main" ? "p6-other" : "p6-main", subSectionSlug: "p6-sub" }), ["pillarSlug", "subSectionSlug"]],
+        ["secondary", (c) => ({ secondary: (c.secondary as unknown[]).length ? [] : [{ pillarSlug: c.pillarSlug === "p6-main" ? "p6-other" : "p6-main", subSectionSlug: null }] }), ["secondary"]],
+        ["tagSlugs", (c) => ({ tagSlugs: flip([f.tags[0]], [f.tags[1]], c.tagSlugs) }), ["tagSlugs"]],
+        ["countrySlugs", (c) => ({ countrySlugs: flip(["vietnam"], ["singapore"], c.countrySlugs) }), ["countrySlugs"]],
+        ["authorId", (c) => ({ authorId: c.authorId === f.authors[0] ? f.authors[1] : f.authors[0] }), ["authorId"]],
+        ["coAuthorIds", (c) => ({ coAuthorIds: (c.coAuthorIds as unknown[]).length ? [] : [f.authors[1]] }), ["coAuthorIds"]],
+        ["flags.deepDive", (c) => ({ flags: { deepDive: !(c.flags as Doc).deepDive } }), ["flags"]],
+        ["flags.longHaul", (c) => ({ flags: { longHaul: !(c.flags as Doc).longHaul } }), ["flags"]],
+        ["sponsor", (c) => ({ sponsor: c.sponsor ? null : "P9 Sponsor" }), ["sponsor"]],
+      ];
+      const got: unknown[] = [];
+      for (const [name, mk, want] of steps) {
+        const c = await cur();
+        const mm = await mainOf(a);
+        const rr = await live(a, "gcv", mm.version as number, mk(c, mm));
+        got.push([name, rr.status, rr.body.changed ?? rr.body]);
+        if (rr.status !== 200 || JSON.stringify(rr.body.changed) !== JSON.stringify(want)) console.log(`OBS   P2 key ${name}: ${rr.status} ${rr.text.slice(0, 300)}`);
+      }
+      expect("P2-2: (CMS3-1) every live key on (a), one value change each ⇒ 200, changed = exactly that key, never 409", got, steps.map(([n, , w]) => [n, 200, w]));
+      // citySlugs on the translation tenant (i) (the only seed tenant with citiesMap).
+      const i = A.i.id;
+      const ci = ((await getEdit(i, "world-travel-brief")).body.edit as Doc).live as Doc;
+      const vi = await vOf(i);
+      const cities = fx("world-travel-brief").cities;
+      const rc = await live(i, "world-travel-brief", vi, { citySlugs: (ci.citySlugs as unknown[]).length ? [] : cities });
+      expect("P2-3: citySlugs on (i) (translation tenant): 200, changed [citySlugs], version >= +1", [rc.status, rc.body.changed, (rc.body.version as number) >= vi + 1], [200, ["citySlugs"], true]);
+      // (h): dek only, then tags only ⇒ the Lexical body is byte-identical.
+      const h = A.h.id;
+      const b0 = JSON.stringify((await mainAll(h)).body);
+      const rd = await live(h, "gcv", await vOf(h), { dek: `P9 H dek ${run}` });
+      const ht = ((await getEdit(h, "gcv")).body.edit as Doc).live as Doc;
+      const rt = await live(h, "gcv", await vOf(h), { tagSlugs: flip([f.tags[0]], [f.tags[1]], ht.tagSlugs) });
+      expect("P2-4: (h) dek only, then tagSlugs only ⇒ 200 / 200, body tree byte-identical (locale all)", [rd.status, rt.status, JSON.stringify((await mainAll(h)).body) === b0], [200, 200, true]);
+      // D12 controls (no interleaving): (a), (h), (i), (k) ⇒ 200, never a false 409.
+      const ctl: unknown[] = [];
+      for (const [k, t] of [["a", "gcv"], ["h", "gcv"], ["i", "world-travel-brief"], ["k", "gcv"]] as const) {
+        const id = A[k].id;
+        const rr = await live(id, t, await vOf(id), { dek: `P9 control ${k} ${run}` });
+        ctl.push([k, rr.status]);
+      }
+      expect("P2-5: D12 control (no interleaving) on (a) (h) (i) (k) ⇒ 200 each (field diff empty)", ctl, [["a", 200], ["h", 200], ["i", 200], ["k", 200]]);
+    });
+
+    // ══ P3 — latest ≠ main ⇒ 409 draft_diverged, nothing leaks ════════════
+    await group("P3", async () => {
+      const b = A.b.id;
+      const pub0 = await pubGet("gcv", A.b.slug);
+      const ver0 = await verCount(b);
+      const act0 = await actCount(b);
+      const r = await live(b, "gcv", await vOf(b), { dek: `P9 B dek ${run}` });
+      const pub1 = await pubGet("gcv", A.b.slug);
+      const l = await latestOf(b);
+      expect("P3-1: (AC3) (b) latest ≠ main ⇒ 409 draft_diverged; body carries no draft content; public DETAIL sha256 unchanged; draft kept; 0 human_edit, 0 _articles_v", [
+        ...pair(r), r.text.includes("SECRET"), sha(pub0.text) === sha(pub1.text), pub1.status, l._status, String(l.title).includes("SECRET"), (await actCount(b)) - act0, (await verCount(b)) - ver0,
+      ], [...DIVERGED, false, true, 200, "draft", true, 0, 0]);
+      let called = 0;
+      const ri = await inproc(b, "gcv", await vOf(b), { dek: "x" }, { beforeWrite: async () => { called++; } });
+      expect("P3-2: in-process twin with a spy beforeWrite ⇒ 409 draft_diverged and the spy is NOT called (gate before the write)", [...pair(ri), called], [...DIVERGED, 0]);
+    });
+
+    // ══ P3b — a Save-Draft slips in (D15 seam, real lockRow) ══════════════
+    await group("P3b", async () => {
+      const x = await mkPublished("gcv");
+      const snap0 = await rowSnap(x.id);
+      const pub0 = await pubGet("gcv", x.slug);
+      const act0 = await actCount(x.id);
+      let verAfterSeam = -1;
+      const r = await inproc(x.id, "gcv", x.version, { dek: `P9 3b live dek ${run}` }, {
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: x.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P9 3b SLIPPED DRAFT ${run}` } as never });
+          verAfterSeam = await verCount(x.id);
+        },
+      });
+      const pub1 = await pubGet("gcv", x.slug);
+      const l = await latestOf(x.id);
+      expect("P3b: (AC29 / AC34) Save-Draft through beforeWrite (2nd connection, REAL lockRow) ⇒ 409 draft_diverged + rollback: row snapshot unchanged, public title unchanged, draft kept, phantom human_edit = 1, _articles_v delta 0 (counted from after the seam's draft)", [
+        ...pair(r), (await rowSnap(x.id)) === snap0, (pub1.body.doc as Doc | undefined)?.title === (pub0.body.doc as Doc | undefined)?.title, l._status, (await actCount(x.id)) - act0, (await verCount(x.id)) - verAfterSeam,
+      ], [...DIVERGED, true, true, "draft", 1, 0]);
+    });
+
+    // ══ P3c — translation tenant (i): Save-Draft en / fr; a NON-draft write (isolated D12) ══
+    await group("P3c", async () => {
+      const t = "world-travel-brief";
+      const x = await mkPublished(t);
+      const snap0 = await rowSnap(x.id);
+      const r1 = await inproc(x.id, t, x.version, { dek: `P9 3c dek ${run}` }, {
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: x.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P9 3c SLIPPED EN ${run}` } as never });
+        },
+      });
+      expect("P3c-i: translation tenant, Save-Draft (en title) slips in, REAL lockRow ⇒ 409 + rollback, row unchanged", [...pair(r1), (await rowSnap(x.id)) === snap0], [...DIVERGED, true]);
+      const y = await mkPublished(t);
+      const snapY = await rowSnap(y.id);
+      const r2 = await inproc(y.id, t, y.version, { dek: `P9 3c dek fr ${run}` }, {
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: y.id, draft: true, overrideAccess: true, locale: "fr" as never, context: { disableRevalidate: true }, data: { title: `P9 3c GLISSÉ FR ${run}` } as never });
+        },
+      });
+      expect("P3c-i(fr): (ADV3-1) Save-Draft changing ONLY the fr title ⇒ 409 + rollback, row unchanged", [...pair(r2), (await rowSnap(y.id)) === snapY], [...DIVERGED, true]);
+      const z = await mkPublished(t);
+      const r3 = await inproc(z.id, t, z.version, { dek: `P9 3c live dek ii ${run}` }, {
+        ...noLock,
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: z.id, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P9 3c NONDRAFT ${run}` } as never });
+        },
+      });
+      const zm = await mainOf(z.id);
+      expect("P3c-ii: [ca cô lập D12 — lockRow no-op] a NON-draft write without ctx changes the title (status still published, version leg passes on the translation tenant) ⇒ ONLY the field leg catches it ⇒ 409; main = the slipped write, not the live dek", [
+        ...pair(r3), String(zm.title), zm.dek === `P9 3c live dek ii ${run}`, zm._status,
+      ], [...DIVERGED, `P9 3c NONDRAFT ${run}`, false, "published"]);
+      // MINOR-1: a sent-but-UNCHANGED flag (longHaul:false = stored) must stay in the D12 comparison.
+      const f = await mkPublished(t);
+      const fm0 = await mainOf(f.id);
+      const r4 = await inproc(f.id, t, f.version, { flags: { deepDive: fm0.deepDive !== true, longHaul: fm0.longHaul === true } }, {
+        ...noLock,
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: f.id, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { longHaul: fm0.longHaul !== true } as never });
+        },
+      });
+      const fm = await mainOf(f.id);
+      expect("P3c-ii(flags): [ca cô lập D12 — lockRow no-op] request flips deepDive and re-sends longHaul UNCHANGED; a NON-draft write flips longHaul in the window ⇒ the field leg still compares longHaul ⇒ 409; main = the slipped write, deepDive not applied", [
+        ...pair(r4), fm.longHaul === (fm0.longHaul !== true), fm.deepDive === fm0.deepDive,
+      ], [...DIVERGED, true, true]);
+      const w = await mkPublished(t);
+      expect("P3c control: translation tenant, no interleaving, REAL lockRow ⇒ 200", (await inproc(w.id, t, w.version, { dek: "P9 3c control" })).status, 200);
+    });
+
+    // ══ P3d — a Hide slips in; the row lock blocks a Hide ═════════════════
+    await group("P3d", async () => {
+      const x = await mkPublished("gcv");
+      const r1 = await inproc(x.id, "gcv", x.version, { dek: `P9 3d dek ${run}` }, {
+        ...noLock,
+        beforeWrite: async () => {
+          await payload.update({ collection: "articles", id: x.id, overrideAccess: true, depth: 0, context: { hubWrite: { actor: P9_ACTOR, reason: "probe9 hide" }, engineId: s6.engines.writeonly.id }, data: { workflowStatus: "archived" } as never });
+        },
+      });
+      const xm = await mainOf(x.id);
+      expect("P3d-i: [ca cô lập D12 — lockRow no-op] a Hide (the /status write, hubWrite, no lock) commits before the write ⇒ 409 + rollback; the article STAYS archived (never re-published); public 404", [
+        ...pair(r1), xm.workflowStatus, (await pubGet("gcv", x.slug)).status,
+      ], [...DIVERGED, "archived", 404]);
+      const y = await mkPublished("gcv");
+      let code: string | null = null;
+      const r2 = await inproc(y.id, "gcv", y.version, { dek: `P9 3d ii dek ${run}` }, {
+        beforeWrite: async () => {
+          const pool = (payload.db as unknown as { pool: { connect: () => Promise<{ query: (q: string, p?: unknown[]) => Promise<unknown>; release: () => void }> } }).pool;
+          const c = await pool.connect();
+          try {
+            await c.query("BEGIN");
+            await c.query("SET LOCAL lock_timeout = '300ms'");
+            await c.query("UPDATE articles SET workflow_status = 'archived' WHERE id = $1", [y.id]);
+            code = "no-error";
+          } catch (e) {
+            code = (e as { code?: string }).code ?? "unknown";
+          } finally {
+            await c.query("ROLLBACK").catch(() => {});
+            c.release();
+          }
+        },
+      });
+      const ym = await mainOf(y.id);
+      expect("P3d-ii: (D16, REAL lockRow) an UPDATE articles from a 2nd connection during the live write ⇒ 55P03 (row lock held); live 200; article still published with the new dek", [
+        code, r2.status, ym.workflowStatus, ym.dek,
+      ], ["55P03", 200, "published", `P9 3d ii dek ${run}`]);
+    });
+
+    // ══ P4 — scheduled / hidden / archived / never-published ═══════════════
+    await group("P4", async () => {
+      const r = async (k: P9Article) => pair(await live(A[k].id, "gcv", await vOf(A[k].id), { dek: "x" }));
+      expect("P4: (AC4) (c) scheduled ⇒ 422 scheduled; (d) hidden, (e) archived, (n) never-published draft ⇒ 422 status", [await r("c"), await r("d"), await r("e"), await r("n")], [NLE("scheduled"), NLE("status"), NLE("status"), NLE("status")]);
+    });
+
+    // ══ P4b — scheduled then published by the cron (scheduledFor kept) ═══
+    await group("P4b", async () => {
+      const k = A.k.id;
+      const km = await mainOf(k);
+      const r1 = await live(k, "gcv", km.version as number, { dek: `P9 4b dek ${run}` });
+      const e1 = (((await getEdit(k, "gcv")).body.edit as Doc).live as Doc | undefined)?.editable;
+      expect("P4b-1: (k) scheduled then published with the cron's update (scheduledFor kept) ⇒ /live 200; view=edit live.editable true", [km.scheduledFor != null, r1.status, e1], [true, 200, true]);
+      const d = await mkDraft("gcv");
+      const at = new Date(Math.ceil((Date.now() + 10 * 60_000) / 60_000) * 60_000).toISOString();
+      const sc = await call9("POST", `/api/hub/articles/${d.id}/schedule`, { tenant: "gcv", expectedVersion: d.version, actor: P9_ACTOR, scheduledFor: at }, T.write);
+      const past = new Date(Date.now() - 60_000).toISOString();
+      await payload.update({ collection: "articles", id: d.id, draft: true, depth: 0, overrideAccess: true, data: { workflowStatus: "scheduled", scheduledFor: past, publishedAt: past, _status: "draft" } as never, context: { hubWrite: { actor: P9_ACTOR, reason: "probe9 sets the hour" }, engineId: s6.engines.writeonly.id, disableRevalidate: true } });
+      const cron = await call9("GET", "/api/cron/publish-scheduled", undefined, process.env.CRON_SECRET ?? null);
+      const dm = await mainOf(d.id);
+      const r2 = await live(d.id, "gcv", dm.version as number, { dek: `P9 4b cron dek ${run}` });
+      const e2 = (((await getEdit(d.id, "gcv")).body.edit as Doc).live as Doc | undefined)?.editable;
+      expect("P4b-2: (N5) the REAL cron route (Bearer CRON_SECRET) publishes it, scheduledFor still set ⇒ /live 200; view=edit live.editable true", [sc.status, cron.status, dm.workflowStatus, dm._status, dm.scheduledFor != null, r2.status, e2], [200, 200, "published", "published", true, 200, true]);
+    });
+
+    // ══ P5 — engine / CMS hand-made ═══════════════════════════════════════
+    await group("P5", async () => {
+      const f = await live(A.f.id, "dtw", await vOf(A.f.id), { dek: "x" });
+      const g = await live(A.g.id, "gcv", await vOf(A.g.id), { dek: "x" });
+      expect("P5: (AC5) (f) engine ⇒ 422 origin; (g) CMS hand-made (lastEngine null) ⇒ 422 not_hub_authored", [pair(f), pair(g)], [NLE("origin"), NLE("not_hub_authored")]);
+    });
+
+    // ══ P6 — optimistic lock: stale version, races ═══════════════════════
+    await group("P6", async () => {
+      const x = await mkPublished("gcv");
+      const stale = await live(x.id, "gcv", x.version - 1 < 1 ? x.version + 5 : x.version - 1, { dek: "stale" });
+      expect("P6-1: (AC6) stale expectedVersion ⇒ 409 version_conflict + currentVersion", [stale.status, stale.body.status, stale.body.currentVersion], [409, "version_conflict", x.version]);
+      const rounds: unknown[] = [];
+      for (let i = 0; i < 10; i++) {
+        const v = await vOf(x.id);
+        const both = await Promise.all([live(x.id, "gcv", v, { dek: `P9 6 r${i} a` }), live(x.id, "gcv", v, { dek: `P9 6 r${i} b` })]);
+        const st = both.map((b) => b.status).sort();
+        const loser = both.find((b) => b.status !== 200);
+        rounds.push([st, loser?.body.status ?? null, typeof loser?.body.currentVersion === "number"]);
+      }
+      expect("P6-2: 10 rounds of two parallel PATCH with the same version ⇒ exactly one 200 + one 409 whose body is version_conflict + currentVersion (never draft_diverged)", rounds, rounds.map(() => [[200, 409], "version_conflict", true]));
+      // Deterministic phase shift (FIN-3): another write commits between gate 1 and the row lock.
+      const v = await vOf(x.id);
+      const r = await inproc(x.id, "gcv", v, { dek: "P9 6 loser" }, {
+        lockRow: async (p: unknown, id: number, req: unknown) => {
+          await payload.update({ collection: "articles", id: x.id, overrideAccess: true, locale: "en", depth: 0, context: { hubAuthor: { actor: P9_ACTOR, action: "update", fields: ["dek"] }, engineId: s6.engines.writeonly.id, disableRevalidate: true }, data: { dek: "P9 6 winner" } as never });
+          await core.defaultLockRow(p as never, id, req as never);
+        },
+      });
+      expect("P6-3: in-process phase shift (a winner commits before the row lock) ⇒ the loser gets 409 version_conflict with the winner's version (checked INSIDE the lock)", [r.status, r.body.status, r.body.currentVersion, (await mainOf(x.id)).dek], [409, "version_conflict", v + 1, "P9 6 winner"]);
+    });
+
+    // ══ P7 — slug / media / flags locked; publishedAt + slug kept ═════════
+    await group("P7", async () => {
+      const x = await mkPublished("gcv");
+      const m0 = await mainOf(x.id);
+      const out = [
+        pair(await live(x.id, "gcv", x.version, { slug: `${x.slug}-new` })),
+        pair(await live(x.id, "gcv", x.version, { slug: x.slug })),
+        pair(await live(x.id, "gcv", x.version, { heroImageId: s9.media.spare })),
+        pair(await live(x.id, "gcv", x.version, { leadImageCaption: "c" })),
+        ...(await Promise.all(["breaking", "aiAssisted", "sponsored", "affiliate"].map(async (f) => pair(await live(x.id, "gcv", x.version, { flags: { [f]: false } }))))),
+      ];
+      const m1 = await mainOf(x.id);
+      expect("P7: (AC7 / AC8) slug (new or same) ⇒ slug_locked; heroImageId / leadImageCaption ⇒ media_locked; flags.breaking / aiAssisted / sponsored / affiliate ⇒ flags_locked; slug, publishedAt, version unchanged", [
+        out, m1.slug === m0.slug, String(m1.publishedAt) === String(m0.publishedAt), m1.version === m0.version,
+      ], [[NLE("slug_locked"), NLE("slug_locked"), NLE("media_locked"), NLE("media_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked")], true, true, true]);
+      const ok = await live(x.id, "gcv", x.version, { dek: "P9 7 dek" });
+      const m2 = await mainOf(x.id);
+      expect("P7-2: a real edit keeps slug + publishedAt", [ok.status, m2.slug === m0.slug, String(m2.publishedAt) === String(m0.publishedAt)], [200, true, true]);
+    });
+
+    // ══ P8 — body images round-trip; no new image ═════════════════════════
+    await group("P8", async () => {
+      const h = A.h.id;
+      const e = await getEdit(h, "gcv");
+      const md = String(((e.body.article ?? {}) as Doc).bodyMarkdown ?? "");
+      const ups = async () => {
+        const out: string[] = [];
+        const walk = (n: unknown) => {
+          const o = (n && typeof n === "object" ? n : null) as Doc | null;
+          if (!o) return;
+          if (o.type === "upload") out.push(String(toId6(o.value)));
+          if (Array.isArray(o.children)) o.children.forEach(walk);
+        };
+        walk(((await mainOf(h)).body as Doc | undefined)?.root);
+        return out;
+      };
+      const u0 = await ups();
+      const same = await live(h, "gcv", await vOf(h), { bodyMarkdown: md });
+      const add = await live(h, "gcv", await vOf(h), { bodyMarkdown: `${md}\n\n![](cms-media:${s9.media.spare})` });
+      expect("P8-1: (AC9) view=edit ⇒ cms-media token; sending it back unchanged ⇒ 200 (upload set kept); adding another tenant media ⇒ 422 fields.bodyMarkdown unknown_ref", [
+        md.includes(`cms-media:${s9.media.h}`), same.status, JSON.stringify(await ups()) === JSON.stringify(u0), add.status, (add.body.fields as Doc | undefined)?.bodyMarkdown,
+      ], [true, 200, true, 422, "unknown_ref"]);
+      const drop = await live(h, "gcv", await vOf(h), { bodyMarkdown: "P9 image removed." });
+      const u1 = await ups();
+      const back = await live(h, "gcv", await vOf(h), { bodyMarkdown: md });
+      expect("P8-2: removing the image ⇒ 200 (no upload node left); putting the SAME image back ⇒ 422 unknown_ref (it is no longer in the live body — D5)", [drop.status, u1.length, back.status], [200, 0, 422]);
+      // Restore (h) for a re-run: the image comes back through a Local API body write (not the hub).
+      await payload.update({ collection: "articles", id: h, overrideAccess: true, locale: "en", context: { disableRevalidate: true, hubAuthor: { actor: P9_ACTOR, action: "update", fields: ["bodyMarkdown"] }, engineId: s6.engines.writeonly.id }, data: { body: { root: { type: "root", version: 1, direction: "ltr", format: "", indent: 0, children: [{ type: "paragraph", version: 1, direction: "ltr", format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: "P9 image intro.", format: 0, detail: 0, mode: "normal", style: "" }] }, { type: "upload", version: 3, format: "", id: "p9restore", fields: null, relationTo: "media", value: s9.media.h }] } } } as never });
+    });
+
+    // ══ P8b — PATCH rules + checkPublishable on a live article ═══════════
+    await group("P8b", async () => {
+      const l = A.l.id;
+      const s0 = await rowSnap(l);
+      const bn = await live(l, "gcv", await vOf(l), { bodyMarkdown: "Replace." });
+      expect("P8b-1: (l) non-Markdown body + bodyMarkdown ⇒ 422 body_not_editable; row unchanged", [pair(bn), (await rowSnap(l)) === s0], [[422, { ok: false, status: "body_not_editable", reason: "existing body cannot be edited as Markdown" }], true]);
+      const x = await mkPublished("gcv");
+      const sp = await mkPublished("gcv", { flags: { sponsored: true }, sponsor: "P9 Sponsor Co" });
+      const sx = await rowSnap(x.id);
+      const ssp = await rowSnap(sp.id);
+      const code = async (id: number, fields: Doc) => {
+        const r = await live(id, "gcv", await vOf(id), fields);
+        return [r.status, r.body.status, r.body.fields ?? r.body.reason];
+      };
+      const out = [
+        await code(x.id, { bodyMarkdown: "" }),
+        await code(x.id, { subSectionSlug: null }),
+        await code(sp.id, { sponsor: null }),
+        await code(x.id, { authorId: null }),
+        await code(x.id, { pillarSlug: "exclusive" }),
+      ];
+      console.log(`OBS   P8b authorId:null ⇒ ${JSON.stringify(out[3])} (the PATCH parser refuses null before checkPublishable: code 'type', not 'required')`);
+      expect("P8b-2: (AC27) body '' ⇒ required; subSectionSlug null on a pillar with sub-sections ⇒ required; sponsor null on a sponsored article ⇒ required; authorId null ⇒ 422 (parser 'type'); blocked pillar (exclusive) ⇒ 422 blocked_pillar; nothing written", [
+        out, (await rowSnap(x.id)) === sx, (await rowSnap(sp.id)) === ssp,
+      ], [[
+        [422, "invalid", { bodyMarkdown: "required" }],
+        [422, "invalid", { subSectionSlug: "required" }],
+        [422, "invalid", { sponsor: "required" }],
+        [422, "invalid", { authorId: "type" }],
+        [422, "invalid", { pillarSlug: "blocked_pillar" }],
+      ], true, true]);
+    });
+
+    // ══ P9 — public read right after 200 ══════════════════════════════════
+    await group("P9", async () => {
+      const x = await mkPublished("gcv");
+      const ver0 = await verCount(x.id);
+      const t = `P9 public title ${run}`;
+      const r = await live(x.id, "gcv", x.version, { title: t, bodyMarkdown: `P9 public body ${run}.` });
+      const p = await pubGet("gcv", x.slug);
+      const doc = (p.body.doc ?? {}) as Doc;
+      const m = await mainOf(x.id);
+      expect("P9: (AC10) public DETAIL right after 200 ⇒ new title + body text; still published; exactly one new _articles_v", [
+        r.status, p.status, doc.title, JSON.stringify(doc).includes(`P9 public body ${run}`), m._status, m.workflowStatus, (await verCount(x.id)) - ver0,
+      ], [200, 200, t, true, "published", "published", 1]);
+    });
+
+    // ══ P10 — translation tenant: jobs, versions, webhooks (MEASURED) ═════
+    await group("P10", async () => {
+      const t = "world-travel-brief";
+      await payload.update({ collection: "tenants", id: wtbId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: `http://127.0.0.1:${s9.hookPort}` } as never });
+      const x = await mkPublished(t);
+      // Mark two locales as already machine-translated at the current version (translationWrite: no bump).
+      const l0 = await latestOf(x.id);
+      const rows0 = ((l0.translationStatus as Doc[] | undefined) ?? []).map((r) => ({ ...r }));
+      const locs = rows0.slice(0, 2).map((r) => String(r.locale));
+      const marked = rows0.map((r) => (locs.includes(String(r.locale)) ? { ...r, state: "machine_translated", sourceVersionAtTranslation: x.version } : r));
+      await payload.update({ collection: "articles", id: x.id, overrideAccess: true, context: { translationWrite: true, skipTranslationEnqueue: true, disableRevalidate: true }, data: { translationStatus: marked } as never });
+      const v0 = await vOf(x.id);
+      const j0 = await jobs(x.id);
+      const act0 = await actCount(x.id);
+      const h0 = hooks().filter((h) => claimsOf(h.token).slug === x.slug).length;
+      const r = await live(x.id, t, v0, { title: `P9 10 title ${run}` });
+      const m = await mainOf(x.id);
+      const j1 = (await jobs(x.id)).slice(j0.length);
+      const st1 = ((m.translationStatus as Doc[] | undefined) ?? []).filter((s) => locs.includes(String(s.locale))).map((s) => s.state);
+      const nHooks = hooks().filter((h) => claimsOf(h.token).slug === x.slug).length - h0;
+      const nAct = (await actCount(x.id)) - act0;
+      console.log(`OBS   P10 MEASURED: version before=${v0} returned=${String(r.body.version)} stored=${String(m.version)}; new jobs=${j1.length} sourceVersion(s)=${JSON.stringify([...new Set(j1.map((j) => j.v))])}; human_edit rows=${nAct}; webhooks=${nHooks}; states of the 2 marked locales after=${JSON.stringify(st1)} (outdated → pending)`);
+      expect("P10-1: (AC11 / AC32) translation tenant: 200; returned version = stored version (read back); new jobs for the re-queued locales; the 2 machine_translated locales end 'pending'", [
+        r.status, r.body.version === m.version, (m.version as number) >= v0 + 1, j1.filter((j) => locs.includes(j.l)).length >= locs.length, st1,
+      ], [200, true, true, true, ["pending", "pending"]]);
+      const r2 = await live(x.id, t, r.body.version as number, { dek: `P9 10 second ${run}` });
+      const jBefore = (await jobs(x.id)).length;
+      const r3 = await live(x.id, t, r2.body.version as number, { dek: `P9 10 second ${run}` });
+      expect("P10-2: a second save with the returned version ⇒ 200 (no false 409); changed [] ⇒ 200 with no new job", [r2.status, r3.status, r3.body.changed, (await jobs(x.id)).length - jBefore], [200, 200, [], 0]);
+    });
+
+    // ══ P11 — webhook once per write, HMAC valid; staleness MEASURED ══════
+    await group("P11", async () => {
+      const t = s9.hookTenant;
+      const x = await mkPublished(t);
+      await new Promise((r) => setTimeout(r, 300));
+      const before = hooks().filter((h) => claimsOf(h.token).slug === x.slug).length;
+      const title = `P9 11 title ${run}`;
+      const r = await live(x.id, t, x.version, { title });
+      await new Promise((rs) => setTimeout(rs, 500));
+      const mine = hooks().filter((h) => claimsOf(h.token).slug === x.slug).slice(before);
+      const claims = mine[0] ? verifySigned(mine[0].token, Math.floor(Date.now() / 1000)) : null;
+      console.log(`OBS   P11 MEASURED: webhook path=${mine[0]?.path ?? "-"}; public GET from the hook (before the CMS commit) saw status=${String(mine[0]?.seen?.status)} title=${JSON.stringify(mine[0]?.seen?.title)} (new title ⇒ fresh; old ⇒ gap hub-p5-4-revalidate-before-commit)`);
+      expect("P11: (AC12) non-translation tenant with a local frontendUrl: exactly ONE webhook per live write, HMAC valid (verifySigned), claims carry the tenant + slug", [
+        r.status, mine.length, claims !== null, (claims as Doc | null)?.tenant, (claims as Doc | null)?.slug,
+      ], [200, 1, true, t, x.slug]);
+    });
+
+    // ══ P12 — KEY RISK: provenance survives a live write ═════════════════
+    await group("P12", async () => {
+      const x = await mkPublished("gcv");
+      const r1 = await live(x.id, "gcv", x.version, { dek: "P9 12 one" });
+      const m = await mainOf(x.id);
+      const { isHubAuthoredDoc } = await import("../src/lib/hub-author-auth");
+      const r2 = await live(x.id, "gcv", r1.body.version as number, { dek: "P9 12 two" });
+      expect("P12: (AC13) after a live write: lastEngine = the author engine, editedByHuman true, origin manual, isHubAuthoredDoc true; a 2nd live write ⇒ 200", [
+        r1.status, Number(toId6(m.lastEngine)), m.editedByHuman, m.origin, await isHubAuthoredDoc(payload, m), r2.status,
+      ], [200, s6.engines.author.id, true, "manual", true, 200]);
+    });
+
+    // ══ P13 — Activity Log: one human_edit via hub, names only ════════════
+    await group("P13", async () => {
+      const x = await mkPublished("gcv");
+      const since = await maxLog();
+      const dek = `P9 13 secret dek ${run}`;
+      const r = await live(x.id, "gcv", x.version, { dek, tagSlugs: [fx("gcv").tags[0]] });
+      const logs = await rows(sql`SELECT event_type::text AS e, actor_type::text AS a, actor_engine_id AS eng, detail FROM activity_log WHERE target_id = ${String(x.id)} AND id > ${since} ORDER BY id`);
+      const he = logs.filter((l) => l.e === "human_edit");
+      const det = (he[0]?.detail ?? {}) as Doc;
+      expect("P13: (AC14) exactly one human_edit; actor engine = the write key; detail {via hub, actor, action update, fields NAMES}; no content", [
+        r.status, he.length, he[0]?.a, Number(he[0]?.eng), det.via, det.action, det.fields, JSON.stringify(he).includes(dek),
+      ], [200, 1, "engine", s6.engines.writeonly.id, "hub", "update", ["dek", "tagSlugs"], false]);
+    });
+
+    // ══ P14 — intake never overwrites a live-edited hub article ═══════════
+    await group("P14", async () => {
+      const x = await mkPublished("dtw");
+      await live(x.id, "dtw", x.version, { dek: "P9 14 live" });
+      const s0 = await rowSnap(x.id);
+      const tk = process.env.SEED_ENGINE_TOKEN ?? null;
+      const neu = await call9("POST", "/api/engine/intake", { publicationId: "dtw", title: `P9 14 intake new ${run}`, pillarSlug: "p6-main", body_markdown: "x", byline: "P9 Engine Byline", engineDraftId: `p9-14-new-${run}` }, tk);
+      const same = await call9("POST", "/api/engine/intake", { publicationId: "dtw", title: `P9 14 intake same slug ${run}`, pillarSlug: "p6-main", body_markdown: "x", byline: "P9 Engine Byline", slug: x.slug, engineDraftId: `p9-14-same-${run}` }, tk);
+      console.log(`OBS   P14 MEASURED intake with a new engineDraftId ⇒ ${neu.status} ${neu.text.slice(0, 160)}; intake with the SAME slug as the hub article ⇒ ${same.status} ${same.text.slice(0, 200)}`);
+      const fm0 = await mainOf(A.f.id);
+      const ref = await call9("POST", "/api/engine/intake", { publicationId: "dtw", title: `P9 engine refreshed ${run}`, pillarSlug: "p6-main", body_markdown: "P9 engine body refreshed.", byline: "P9 Engine Byline", engineDraftId: String(fm0.engineDraftId ?? "") }, tk);
+      const fm1 = await mainOf(A.f.id);
+      expect("P14: (AC5 / AC15) the hub article's row is unchanged by an intake with a new engineDraftId and by one with ITS slug (measured above); engine article (f) still refreshes", [
+        neu.status, (await rowSnap(x.id)) === s0, (await mainOf(x.id)).engineDraftId ?? null, ref.status < 300, fm1.title,
+      ], [201, true, null, true, `P9 engine refreshed ${run}`]);
+    });
+
+    // ══ P15 — view=edit live block shapes ═════════════════════════════════
+    await group("P15", async () => {
+      const ed = async (k: P9Article) => (await getEdit(A[k].id, A[k].tenant)).body;
+      const a = await ed("a");
+      const al = ((a.edit as Doc).live ?? {}) as Doc;
+      expect("P15-1: (a) ⇒ live.editable true, EXACTLY the 17 wire keys", [al.editable, al.reason, Object.keys(al)], [true, "ok", ["editable", "reason", "version", "bodyEditable", "pillarSlug", "subSectionSlug", "secondary", "tagSlugs", "countrySlugs", "citySlugs", "authorId", "coAuthorIds", "flags", "sponsor", "hero", "leadImageCaption", "bodyMedia"]]);
+      const b = await getEdit(A.b.id, "gcv");
+      expect("P15-2: (b) ⇒ live {editable false, reason draft_diverged, version}; no draft content in the response", [((b.body.edit as Doc).live as Doc), b.text.includes("SECRET")], [{ editable: false, reason: "draft_diverged", version: await vOf(A.b.id) }, false]);
+      const f = await ed("f");
+      const g = await ed("g");
+      const m = await ed("m");
+      expect("P15-3: (f) engine ⇒ no live key (origin branch); (g) ⇒ live.reason not_hub_authored; (m) on the switch-off tenant ⇒ live.reason feature_disabled", [
+        "live" in (f.edit as Doc), ((g.edit as Doc).live as Doc).reason, ((m.edit as Doc).live as Doc),
+      ], [false, "not_hub_authored", { editable: false, reason: "feature_disabled", version: null }]);
+      const n = await getEdit(A.n.id, "gcv");
+      const nd = await getEdit(A.n.id, "gcv", "");
+      expect("P15-4: hub draft (n) ⇒ editable true, no live key, 18 keys; default read ⇒ no edit key", [((n.body.edit as Doc).editable), "live" in (n.body.edit as Doc), Object.keys(n.body.edit as Doc).length, "edit" in nd.body], [true, false, 18, false]);
+      // Baseline 0.1 (when the files sit next to f9): default read + hub-draft view=edit byte-identical (updatedAt removed).
+      const dir = inFile.replace(/\/[^/]*$/, "");
+      if (existsSyncSafe(`${dir}/baseline.json`) && existsSyncSafe(`${dir}/base-publishedId.json`)) {
+        const bl = JSON.parse(readFileSync(`${dir}/baseline.json`, "utf8")) as Doc;
+        const canon = (txt: string) => {
+          const j = JSON.parse(txt) as Doc;
+          if (j.article && typeof j.article === "object") delete (j.article as Doc).updatedAt;
+          return JSON.stringify(sortKeys6(j), null, 2);
+        };
+        const fileCanon = (f2: string) => JSON.stringify(sortKeys6(JSON.parse(readFileSync(f2, "utf8"))), null, 2);
+        const pubId = bl.publishedId as number;
+        const dId = bl.hubDraftId as number;
+        const now = [
+          canon((await call9("GET", `/api/hub/articles/${pubId}?tenant=dtw`, undefined, T.author)).text) === fileCanon(`${dir}/base-publishedId.json`),
+          canon((await call9("GET", `/api/hub/articles/${dId}?tenant=dtw`, undefined, T.author)).text) === fileCanon(`${dir}/base-hubDraftId.json`),
+          canon((await call9("GET", `/api/hub/articles/${dId}?tenant=dtw&view=edit`, undefined, T.author)).text) === fileCanon(`${dir}/base-hubDraftId-edit.json`),
+        ];
+        expect("P15-5: (AC16) mốc 0.1: default read of the published baseline row, default read + view=edit of the hub draft ⇒ byte-identical (updatedAt removed)", now, [true, true, true]);
+      } else console.log("OBS   P15-5 skipped: no baseline.json / base-*.json next to f9 (Phase 0 capture)");
+    });
+
+    // ══ P16 — key boundaries ══════════════════════════════════════════════
+    await group("P16", async () => {
+      const x = A.a.id;
+      const v = await vOf(x);
+      const au = await live(x, "gcv", v, { dek: "x" }, T.author);
+      const bo = await live(x, "gcv", v, { dek: "x" }, T.both);
+      const wr = await call9("POST", "/api/hub/articles", { tenant: "gcv", title: "P9 16 should fail", actor: P9_ACTOR }, T.write);
+      const wn = await live(x, "gcv", v, { dek: "x" }, T.writenoread);
+      expect("P16: (AC17 / AC33) author key ⇒ /live 403 (no hubWrite); engine with hubRead+hubWrite+hubAuthor ⇒ 403 'author key cannot live-edit'; write key ⇒ POST /api/hub/articles 403; hubWrite without hubRead ⇒ /live 403", [
+        [au.status, au.body.reason], pair(bo), [wr.status, wr.body.reason], wn.status,
+      ], [[403, "hub write not allowed for this engine"], [403, { ok: false, status: "forbidden", reason: "author key cannot live-edit" }], [403, "hub author not allowed for this engine"], 403]);
+    });
+
+    // ══ P17 — isolation, int4, 413, 400, flags, switch-off; 0 integration_error ══
+    await group("P17", async () => {
+      const i0 = await interr();
+      const m = A.m.id;
+      const sm = await rowSnap(m);
+      const v = await vOf(A.a.id);
+      const other = await live(m, "gcv", await vOf(m), { dek: "x" });
+      const ghost = await live(2_147_483_000, "gcv", 1, { dek: "x" });
+      const big = await live(9_999_999_999, "gcv", 1, { dek: "x" });
+      const wadR = await live(A.a.id, s9.outOfGrantTenant, v, { dek: "x" });
+      const tooBig = await call9("PATCH", `/api/hub/articles/${A.a.id}/live`, undefined, T.write, JSON.stringify({ tenant: "gcv", expectedVersion: v, actor: P9_ACTOR, fields: { dek: "x".repeat(1_000_100) } }));
+      const keys = await Promise.all(["zzz", "tenant", "actor", "expectedVersion"].map(async (k) => {
+        const r = await live(A.a.id, "gcv", v, { dek: "x", [k]: "v" });
+        return [r.status, r.body.field];
+      }));
+      const proto = await call9("PATCH", `/api/hub/articles/${A.a.id}/live`, undefined, T.write, `{"tenant":"gcv","expectedVersion":${v},"actor":${JSON.stringify(P9_ACTOR)},"fields":{"dek":"x","__proto__":{"slug":"y"}}}`);
+      const brk = await live(A.a.id, "gcv", v, { flags: { breaking: false } });
+      const off = await live(m, s9.controlTenant, await vOf(m), { dek: "x" });
+      expect("P17-1: (AC30) tenant B's article with tenant=gcv ⇒ 404 byte-identical to a missing id; id > int4 ⇒ same 404; B's row unchanged", [
+        other.status, other.text === ghost.text, big.text === ghost.text, (await rowSnap(m)) === sm,
+      ], [404, true, true, true]);
+      expect("P17-2: tenant outside the grant (wad) ⇒ 403 forbidden; body > 1,000,000 B ⇒ 413; unknown / tenant / actor / expectedVersion / __proto__ inside fields ⇒ 400 fields.<key>; flags.breaking equal to stored ⇒ 422 flags_locked; switch-off tenant ⇒ 403 feature_disabled", [
+        [wadR.status, wadR.body.status], tooBig.status, keys, [proto.status, proto.body.field], pair(brk), pair(off),
+      ], [[403, "forbidden"], 413, [[400, "fields.zzz"], [400, "fields.tenant"], [400, "fields.actor"], [400, "fields.expectedVersion"]], [400, "fields.__proto__"], NLE("flags_locked"), [403, { ok: false, status: "feature_disabled", reason: "live edit disabled for tenant" }]]);
+      expect("P17-3: the error branches above wrote 0 integration_error rows", (await interr()) - i0, 0);
+    });
+
+    // ══ P18 — same codes as PATCH (parser), except the 7 locked keys ══════
+    await group("P18", async () => {
+      const x = await mkPublished("gcv");
+      const v = x.version;
+      const vectors: [string, Doc][] = [
+        ["title C0", { title: "a\u0001b" }],
+        ["title BiDi", { title: "a‮b" }],
+        ["title too long", { title: "t".repeat(2000) }],
+        ["title empty", { title: "   " }],
+        ["dek BiDi", { dek: "x‮y" }],
+        ["body javascript: link", { bodyMarkdown: "Click [here](javascript:alert(1))." }],
+        ["body image syntax", { bodyMarkdown: "Look ![x](https://example.invalid/i.png) here." }],
+        ["body C0", { bodyMarkdown: "a\u0002b" }],
+        ["takeaways newline", { takeaways: ["a\nb"] }],
+        ["readMin 0", { readMin: 0 }],
+        ["tagSlugs not array", { tagSlugs: "x" }],
+        ["authorId string", { authorId: "x" }],
+        ["coAuthorIds [0]", { coAuthorIds: [0] }],
+        ["flags.deepDive string", { flags: { deepDive: "yes" } }],
+        ["flags.foo unknown", { flags: { foo: true } }],
+        ["countrySlugs ['']", { countrySlugs: [""] }],
+        ["secondary duplicate", { secondary: [{ pillarSlug: "p6-other" }, { pillarSlug: "p6-other" }] }],
+      ];
+      const mismatches: unknown[] = [];
+      for (const [name, f] of vectors) {
+        const exp = input.parseUpdateBody({ ...f, tenant: "gcv", expectedVersion: v, actor: P9_ACTOR });
+        const got = await live(x.id, "gcv", v, f);
+        const want = exp.ok ? "ok" : JSON.stringify([exp.status, exp.body]);
+        const have = JSON.stringify([got.status, got.body]);
+        if (exp.ok || want !== have) mismatches.push([name, want, have]);
+      }
+      expect("P18-1: (AC30) the PATCH parser vectors (javascript:, BiDi, C0, `![`, …) through /live ⇒ the SAME status + body as the PATCH parser", mismatches, []);
+      const locked = [
+        pair(await live(x.id, "gcv", v, { slug: "Bad Slug" })),
+        pair(await live(x.id, "gcv", v, { heroImageId: "x" })),
+        pair(await live(x.id, "gcv", v, { leadImageCaption: "a‮b" })),
+        pair(await live(x.id, "gcv", v, { flags: { breaking: "x" } })),
+        pair(await live(x.id, "gcv", v, { flags: { aiAssisted: true } })),
+        pair(await live(x.id, "gcv", v, { flags: { sponsored: true } })),
+        pair(await live(x.id, "gcv", v, { flags: { affiliate: true } })),
+      ];
+      expect("P18-2: (CMS4-6) vectors touching the 7 locked keys ⇒ 422 not_live_editable (slug_locked / media_locked / flags_locked) instead of the PATCH code", locked, [NLE("slug_locked"), NLE("media_locked"), NLE("media_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked")]);
+      const miss = await Promise.all(["actor", "expectedVersion", "tenant"].map(async (k) => {
+        const b: Doc = { tenant: "gcv", expectedVersion: v, actor: P9_ACTOR, fields: { dek: "x" } };
+        delete b[k];
+        const r = await liveRaw(x.id, b);
+        return [r.status, r.body.status, r.body.field];
+      }));
+      const badActor = await liveRaw(x.id, { tenant: "gcv", expectedVersion: v, actor: { email: "nope", role: "editor" }, fields: { dek: "x" } });
+      expect("P18-3: (N7) missing actor / expectedVersion / tenant ⇒ 400 bad_request field:<key>; a present but malformed actor ⇒ 422 invalid (actor.email format)", [miss, [badActor.status, badActor.body.status, (badActor.body.fields as Doc | undefined)?.["actor.email"]]], [[[400, "bad_request", "actor"], [400, "bad_request", "expectedVersion"], [400, "bad_request", "tenant"]], [422, "invalid", "format"]]);
+    });
+  } finally {
+    // FIN-2 / E6: restore the --setup6 grants of writeonly / author; the wtb frontendUrl; stop the hook server.
+    await setGrant(s6.engines.writeonly.id, s9.originalGrants.writeonly).catch(() => {});
+    await setGrant(s6.engines.author.id, s9.originalGrants.author).catch(() => {});
+    await payload.update({ collection: "tenants", id: wtbId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: wtbFrontend } as never }).catch(() => {});
+    hook.kill("SIGTERM");
+  }
+  const grantNow = async (id: number) => ((((await payload.findByID({ collection: "content-engines", id, depth: 0, overrideAccess: true })) as unknown as Doc).allowedTenants as unknown[]) ?? []).map((x) => Number(toId6(x))).sort((a, b) => a - b);
+  const gw = await grantNow(s6.engines.writeonly.id);
+  const ga = await grantNow(s6.engines.author.id);
+  console.log(`OBS   E6 grants after restore: writeonly=${JSON.stringify(gw)} author=${JSON.stringify(ga)} (originals writeonly=${JSON.stringify(s9.originalGrants.writeonly)} author=${JSON.stringify(s9.originalGrants.author)})`);
+  expect("E6: the --setup6 grants of writeonly / author are restored", [gw, ga], [[...s9.originalGrants.writeonly].sort((a, b) => a - b), [...s9.originalGrants.author].sort((a, b) => a - b)]);
+  const skipped = P9_GROUPS.length - executed.length;
+  console.log(`\n[check9] groups executed ${executed.length}/${P9_GROUPS.length}, skipped ${skipped}`);
+  const ok = state.failures === 0 && executed.length === P9_GROUPS.length;
+  console.log(`[check9] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED${executed.length !== P9_GROUPS.length ? ` + ${skipped} GROUP(S) NOT RUN` : ""}`}`);
+  process.exit(ok ? 0 : 1);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APCGHub P5.6 (chặng 1) — POST /api/hub/articles/{id}/preview (content-engine plan
+// process/features/apcg-hub/active/apcg-hub-p5-6-preview-taxonomy-cms-exit_PLAN_30-09-26.md).
+//
+//   npx tsx scripts/hub-probe.ts --setup10 --in <f6> --out <f10>
+//   npx tsx scripts/hub-probe.ts --check10 --in <f10> [--server-log <file>] [--f9 <f9>]   (X1–X12, X26)
+//   npx tsx scripts/hub-probe.ts --check10 --in <f10> --unit-only                      (X3, X4, X5 in-process)
+//
+// LOCAL DISPOSABLE DATABASE ONLY (guard9: assertLocalTargets + R2 unset + assertLocalDb, FIRST).
+// Every tenant frontendUrl written here is null or http://127.0.0.1:<unused port>; the one
+// bad value X8 needs (`http://p56.invalid`) lives only inside X8 and is restored in `finally`
+// (and repaired at the start of --check10 if a dead run left it). Tokens go to 0600 files
+// next to <f10>, never printed. The signing secret is read from the probe's own env (a
+// throwaway value) and only ever compared, never printed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const P10_GROUPS = ["X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10", "X11", "X12", "X26"] as const;
+const P10_UNIT_GROUPS = ["X3", "X4", "X5"] as const;
+const P10_ACTOR = { email: "p56@example.invalid", role: "editor", id: "hub-user-56" } as const;
+const P10_FRONT_PORT = 3597; // nothing listens there; mint never fetches the frontend
+const P10_TENANTS = { a: "p56-a", b: "p56-b", nourl: "p56-nourl", badurl: "p56-badurl" } as const;
+const P10_BAD_URL = "http://p56.invalid";
+type P10Article = "draft" | "otherTenant" | "noSlug" | "published" | "engine" | "adminDraft" | "noVersionRow" | "nourl" | "badurl";
+
+interface Setup10 {
+  version: 1;
+  setup6: string;
+  out: string;
+  frontendUrl: string;
+  tenants: Record<keyof typeof P10_TENANTS, { id: number; slug: string }>;
+  engines: Record<"author" | "read" | "write", { id: number; name: string; tokenFile: string }> & {
+    /** chặng 2 (X25): an intake engine (create_article) granted p56-a only. Absent in an f10 written before chặng 2. */
+    intake?: { id: number; name: string; tokenFile: string };
+  };
+  articles: Record<P10Article, { id: number; tenant: string; slug: string | null }>;
+  /** Main-row slug of `draft` (the latest version's slug differs: PATCHed after creation). */
+  draftMainSlug: string;
+  noVersionRowDeleted: number;
+}
+
+async function setup10() {
+  guard9();
+  const inFile = arg("in");
+  const out = arg("out");
+  if (!inFile || !out) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup10 --in <file from --setup6> --out <f10>");
+    process.exit(2);
+  }
+  const s6 = JSON.parse(readFileSync(inFile, "utf8")) as Setup6;
+  const payload = await getPayload({ config });
+  const tenants = await tenantsBySlug(payload);
+  const frontendUrl = `http://127.0.0.1:${P10_FRONT_PORT}`;
+
+  // Refuse unless every existing tenant frontendUrl is null / local (same rule as --setup9).
+  const allT = (await payload.find({ collection: "tenants", limit: 200, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+  const badUrl = allT.filter((t) => t.frontendUrl != null && t.frontendUrl !== "" && !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(String(t.frontendUrl)));
+  if (badUrl.length) {
+    console.error(`[setup10] refusing: tenant frontendUrl not local: ${badUrl.map((t) => t.slug).join(", ")}`);
+    process.exit(2);
+  }
+
+  const tOut = {} as Setup10["tenants"];
+  for (const [key, slug] of Object.entries(P10_TENANTS) as [keyof typeof P10_TENANTS, string][]) {
+    const url = key === "a" || key === "b" ? frontendUrl : null;
+    const data = { name: `P56 ${key}`, slug, status: "active", defaultLanguage: "en", supportedLanguages: ["en"], frontendUrl: url, features: { articles: true, translations: false } };
+    let id = tenants.get(slug);
+    if (id == null) id = ((await payload.create({ collection: "tenants", overrideAccess: true, context: { disableRevalidate: true }, data: data as never })) as unknown as { id: number }).id;
+    else await payload.update({ collection: "tenants", id, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: url, status: "active", features: { articles: true, translations: false } } as never });
+    tOut[key] = { id, slug };
+  }
+  const grant = Object.values(tOut).map((t) => t.id);
+
+  const engines = {} as Setup10["engines"];
+  for (const [key, flags] of [
+    ["author", { hubRead: true, hubAuthor: true, hubWrite: false }],
+    ["read", { hubRead: true, hubAuthor: false, hubWrite: false }],
+    ["write", { hubRead: true, hubAuthor: false, hubWrite: true }],
+  ] as const) {
+    const name = `apcghub-p56-${key}`;
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", allowedTenants: grant, ...flags };
+    let id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else id = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", allowedActions: ["import"], ...data } as never })) as unknown as { id: number }).id;
+    const tokenFile = `${out}.${key}.token`;
+    writeFileSync(tokenFile, token, { mode: 0o600 });
+    engines[key] = { id, name, tokenFile };
+  }
+  {
+    // chặng 2 (X25): an ENGINE intake key on p56-a only (create_article), to compare the intake's
+    // find-or-create of a byline with the hub-created pen name. Token in a 0600 file, never printed.
+    const name = "apcghub-p56-intake";
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", allowedTenants: [tOut.a.id], allowedActions: ["create_article"], hubRead: false, hubAuthor: false, hubWrite: false };
+    let id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else id = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", ...data } as never })) as unknown as { id: number }).id;
+    const tokenFile = `${out}.intake.token`;
+    writeFileSync(tokenFile, token, { mode: 0o600 });
+    engines.intake = { id, name, tokenFile };
+  }
+  const author = readFileSync(engines.author.tokenFile, "utf8").trim();
+
+  const run = runId6();
+  const art = async (key: keyof typeof P10_TENANTS, slug: string, data: Doc, opts: { draft?: boolean } = {}) => {
+    const tid = tOut[key].id;
+    const pillar = await ensurePillar(payload, tid, "p56-main", "P56 Main", 96);
+    const au = await ensureAuthor(payload, tid, "p56-author-1", "P56 Author One");
+    return ((await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      locale: "en",
+      ...(opts.draft ? { draft: true } : {}),
+      context: { disableRevalidate: true },
+      data: { tenant: tid, title: `P56 ${slug}`, slug, pillar, author: au, ...data } as never,
+    })) as unknown as { id: number }).id;
+  };
+  const s = (n: string) => `p56-${run}-${n}`;
+  // (1) a hub draft whose LATEST version got a new slug (main row keeps the first one).
+  const draftId = await art("a", s("draft"), { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id }, { draft: true });
+  await payload.update({ collection: "articles", id: draftId, overrideAccess: true, locale: "en", draft: true, context: { disableRevalidate: true }, data: { slug: s("draft-new") } as never });
+  const mainSlug = String(((await payload.findByID({ collection: "articles", id: draftId, depth: 0, overrideAccess: true })) as unknown as Doc).slug);
+  const latestSlug = String(((await payload.findByID({ collection: "articles", id: draftId, depth: 0, draft: true, overrideAccess: true })) as unknown as Doc).slug);
+  if (latestSlug !== s("draft-new") || mainSlug === latestSlug) throw new Error(`setup10: slug fixture not as expected (main=${mainSlug} latest=${latestSlug})`);
+  // (2) another tenant's draft.
+  const otherId = await art("b", s("other"), { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id }, { draft: true });
+  // (3) a draft WITHOUT a slug. The hub route always derives one from the title (hub-author-input.ts,
+  //     `slugify(title)` when absent), so such a draft can only come from a direct (CMS-side) draft save.
+  const noSlugId = ((await payload.create({
+    collection: "articles",
+    overrideAccess: true,
+    locale: "en",
+    draft: true,
+    context: { disableRevalidate: true },
+    data: {
+      tenant: tOut.a.id, title: `P56 no slug ${run}`, origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id,
+      pillar: await ensurePillar(payload, tOut.a.id, "p56-main", "P56 Main", 96), author: await ensureAuthor(payload, tOut.a.id, "p56-author-1", "P56 Author One"),
+    } as never,
+  })) as unknown as { id: number }).id;
+  const nsLatest = (await payload.findByID({ collection: "articles", id: noSlugId, depth: 0, draft: true, overrideAccess: true })) as unknown as Doc;
+  if (typeof nsLatest.slug === "string" && nsLatest.slug.trim() !== "") throw new Error("setup10: the no-slug draft has a slug");
+  const r3 = await call9("POST", "/api/hub/articles", { tenant: P10_TENANTS.a, title: `P56 title only ${run}`, actor: P10_ACTOR }, author);
+  console.log(`OBS   setup10: a title-only hub draft gets slug "${String(r3.body.slug ?? "")}" (status ${r3.status}) — the hub route derives it from the title`);
+  // (4) published, (5) engine pending_review, (6) a CMS-admin draft (lastEngine null).
+  const pubId = await art("a", s("pub"), { origin: "manual", workflowStatus: "published", _status: "published" });
+  const engId = await art("a", s("engine"), { origin: "engine", workflowStatus: "pending_review" }, { draft: true });
+  const admId = await art("a", s("admin"), { origin: "manual", workflowStatus: "draft", lastEngine: null }, { draft: true });
+  // (7) a published article whose version rows are removed (an imported article without one).
+  const nvId = await art("a", s("noversion"), { origin: "manual", workflowStatus: "published", _status: "published" });
+  const db = rawDb(payload);
+  const del = (await db.execute(sql`DELETE FROM _articles_v WHERE parent_id = ${nvId} RETURNING id`)) as { rows?: unknown[] };
+  // (8) / (9) one article on the null-URL tenant and one on the bad-URL tenant (URL null at rest).
+  const nourlId = await art("nourl", s("nourl"), { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id }, { draft: true });
+  const badId = await art("badurl", s("badurl"), { origin: "manual", workflowStatus: "draft", lastEngine: engines.author.id }, { draft: true });
+
+  const o: Setup10 = {
+    version: 1,
+    setup6: inFile,
+    out,
+    frontendUrl,
+    tenants: tOut,
+    engines,
+    articles: {
+      draft: { id: draftId, tenant: P10_TENANTS.a, slug: latestSlug },
+      otherTenant: { id: otherId, tenant: P10_TENANTS.b, slug: s("other") },
+      noSlug: { id: noSlugId, tenant: P10_TENANTS.a, slug: null },
+      published: { id: pubId, tenant: P10_TENANTS.a, slug: s("pub") },
+      engine: { id: engId, tenant: P10_TENANTS.a, slug: s("engine") },
+      adminDraft: { id: admId, tenant: P10_TENANTS.a, slug: s("admin") },
+      noVersionRow: { id: nvId, tenant: P10_TENANTS.a, slug: s("noversion") },
+      nourl: { id: nourlId, tenant: P10_TENANTS.nourl, slug: s("nourl") },
+      badurl: { id: badId, tenant: P10_TENANTS.badurl, slug: s("badurl") },
+    },
+    draftMainSlug: mainSlug,
+    noVersionRowDeleted: del.rows?.length ?? 0,
+  };
+  writeFileSync(out, JSON.stringify(o, null, 2), { mode: 0o600 });
+  console.log(`[setup10] written ${out} (+ four 0600 token files; tokens NOT printed). tenants ${Object.values(P10_TENANTS).join(",")}; version rows removed for the no-version article: ${o.noVersionRowDeleted}`);
+  process.exit(0);
+}
+
+/** base64url payload of a `<payload>.<sig>` token (decode only; no verification). */
+function p10Claims(token: string): Doc {
+  const body = token.split(".")[0] ?? "";
+  return JSON.parse(Buffer.from(body.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")) as Doc;
+}
+
+async function check10() {
+  guard9();
+  const { state, expect } = makeExpect();
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --check10 --in <f10> [--server-log <file>] [--f9 <f9>] | --check10 --in <f10> --unit-only");
+    process.exit(2);
+  }
+  const unit = flag("unit-only");
+  const s10 = JSON.parse(readFileSync(inFile, "utf8")) as Setup10;
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const T = { author: tok(s10.engines.author.tokenFile), read: tok(s10.engines.read.tokenFile), write: tok(s10.engines.write.tokenFile) };
+  const secret = process.env.CENTRAL_SIGNING_SECRET ?? "";
+  if (secret.length < 16) {
+    console.error("[check10] refusing: CENTRAL_SIGNING_SECRET (a throwaway probe value) must be set in the probe env");
+    process.exit(2);
+  }
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const rows = async (q: unknown) => ((await db.execute(q)) as { rows?: Doc[] }).rows ?? [];
+  const { signPayload, verifySigned } = await import("../src/lib/crypto");
+  const A = s10.articles;
+  const executed: string[] = [];
+  const seen: string[] = []; // every response text (X10)
+  const minted: { token: string; url: string }[] = [];
+  const isJsonOk = (r: Reply9) => typeof r.body.ok === "boolean";
+  const badurlId = s10.tenants.badurl.id;
+
+  // Repair a bad frontendUrl a dead run may have left (X8 sets it only temporarily).
+  const curBad = ((await payload.findByID({ collection: "tenants", id: badurlId, depth: 0, overrideAccess: true })) as unknown as Doc).frontendUrl;
+  if (curBad != null && curBad !== "") {
+    await payload.update({ collection: "tenants", id: badurlId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: null } as never });
+    console.log("OBS   p56-badurl frontendUrl left over by a dead run — restored to null");
+  }
+
+  const mint = async (id: number | string, tenant: string, token: string | null = T.author) => {
+    const r = await call9("POST", `/api/hub/articles/${id}/preview`, { tenant, actor: P10_ACTOR }, token);
+    seen.push(r.text);
+    if (r.status === 200 && typeof r.body.url === "string") {
+      const t = new URL(r.body.url).searchParams.get("token") ?? "";
+      minted.push({ token: t, url: r.body.url });
+    }
+    return r;
+  };
+  const pubPreview = async (token: string) => {
+    const r = await call9("GET", `/api/public/preview?token=${encodeURIComponent(token)}`, undefined, null);
+    return r;
+  };
+  const group = async (name: (typeof P10_GROUPS)[number], fn: () => Promise<void>) => {
+    try {
+      await fn();
+      executed.push(name);
+    } catch (e) {
+      state.failures++;
+      console.log(`FAIL  ${name} threw: ${(e as Error).name}: ${String((e as Error).message).slice(0, 200)}`);
+    }
+  };
+
+  if (unit) {
+    // In-process: mint through the handler with the real local Payload, then token checks with the verifier.
+    const core = await import("../src/lib/hub-author-preview-core");
+    const req = new Request(`${BASE}/api/hub/articles/${A.draft.id}/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${T.author}` },
+      body: JSON.stringify({ tenant: A.draft.tenant, actor: P10_ACTOR }),
+    });
+    const res = await core.handleHubPreviewMintWith(req, { params: Promise.resolve({ id: String(A.draft.id) }) }, { getPayload: async () => payload });
+    const body = (await res.json()) as Doc;
+    expect("U0: in-process mint ⇒ 200", res.status, 200);
+    const token = new URL(String(body.url)).searchParams.get("token") ?? "";
+    const now = Math.floor(Date.now() / 1000);
+    await group("X3", async () => {
+      const c = p10Claims(token);
+      expect("X3: claims keys / tenant slug / draft / ttl ≤ 600", [Object.keys(c).sort(), c.tenant, c.slug, c.draft, Number(c.exp) - now <= 600 && Number(c.exp) - now > 590], [["draft", "exp", "slug", "tenant"], A.draft.tenant, A.draft.slug, true, true]);
+    });
+    await group("X4", async () => {
+      const expired = signPayload({ ...p10Claims(token), exp: now - 5 } as never);
+      expect("X4: an expired token is refused by the verifier", verifySigned(expired, now), null);
+    });
+    await group("X5", async () => {
+      const flipped = token.slice(0, -1) + (token.endsWith("A") ? "B" : "A");
+      const body2 = token.split(".")[0]!;
+      const altered = `${body2.slice(0, -1)}${body2.endsWith("A") ? "B" : "A"}.${token.split(".")[1]}`;
+      expect("X5: one changed character (signature / payload) ⇒ refused", [verifySigned(flipped, now), verifySigned(altered, now), verifySigned(token, now) !== null], [null, null, true]);
+    });
+    console.log(`\n[check10] groups executed ${executed.length}/${P10_UNIT_GROUPS.length} (unit-only: ${P10_UNIT_GROUPS.join(", ")})`);
+    const ok = state.failures === 0 && executed.length === P10_UNIT_GROUPS.length;
+    console.log(`[check10] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(ok ? 0 : 1);
+  }
+
+  let x1: Reply9 | null = null;
+  await group("X1", async () => {
+    x1 = await mint(A.draft.id, A.draft.tenant);
+    const b = x1.body;
+    const u = typeof b.url === "string" ? new URL(b.url) : null;
+    expect("X1: author key mint ⇒ 200, exactly {ok,id,tenant,url,expiresAt}, url = <frontendUrl>/preview?token&slug", [x1.status, Object.keys(b).sort(), b.ok, b.id, b.tenant, u ? u.origin + u.pathname : null, u ? [...u.searchParams.keys()] : null, u?.searchParams.get("slug")], [200, ["expiresAt", "id", "ok", "tenant", "url"], true, A.draft.id, A.draft.tenant, `${s10.frontendUrl}/preview`, ["token", "slug"], A.draft.slug]);
+  });
+  const x1Token = () => (x1 && typeof (x1 as Reply9).body.url === "string" ? new URL(String((x1 as Reply9).body.url)).searchParams.get("token") ?? "" : "");
+
+  await group("X2", async () => {
+    const r = await pubPreview(x1Token());
+    const doc = (r.body.doc ?? {}) as Doc;
+    expect("X2: the minted token is accepted by GET /api/public/preview; doc = the article's LATEST version (new slug, not the main row's)", [r.status, r.body.preview, doc.id, doc.slug, doc.slug === s10.draftMainSlug], [200, true, A.draft.id, A.draft.slug, false]);
+  });
+
+  await group("X3", async () => {
+    const c = p10Claims(x1Token());
+    const now = Math.floor(Date.now() / 1000);
+    expect("X3: decoded claims = {tenant slug, slug, draft:true, exp}, exp − now ≤ 600", [Object.keys(c).sort(), c.tenant, c.draft, Number(c.exp) - now <= 600, Number(c.exp) - now > 540], [["draft", "exp", "slug", "tenant"], A.draft.tenant, true, true, true]);
+  });
+
+  await group("X4", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const expired = signPayload({ ...p10Claims(x1Token()), exp: now - 5 } as never);
+    const r = await pubPreview(expired);
+    expect("X4: (positive) JSON reply; an expired token ⇒ 401", [isJsonOk(r), r.status], [true, 401]);
+  });
+
+  await group("X5", async () => {
+    const t = x1Token();
+    const [body, sig] = t.split(".") as [string, string];
+    const a = await pubPreview(`${body}.${sig.slice(0, -1)}${sig.endsWith("A") ? "B" : "A"}`);
+    const b = await pubPreview(`${body.slice(0, -1)}${body.endsWith("A") ? "B" : "A"}.${sig}`);
+    expect("X5: (positive) JSON replies; one changed character in signature / payload ⇒ 401 / 401", [isJsonOk(a), isJsonOk(b), a.status, b.status], [true, true, 401, 401]);
+  });
+
+  await group("X6", async () => {
+    const cross = await mint(A.otherTenant.id, A.draft.tenant);
+    const missing = await mint(2147483000, A.draft.tenant);
+    const shape = await mint("2147483648", A.draft.tenant);
+    expect("X6: (positive) JSON; tenant B's article with tenant A ⇒ 404, byte-identical to an unknown id and an out-of-range id", [isJsonOk(cross), cross.status, cross.text === missing.text, cross.text === shape.text], [true, 404, true, true]);
+  });
+
+  await group("X7", async () => {
+    const rd = await mint(A.draft.id, A.draft.tenant, T.read);
+    const wr = await mint(A.draft.id, A.draft.tenant, T.write);
+    const none = await mint(A.draft.id, A.draft.tenant, null);
+    expect("X7: (positive) JSON; read-only / status-write-only / no token ⇒ 403 / 403 / 401", [isJsonOk(rd), isJsonOk(wr), isJsonOk(none), rd.status, wr.status, none.status, rd.body.reason, wr.body.reason], [true, true, true, 403, 403, 401, "hub author not allowed for this engine", "hub author not allowed for this engine"]);
+  });
+
+  await group("X8", async () => {
+    const n = await mint(A.nourl.id, A.nourl.tenant);
+    let b: Reply9 | null = null;
+    try {
+      await payload.update({ collection: "tenants", id: badurlId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: P10_BAD_URL } as never });
+      b = await mint(A.badurl.id, A.badurl.tenant);
+    } finally {
+      await payload.update({ collection: "tenants", id: badurlId, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: null } as never });
+    }
+    const after = ((await payload.findByID({ collection: "tenants", id: badurlId, depth: 0, overrideAccess: true })) as unknown as Doc).frontendUrl ?? null;
+    expect("X8: null frontendUrl ⇒ 409 no_frontend_url; temporary http://p56.invalid ⇒ 409 bad_frontend_url; restored to null", [n.status, n.body.status, n.body.reason, b?.status, b?.body.reason, after], [409, "preview_unavailable", "no_frontend_url", 409, "bad_frontend_url", null]);
+  });
+
+  await group("X9", async () => {
+    const r = await mint(A.noSlug.id, A.noSlug.tenant);
+    expect("X9: a title-only draft (no slug) ⇒ 409 no_slug", [r.status, r.body.status, r.body.reason], [409, "preview_unavailable", "no_slug"]);
+  });
+
+  await group("X26", async () => {
+    const out: unknown[] = [];
+    for (const k of ["published", "engine", "adminDraft"] as const) {
+      const r = await mint(A[k].id, A[k].tenant);
+      const tokenK = typeof r.body.url === "string" ? new URL(r.body.url).searchParams.get("token") ?? "" : "";
+      const pr = k === "published" ? await pubPreview(tokenK) : null;
+      out.push([k, r.status, pr ? [pr.status, ((pr.body.doc ?? {}) as Doc).slug] : null]);
+    }
+    expect("X26 (D9): published / engine pending_review / CMS-admin draft ⇒ 200; public round trip on the published one", out, [
+      ["published", 200, [200, A.published.slug]],
+      ["engine", 200, null],
+      ["adminDraft", 200, null],
+    ]);
+    // Exploratory (plan: "thử thêm … nếu tạo được"): a published article whose version rows are gone.
+    // Recorded, not asserted — the verifier (/api/public/preview, forbidden zone) is not changed here.
+    const nv = await mint(A.noVersionRow.id, A.noVersionRow.tenant);
+    const nvTok = typeof nv.body.url === "string" ? new URL(nv.body.url).searchParams.get("token") ?? "" : "";
+    const nvPub = nvTok ? await pubPreview(nvTok) : null;
+    console.log(`OBS   X26 no-version-row article (version rows removed at setup: ${s10.noVersionRowDeleted}): mint ${nv.status}; /api/public/preview ${nvPub ? nvPub.status : "not called"}`);
+  });
+
+  await group("X11", async () => {
+    const counts = async () => (await rows(sql`SELECT (SELECT count(*)::int FROM articles) AS a, (SELECT count(*)::int FROM _articles_v) AS v, (SELECT count(*)::int FROM activity_log) AS l`))[0];
+    const before = await counts();
+    const ok = await mint(A.draft.id, A.draft.tenant);
+    const mid = await counts();
+    const denied = await mint(A.draft.id, A.draft.tenant, T.read);
+    const deniedToken = typeof ok.body.url === "string" ? new URL(ok.body.url).searchParams.get("token") ?? "" : "";
+    expect("X11: (positive) JSON; a successful mint adds no articles / versions / activity rows; a refusal carries no token", [isJsonOk(ok), ok.status, JSON.stringify(before) === JSON.stringify(mid), deniedToken !== "" && !denied.text.includes(deniedToken)], [true, 200, true, true]);
+  });
+
+  await group("X10", async () => {
+    const all = seen.join("\n");
+    const logFile = arg("server-log");
+    const log = logFile ? readFileSync(logFile, "utf8") : null;
+    // `next dev` logs every request path. The probe's own calls to the EXISTING verifier
+    // (GET /api/public/preview?token=…) therefore put tokens in the dev request log; those lines
+    // are counted and reported, every OTHER line must hold no token / URL, and no line the secret.
+    const verifierLine = /^\s*GET \/api\/public\/preview\?token=/;
+    const lines = (log ?? "").split("\n");
+    const other = lines.filter((l) => !verifierLine.test(l)).join("\n");
+    const leaks = (txt: string) => [txt.includes(secret), minted.some((m) => m.token !== "" && txt.includes(m.token)), minted.some((m) => txt.includes(m.url))];
+    console.log(`OBS   X10 dev request-log lines of the verifier path (GET /api/public/preview?token=…): ${lines.filter((l) => verifierLine.test(l)).length}`);
+    expect("X10: the secret is never in a response nor in the server log; outside the verifier's own request-path lines the log holds no token / preview URL", [all.includes(secret), log === null ? "no --server-log" : [(log ?? "").includes(secret), ...leaks(other).slice(1)], minted.length > 0], [false, [false, false, false], true]);
+  });
+
+  await group("X12", async () => {
+    const r6 = spawnSync("npx", ["tsx", "scripts/hub-probe.ts", "--check6", "--unit-only"], { env: process.env, encoding: "utf8", timeout: 300_000 });
+    const f9 = arg("f9");
+    const r9 = f9 ? spawnSync("npx", ["tsx", "scripts/hub-probe.ts", "--check9", "--in", f9], { env: process.env, encoding: "utf8", timeout: 600_000 }) : null;
+    const tail = (s: string | undefined) => (s ?? "").split("\n").filter((l) => /groups executed|ALL CHECKS PASSED|CHECK\(S\) FAILED|^PASS|^FAIL/.test(l));
+    const t6 = tail(r6.stdout);
+    const t9 = r9 ? tail(r9.stdout) : [];
+    console.log(`OBS   X12 --check6 --unit-only: exit=${r6.status} PASS=${t6.filter((l) => l.startsWith("PASS")).length} FAIL=${t6.filter((l) => l.startsWith("FAIL")).length}`);
+    console.log(`OBS   X12 --check9: ${r9 ? `exit=${r9.status} PASS=${t9.filter((l) => l.startsWith("PASS")).length} FAIL=${t9.filter((l) => l.startsWith("FAIL")).length} ${t9.filter((l) => l.includes("groups executed")).join(" ")}` : "not run (no --f9)"}`);
+    expect("X12: --check6 --unit-only and --check9 re-run green", [r6.status, r9 ? r9.status : "no --f9"], [0, 0]);
+  });
+
+  const missing = P10_GROUPS.filter((g) => !executed.includes(g));
+  console.log(`\n[check10] groups executed ${executed.length}/${P10_GROUPS.length}${missing.length ? ` (not run: ${missing.join(", ")})` : ""}`);
+  const ok = state.failures === 0 && executed.length === P10_GROUPS.length;
+  console.log(`[check10] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(ok ? 0 : 1);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APCGHub P5.6 (chặng 2) — POST /api/hub/authors and POST /api/hub/tags (content-engine
+// plan process/features/apcg-hub/active/apcg-hub-p5-6-preview-taxonomy-cms-exit_PLAN_30-09-26.md).
+//
+//   npx tsx scripts/hub-probe.ts --check11 --in <f10>                (X13–X25, X27 over HTTP)
+//   npx tsx scripts/hub-probe.ts --check11 --in <f10> --unit-only    (X13, X14, X17, X19, X20 in-process)
+//
+// LOCAL DISPOSABLE DATABASE ONLY (guard9 FIRST). Uses the --setup10 tenants / keys (f10 written
+// by a chặng-2 --setup10, which adds the intake key for X25). Every name / title carries a
+// fresh run id so the check can be re-run on the same database. Tokens are never printed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const P11_GROUPS = ["X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20", "X21", "X22", "X23", "X24", "X25", "X27"] as const;
+const P11_UNIT_GROUPS = ["X13", "X14", "X17", "X19", "X20"] as const;
+const P11_CODES = new Set<string>([
+  "required", "type", "too_long", "too_many", "out_of_range", "format", "duplicate", "unknown_ref", "not_enabled", "blocked_pillar",
+  "c0", "bidi", "surrogate", "newline", "invalid", "too_large", "ws_run", "image", "link", "url", "node", "unstable", "too_slow",
+]);
+
+async function check11() {
+  guard9();
+  const { state, expect } = makeExpect();
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --check11 --in <f10> [--unit-only]");
+    process.exit(2);
+  }
+  const unit = flag("unit-only");
+  const s10 = JSON.parse(readFileSync(inFile, "utf8")) as Setup10;
+  if (!unit && !s10.engines.intake) {
+    console.error("[check11] refusing: <f10> has no intake key — re-run --setup10 (chặng 2) first");
+    process.exit(2);
+  }
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const T = { author: tok(s10.engines.author.tokenFile), read: tok(s10.engines.read.tokenFile), write: tok(s10.engines.write.tokenFile) };
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const num = async (q: unknown) => Number((((await db.execute(q)) as { rows?: Doc[] }).rows?.[0] ?? {}).n ?? -1);
+  const ta = s10.tenants.a;
+  const tb = s10.tenants.b;
+  const run = runId6();
+  const nm = (s: string) => `P56 ${s} ${run}`;
+  const executed: string[] = [];
+  const group = async (name: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+      executed.push(name);
+    } catch (e) {
+      state.failures++;
+      console.log(`FAIL  ${name} threw: ${(e as Error).name}: ${String((e as Error).message).slice(0, 200)}`);
+    }
+  };
+  const authorsIn = (tid: number) => num(sql`SELECT count(*)::int AS n FROM authors WHERE tenant_id = ${tid}`);
+  const tagsIn = (tid: number) => num(sql`SELECT count(*)::int AS n FROM tags WHERE tenant_id = ${tid}`);
+  const logRows = (col: string) => num(sql`SELECT count(*)::int AS n FROM activity_log WHERE event_type = 'human_edit' AND target_collection = ${col}`);
+  const logDetailHas = async (col: string, id: unknown, needle: string) =>
+    num(sql`SELECT count(*)::int AS n FROM activity_log WHERE target_collection = ${col} AND target_id = ${String(id)} AND (detail::text ILIKE ${"%" + needle + "%"})`);
+
+  // One call helper for both modes: HTTP (default) or the in-process handler (unit-only).
+  type R = { status: number; text: string; body: Doc };
+  const core = unit ? await import("../src/lib/hub-taxonomy-create-core") : null;
+  const post = async (path: "/api/hub/authors" | "/api/hub/tags", body: unknown, token: string | null = T.author): Promise<R> => {
+    if (!core) return call9("POST", path, body, token);
+    const req = new Request(`${BASE}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body),
+    });
+    const deps = { getPayload: async () => payload };
+    const res = path === "/api/hub/authors" ? await core.handleHubAuthorCreateWith(req, deps) : await core.handleHubTagCreateWith(req, deps);
+    const text = await res.text();
+    let b: Doc = {};
+    try {
+      b = JSON.parse(text) as Doc;
+    } catch {
+      /* non-JSON */
+    }
+    return { status: res.status, text, body: b };
+  };
+  const author = (tenant: string, name: string, role?: string, token?: string | null) =>
+    post("/api/hub/authors", { tenant, name, ...(role === undefined ? {} : { role }), actor: P10_ACTOR }, token);
+  const tag = (tenant: string, title: string, token?: string | null) => post("/api/hub/tags", { tenant, title, actor: P10_ACTOR }, token);
+  const idOf = (r: R, k: "author" | "tag") => (r.body[k] as Doc | undefined)?.id;
+  const seen: string[] = [];
+  const keep = (r: R) => {
+    seen.push(r.text);
+    return r;
+  };
+
+  let x13Id: unknown = null;
+  let x16: { id: unknown; slug: unknown } = { id: null, slug: null };
+
+  await group("X13", async () => {
+    const l0 = await logRows("authors");
+    const name = nm("Author One");
+    const a = keep(await author(ta.slug, name));
+    expect("X13 (positive): a new pen name ⇒ 201 JSON created:true", [a.status, a.body.ok, a.body.created], [201, true, true]);
+    const l1 = await logRows("authors");
+    const b = keep(await author(ta.slug, name));
+    const l2 = await logRows("authors");
+    x13Id = idOf(a, "author");
+    expect("X13: repeat ⇒ 200 created:false, same id; activity_log human_edit authors +1 then +0", [b.status, b.body.created, idOf(b, "author") === x13Id, l1 - l0, l2 - l1], [200, false, true, 1, 0]);
+    expect("X13: the activity row's detail carries no name and no e-mail", [await logDetailHas("authors", x13Id, name), await logDetailHas("authors", x13Id, P10_ACTOR.email), await logDetailHas("authors", x13Id, '"via": "hub"')], [0, 0, 1]);
+  });
+
+  await group("X14", async () => {
+    const nfc = `Nguyễn Văn ${run}`;
+    const a = await author(ta.slug, nfc);
+    const b = await author(ta.slug, `  ${nfc.normalize("NFD").replace(/ /g, "  ")} `);
+    expect("X14: NFD with extra spaces and NFC ⇒ the same id (positive first)", [a.status, b.status, idOf(a, "author") === idOf(b, "author"), (b.body.author as Doc)?.name], [201, 200, true, nfc]);
+  });
+
+  if (!unit) {
+    await group("X15", async () => {
+      const a = await author(ta.slug, nm("Case Name"));
+      const b = await author(ta.slug, nm("Case Name").toLowerCase());
+      expect("X15: another letter case ⇒ a NEW row (recorded behaviour; the hub warns)", [a.status, b.status, idOf(a, "author") !== idOf(b, "author")], [201, 201, true]);
+    });
+
+    await group("X16", async () => {
+      const l0 = await logRows("tags");
+      const title = nm("Tag One");
+      const a = keep(await tag(ta.slug, title));
+      const l1 = await logRows("tags");
+      const b = keep(await tag(ta.slug, title.toUpperCase()));
+      const l2 = await logRows("tags");
+      x16 = { id: idOf(a, "tag"), slug: (a.body.tag as Doc)?.slug };
+      const stored = (((await db.execute(sql`SELECT l.title FROM tags_locales l WHERE l._parent_id = ${Number(x16.id)}`)) as { rows?: Doc[] }).rows ?? []).map((r) => r.title);
+      expect("X16: tag 201, repeat (other case) ⇒ 200 same id, title kept; log +1 then +0", [a.status, b.status, idOf(b, "tag") === x16.id, (b.body.tag as Doc)?.title, stored.includes(title), l1 - l0, l2 - l1], [201, 200, true, title, true, 1, 0]);
+      expect("X16: the tag activity row has no title", [await logDetailHas("tags", x16.id, title), await logDetailHas("tags", x16.id, "tag_create")], [0, 1]);
+    });
+  }
+
+  await group("X17", async () => {
+    const a = await tag(ta.slug, `Châu Á ${run}`);
+    const b = await tag(ta.slug, `chau a ${run}`);
+    const c = await tag(ta.slug, `Đồng ${run}`);
+    const d = await tag(ta.slug, `Dong ${run}`);
+    expect("X17: Châu Á ≡ chau a and Đồng ≡ Dong (same slug, same id)", [
+      a.status, b.status, idOf(a, "tag") === idOf(b, "tag"), (a.body.tag as Doc)?.slug,
+      c.status, d.status, idOf(c, "tag") === idOf(d, "tag"), (c.body.tag as Doc)?.slug,
+    ], [201, 200, true, `chau-a-${run}`, 201, 200, true, `dong-${run}`]);
+  });
+
+  if (!unit) {
+    await group("X18", async () => {
+      const name = nm("Shared Name");
+      const a = await author(ta.slug, name);
+      const nb0 = await authorsIn(tb.id);
+      const b = await author(tb.slug, name);
+      const nb1 = await authorsIn(tb.id);
+      expect("X18: the same name in tenant B ⇒ its own row", [a.status, b.status, idOf(a, "author") !== idOf(b, "author"), nb1 - nb0], [201, 201, true, 1]);
+      const tid = (await tenantsBySlug(payload)).get("dtw");
+      const before = tid == null ? -1 : (await authorsIn(tid)) + (await tagsIn(tid));
+      const x = await author("dtw", nm("Outside"));
+      const y = await tag("dtw", nm("Outside"));
+      const after = tid == null ? -1 : (await authorsIn(tid)) + (await tagsIn(tid));
+      expect("X18: a tenant outside the grant ⇒ 403 and 0 new rows", [x.status, y.status, x.body.reason, after - before], [403, 403, "tenant not in allowed scope", 0]);
+    });
+  }
+
+  await group("X19", async () => {
+    const ok = await author(ta.slug, nm("Role Default"));
+    const stored = (((await db.execute(sql`SELECT role FROM authors WHERE id = ${Number(idOf(ok, "author"))}`)) as { rows?: Doc[] }).rows ?? [])[0]?.role;
+    const bad = await author(ta.slug, nm("Role Bad"), "Boss");
+    expect("X19: default role stored = Staff writer (positive first); a role outside the list ⇒ 422 fields.role=invalid", [ok.status, stored, bad.status, bad.body.status, (bad.body.fields as Doc)?.role], [201, "Staff writer", 422, "invalid", "invalid"]);
+  });
+
+  await group("X20", async () => {
+    const pos = await author(ta.slug, nm("Valid Control"));
+    expect("X20 (positive): a clean name ⇒ 201", pos.status, 201);
+    const n0 = await authorsIn(ta.id);
+    const vectors = [nm("Ctl") + String.fromCharCode(1), "<script>x</script>", "x".repeat(121), String.fromCodePoint(0x3164, 0x3164), "A" + String.fromCodePoint(0x34f) + "B"];
+    const out: unknown[] = [];
+    for (const v of vectors) {
+      const r = await author(ta.slug, v);
+      const c = String((r.body.fields as Doc | undefined)?.name ?? "");
+      out.push([r.status, P11_CODES.has(c)]);
+    }
+    const n1 = await authorsIn(ta.id);
+    expect("X20: control / <script> / 121 chars / U+3164×2 / U+034F ⇒ 422 with a closed code, 0 new rows", [out, n1 - n0], [vectors.map(() => [422, true]), 0]);
+  });
+
+  if (unit) {
+    console.log(`\n[check11] groups executed ${executed.length}/${P11_UNIT_GROUPS.length} (unit-only: ${P11_UNIT_GROUPS.join(", ")})`);
+    const okU = state.failures === 0 && executed.length === P11_UNIT_GROUPS.length;
+    console.log(`[check11] ${okU ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`} (unit-only)`);
+    process.exit(okU ? 0 : 1);
+  }
+
+  await group("X21", async () => {
+    const out: number[] = [];
+    for (const t of [null, T.read, T.write]) {
+      out.push((await author(ta.slug, nm("Key Check"), undefined, t)).status, (await tag(ta.slug, nm("Key Check"), t)).status);
+    }
+    expect("X21: no token 401, read-only 403, status-write 403 (both routes)", out, [401, 401, 403, 403, 403, 403]);
+  });
+
+  await group("X22", async () => {
+    const r = await call9("GET", `/api/hub/taxonomy?tenants=${ta.slug}&kinds=authors,tags`, undefined, T.read);
+    seen.push(r.text);
+    const entry = ((r.body.tenants as Doc[] | undefined) ?? []).find((e) => (e.tenant as Doc | undefined)?.slug === ta.slug || e.slug === ta.slug) ?? ((r.body.tenants as Doc[] | undefined) ?? [])[0];
+    const aIds = (((entry?.authors as Doc | undefined)?.items as Doc[] | undefined) ?? []).map((d) => d.id);
+    const tIds = (((entry?.tags as Doc | undefined)?.items as Doc[] | undefined) ?? []).map((d) => d.id);
+    expect("X22: GET /api/hub/taxonomy (read key) lists the new pen name and tag", [r.status, aIds.includes(x13Id as number), tIds.includes(x16.id as number)], [200, true, true]);
+  });
+
+  await group("X23", async () => {
+    const r = await call9("POST", "/api/hub/articles", { tenant: ta.slug, title: nm("Uses New Taxonomy"), pillarSlug: "p56-main", authorId: x13Id, tagSlugs: [x16.slug], actor: P10_ACTOR }, T.author);
+    const id = r.body.id as number | undefined;
+    const row = id == null ? [] : (((await db.execute(sql`SELECT version_author_id AS author_id FROM _articles_v WHERE parent_id = ${id} ORDER BY id DESC LIMIT 1`)) as { rows?: Doc[] }).rows ?? []);
+    expect("X23: a hub draft with the new authorId + tagSlugs ⇒ 201 and the draft points at the new pen name", [r.status, Number(row[0]?.author_id) === Number(x13Id)], [201, true]);
+  });
+
+  await group("X24", async () => {
+    // `seen` = the create responses + (last) the taxonomy read. The EXISTING taxonomy route (P5.1,
+    // not touched here) emits each author's public `bio` (sanitizeHubAuthor) — recorded, not asserted.
+    const creates = seen.slice(0, -1);
+    const taxonomy = seen[seen.length - 1] ?? "";
+    const leaks = creates.filter((t) => /"(user|avatar|bio)"\s*:/.test(t)).length;
+    expect("X24: no create response carries user / avatar / bio; the taxonomy read carries no user / avatar", [creates.length >= 4, leaks, /"(user|avatar)"\s*:/.test(taxonomy)], [true, 0, false]);
+    console.log(`OBS   X24: the existing GET /api/hub/taxonomy author items carry a "bio" key: ${/"bio"\s*:/.test(taxonomy)} (P5.1 contract, sanitizeHubAuthor)`);
+  });
+
+  await group("X25", async () => {
+    const name = nm("Intake Match");
+    const h = await author(ta.slug, name);
+    const intakeTok = tok(s10.engines.intake!.tokenFile);
+    const n0 = await authorsIn(ta.id);
+    const r = await call9("POST", "/api/engine/intake", { publicationId: ta.slug, title: nm("Intake Article"), pillarSlug: "p56-main", body_markdown: "P56 intake body.", byline: name }, intakeTok);
+    const n1 = await authorsIn(ta.id);
+    const aid = r.body.id == null ? null : (((await db.execute(sql`SELECT author_id FROM articles WHERE id = ${Number(r.body.id)}`)) as { rows?: Doc[] }).rows ?? [])[0]?.author_id;
+    expect("X25: the engine intake with byline = the hub-created name REUSES that id (no duplicate row)", [h.status, r.status, Number(aid) === Number(idOf(h, "author")), n1 - n0], [201, 201, true, 0]);
+  });
+
+  await group("X27", async () => {
+    const title = nm("Race Tag");
+    const [a, b] = await Promise.all([tag(ta.slug, title), tag(ta.slug, title)]);
+    const slug = (a.body.tag as Doc | undefined)?.slug ?? (b.body.tag as Doc | undefined)?.slug;
+    const rows = await num(sql`SELECT count(*)::int AS n FROM tags WHERE tenant_id = ${ta.id} AND slug = ${String(slug)}`);
+    expect("X27: two concurrent creates of one tag ⇒ exactly 1 row, both ok:true", [rows, a.body.ok, b.body.ok, [a.status, b.status].sort()], [1, true, true, [200, 201]]);
+    const name = nm("Race Author");
+    const [c, d] = await Promise.all([author(ta.slug, name), author(ta.slug, name)]);
+    const arows = await num(sql`SELECT count(*)::int AS n FROM authors WHERE tenant_id = ${ta.id} AND name = ${name}`);
+    console.log(`OBS   X27: two concurrent creates of one pen name ⇒ ${arows} row(s); statuses ${c.status}/${d.status} (not asserted — gap hub-p5-6-author-create-race-duplicates)`);
+  });
+
+  const missing = P11_GROUPS.filter((g) => !executed.includes(g));
+  console.log(`\n[check11] groups executed ${executed.length}/${P11_GROUPS.length}${missing.length ? ` (not run: ${missing.join(", ")})` : ""}`);
+  const ok = state.failures === 0 && executed.length === P11_GROUPS.length;
+  console.log(`[check11] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(ok ? 0 : 1);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -9713,10 +12372,24 @@ const run = flag("setup")
                                       ? setup7
                                       : flag("check7")
                                         ? check7
-                                        : null;
+                                        : flag("setup8")
+                                          ? setup8
+                                          : flag("check8")
+                                            ? check8
+                                            : flag("setup9")
+                                              ? setup9
+                                              : flag("check9")
+                                                ? check9
+                                                : flag("setup10")
+                                                  ? setup10
+                                                  : flag("check10")
+                                                    ? check10
+                                                    : flag("check11")
+                                                      ? check11
+                                                      : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only | --setup9 --in <setup6.json> --out <f9> | --check9 --in <f9> | --check9 --unit-only | --setup10 --in <setup6.json> --out <f10> | --check10 --in <f10> [--server-log <file>] [--f9 <f9>] | --check10 --in <f10> --unit-only | --check11 --in <f10> [--unit-only]",
   );
   process.exit(2);
 }

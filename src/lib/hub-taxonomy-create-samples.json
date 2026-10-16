@@ -1,0 +1,361 @@
+{
+  "_comment": "APCGHub P5.6 chặng 2 — shared name/title samples (CMS hub-taxonomy-create-*; copied verbatim to the hub in chặng 4, gate G-PAR). Codes are from the closed 23-code list HUB_FIELD_CODES.",
+  "roles": [
+    "Desk",
+    "Staff writer",
+    "Senior writer",
+    "Correspondent",
+    "Contributing writer",
+    "Columnist",
+    "Analyst",
+    "Guest contributor",
+    "Freelance / stringer"
+  ],
+  "defaultRole": "Staff writer",
+  "authors": {
+    "accept": [
+      {
+        "input": "Nguyễn Văn A",
+        "out": "Nguyễn Văn A"
+      },
+      {
+        "input": "Nguyễn Văn A",
+        "out": "Nguyễn Văn A"
+      },
+      {
+        "input": "  O’Brien  ",
+        "out": "O’Brien"
+      },
+      {
+        "input": "Anne-Marie",
+        "out": "Anne-Marie"
+      },
+      {
+        "input": "J.K. Rowling",
+        "out": "J.K. Rowling"
+      },
+      {
+        "input": "R&D Desk",
+        "out": "R&D Desk"
+      },
+      {
+        "input": "Søren Kierkegaard",
+        "out": "Søren Kierkegaard"
+      },
+      {
+        "input": "Łukasz Nowak",
+        "out": "Łukasz Nowak"
+      },
+      {
+        "input": "José Martí",
+        "out": "José Martí"
+      },
+      {
+        "input": "山田　太郎",
+        "out": "山田 太郎"
+      },
+      {
+        "input": "Smith, John",
+        "out": "Smith, John"
+      },
+      {
+        "input": "Jean   Paul",
+        "out": "Jean Paul"
+      },
+      {
+        "input": "Mary (Guest)",
+        "out": "Mary (Guest)"
+      },
+      {
+        "input": "Ab",
+        "out": "Ab"
+      },
+      {
+        "input": "Agent 007",
+        "out": "Agent 007"
+      },
+      {
+        "input": "D'Angelo",
+        "out": "D'Angelo"
+      },
+      {
+        "input": "Đặng Thùy Trâm",
+        "out": "Đặng Thùy Trâm"
+      }
+    ],
+    "reject": [
+      {
+        "input": "",
+        "code": "required"
+      },
+      {
+        "input": "   ",
+        "code": "required"
+      },
+      {
+        "input": "A",
+        "code": "format"
+      },
+      {
+        "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "code": "too_long"
+      },
+      {
+        "input": "Bad\u0001Name",
+        "code": "c0"
+      },
+      {
+        "input": "BadName",
+        "code": "c0"
+      },
+      {
+        "input": "Tab\tName",
+        "code": "newline"
+      },
+      {
+        "input": "Line\nName",
+        "code": "newline"
+      },
+      {
+        "input": "Sep Name",
+        "code": "newline"
+      },
+      {
+        "input": "Para Name",
+        "code": "newline"
+      },
+      {
+        "input": "Evil‮Name",
+        "code": "bidi"
+      },
+      {
+        "input": "Bad\ud800Name",
+        "code": "surrogate"
+      },
+      {
+        "input": "Zero​Width",
+        "code": "invalid"
+      },
+      {
+        "input": "Zwnj‌Name",
+        "code": "invalid"
+      },
+      {
+        "input": "Zwj‍Name",
+        "code": "invalid"
+      },
+      {
+        "input": "Bom﻿Name",
+        "code": "invalid"
+      },
+      {
+        "input": "<script>",
+        "code": "invalid"
+      },
+      {
+        "input": "A>B Smith",
+        "code": "invalid"
+      },
+      {
+        "input": "Back\\slash",
+        "code": "invalid"
+      },
+      {
+        "input": "Rock 🎸 Star",
+        "code": "invalid"
+      },
+      {
+        "input": "ㅤㅤ",
+        "code": "invalid"
+      },
+      {
+        "input": "ﾠﾠ",
+        "code": "invalid"
+      },
+      {
+        "input": "A͏B",
+        "code": "invalid"
+      },
+      {
+        "input": "Heart️ Name",
+        "code": "invalid"
+      },
+      {
+        "input": "Khmer឴Name",
+        "code": "invalid"
+      },
+      {
+        "input": "Mongol᠋Name",
+        "code": "invalid"
+      },
+      {
+        "input": "A𖿤B",
+        "code": "invalid"
+      },
+      {
+        "input": "12",
+        "code": "format"
+      },
+      {
+        "input": "..",
+        "code": "format"
+      },
+      {
+        "input": "-- --",
+        "code": "format"
+      },
+      {
+        "input": "́Accent",
+        "code": "format"
+      },
+      {
+        "input": "Ab ́cd",
+        "code": "format"
+      },
+      {
+        "input": "x́̂̃̄yz",
+        "code": "format"
+      }
+    ]
+  },
+  "tags": {
+    "accept": [
+      {
+        "input": "Đồng",
+        "title": "Đồng",
+        "slug": "dong"
+      },
+      {
+        "input": "Đà Nẵng",
+        "title": "Đà Nẵng",
+        "slug": "da-nang"
+      },
+      {
+        "input": "Łódź",
+        "title": "Łódź",
+        "slug": "lodz"
+      },
+      {
+        "input": "Søren",
+        "title": "Søren",
+        "slug": "soren"
+      },
+      {
+        "input": "Straße",
+        "title": "Straße",
+        "slug": "strasse"
+      },
+      {
+        "input": "Ðorđe",
+        "title": "Ðorđe",
+        "slug": "dorde"
+      },
+      {
+        "input": "Þór",
+        "title": "Þór",
+        "slug": "thor"
+      },
+      {
+        "input": "Ħamrun",
+        "title": "Ħamrun",
+        "slug": "hamrun"
+      },
+      {
+        "input": "Işık",
+        "title": "Işık",
+        "slug": "isik"
+      },
+      {
+        "input": "5G",
+        "title": "5G",
+        "slug": "5g"
+      },
+      {
+        "input": "F1",
+        "title": "F1",
+        "slug": "f1"
+      },
+      {
+        "input": "G7",
+        "title": "G7",
+        "slug": "g7"
+      },
+      {
+        "input": "2024",
+        "title": "2024",
+        "slug": "2024"
+      },
+      {
+        "input": "R&D",
+        "title": "R&D",
+        "slug": "r-d"
+      },
+      {
+        "input": "Châu Á",
+        "title": "Châu Á",
+        "slug": "chau-a"
+      },
+      {
+        "input": "chau a",
+        "title": "chau a",
+        "slug": "chau-a"
+      },
+      {
+        "input": "Dong",
+        "title": "Dong",
+        "slug": "dong"
+      },
+      {
+        "input": "  Climate  Change ",
+        "title": "Climate Change",
+        "slug": "climate-change"
+      }
+    ],
+    "reject": [
+      {
+        "input": "",
+        "code": "required"
+      },
+      {
+        "input": "A",
+        "code": "format"
+      },
+      {
+        "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "code": "too_long"
+      },
+      {
+        "input": "日本",
+        "code": "invalid"
+      },
+      {
+        "input": "C++",
+        "code": "invalid"
+      },
+      {
+        "input": "..",
+        "code": "invalid"
+      },
+      {
+        "input": "--",
+        "code": "invalid"
+      },
+      {
+        "input": "Tab\tTag",
+        "code": "newline"
+      },
+      {
+        "input": "ㅤㅤ",
+        "code": "invalid"
+      },
+      {
+        "input": "Bad\u0001Tag",
+        "code": "c0"
+      },
+      {
+        "input": "Evil‮Tag",
+        "code": "bidi"
+      }
+    ]
+  }
+}
