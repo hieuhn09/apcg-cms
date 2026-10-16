@@ -1,0 +1,192 @@
+-- OWNER-RUN. KHÔNG tự chạy. Đọc scripts/migrate/vowasia/VOWASIA-LEGACY.md trước.
+--
+-- 02b-alternative-rls.sql.template: PHƯƠNG ÁN 1 (KHÔNG khuyên dùng).
+--
+-- CẢNH BÁO: file này BẬT ROW LEVEL SECURITY trên bảng DÙNG CHUNG public.articles
+-- và public.sites. Khi RLS bật, MỌI role không phải chủ bảng, không BYPASSRLS
+-- và không có policy sẽ thấy 0 dòng: site cũ đang chạy có thể HỎNG NGAY.
+-- Chỉ dùng khi file 01 (mục 2 và 5) chứng minh MỌI role của site cũ là chủ bảng
+-- hoặc có BYPASSRLS, và bảng chưa bật FORCE RLS. Nếu không chắc: dùng file 02.
+--
+-- Điền (thay HẾT mọi lần xuất hiện): __VOWASIA_SITE_ID__ (id site VowAsia),
+-- __ARTICLE_COLUMNS__ (cột tường minh, không cột cá nhân; tên cột lấy từ file 01
+-- mục 6b), __LEGACY_DB_NAME__ (tên database CŨ). Chạy file đã điền đúng như
+-- VOWASIA-LEGACY.md: psql "$LEGACY_ADMIN_URL" -X -q -t -A -v ON_ERROR_STOP=1 -f <file>
+-- (-t -A: chỉ in giá trị, không khung bảng). Ba kết cục: dòng cuối đúng 'RLS SETUP OK'
+-- (role, quyền SELECT, RLS và hai policy thật sự tồn tại); dòng cuối 'RLS SETUP FAILED:
+-- nothing changed' (không đủ: DỪNG, gỡ tay + 03 rồi báo); hoặc 'ERROR: ... STOP: ...'
+-- (cả giao dịch huỷ, không đổi gì: DỪNG và báo). Mật khẩu đặt bằng \password
+-- vowasia_migrator, KHÔNG ghi vào file, và CHỈ sau 'RLS SETUP OK'.
+--
+-- HÀNG RÀO TRONG SQL (mọi lỗi => cả giao dịch huỷ, không đổi gì):
+--   - dừng nếu đang nối vào 'neondb' (Central) hoặc database khác tên đã điền;
+--   - in (NOTICE) trạng thái RLS hiện tại của hai bảng (GHI LẠI, cần khi gỡ);
+--   - dừng nếu FORCE RLS đang bật;
+--   - dừng nếu PUBLIC, hoặc BẤT KỲ role nào khác (đăng nhập được HAY KHÔNG: role
+--     NOLOGIN như anon/authenticated dùng qua SET ROLE cũng tính), không phải chủ
+--     bảng, không superuser, không BYPASSRLS, có quyền (trực tiếp hoặc kế thừa) trên
+--     hai bảng: role đó sẽ thấy 0 dòng khi RLS bật. Role hệ thống pg_* được bỏ qua
+--     (thành viên đăng nhập của chúng vẫn bị bắt qua quyền kế thừa);
+--   - lock_timeout 3 giây cho ALTER TABLE: nếu bảng đang bận, chờ TỐI ĐA 3 giây rồi
+--     báo lỗi (cả giao dịch huỷ) thay vì chờ lâu và chặn site cũ;
+--   - tự kiểm quyền PUBLIC của role mới (như file 02) và trạng thái cuối, TRƯỚC COMMIT.
+--   - Hàm SECURITY DEFINER trả trigger/event_trigger KHÔNG bị chặn: về lý thuyết role
+--     (có TEMP thừa hưởng từ PUBLIC) có thể kích hoạt chúng qua bảng tạm nếu tự tắt
+--     default_transaction_read_only; công cụ discover không làm được (BEGIN READ ONLY,
+--     chỉ SELECT), và chính file này không gây hại gì từ đó.
+--
+-- Gỡ (MỘT thứ tự duy nhất, giống VOWASIA-LEGACY.md mục Dọn):
+--   1. BẰNG TAY, TRƯỚC: DROP POLICY vowasia_migrator_articles ON public.articles;
+--                       DROP POLICY vowasia_migrator_sites ON public.sites;
+--      và CHỈ nếu dòng BEFORE ghi rls_enabled=f:
+--                       ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY;
+--                       ALTER TABLE public.sites DISABLE ROW LEVEL SECURITY;
+--      (chạy tất cả trong MỘT lệnh psql -c có 'SET lock_timeout = '3s';' đứng đầu,
+--      xem VOWASIA-LEGACY.md mục Dọn)
+--   2. SAU ĐÓ chạy 03-drop-role-and-views.sql.
+--   Vì sao gỡ tay trước: 03 KHÔNG đổi RLS của bảng gốc (nó không biết trạng thái
+--   ban đầu). Nếu chạy 03 trước, DROP OWNED BY sẽ tự xoá hai policy nhưng RLS vẫn
+--   BẬT, và site cũ phụ thuộc vào việc chủ nhớ tắt nó sau. Gỡ tay trước giữ hai
+--   bước trong tầm mắt và để dòng NOTICE AFTER của 03 xác nhận kết quả.
+
+-- Đang nối vào đâu, bằng ai (chỉ để ghi lại; chốt thật là khối DO ngay dưới).
+SELECT current_database() AS database_name, current_user AS running_as;
+
+BEGIN;
+SET LOCAL lock_timeout = '3s';
+
+DO $$
+BEGIN
+  IF '__VOWASIA_SITE_ID__' LIKE '\_\_VOWASIA%' THEN
+    RAISE EXCEPTION 'vowasia: placeholder __VOWASIA_SITE_ID__ not filled; nothing was changed.';
+  END IF;
+  IF '__LEGACY_DB_NAME__' LIKE '\_\_LEGACY%' THEN
+    RAISE EXCEPTION 'vowasia: placeholder __LEGACY_DB_NAME__ not filled; nothing was changed.';
+  END IF;
+  IF current_database() = 'neondb' THEN
+    RAISE EXCEPTION 'DB NAME STOP: connected to neondb (Central), not the old database; nothing was changed.';
+  END IF;
+  IF current_database() <> '__LEGACY_DB_NAME__' THEN
+    RAISE EXCEPTION 'DB NAME STOP: connected database is not the filled old database name; nothing was changed.';
+  END IF;
+END $$;
+
+DO $$
+DECLARE
+  t text;
+  r record;
+  who text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['public.articles', 'public.sites'] LOOP
+    SELECT c.relrowsecurity, c.relforcerowsecurity INTO r FROM pg_class c WHERE c.oid = t::regclass;
+    RAISE NOTICE 'vowasia: BEFORE: % rls_enabled=% rls_forced=% (write this down)', t, r.relrowsecurity, r.relforcerowsecurity;
+    IF r.relforcerowsecurity THEN
+      RAISE EXCEPTION 'RLS GUARD STOP: % has FORCE RLS; option 1 is not safe; nothing was changed', t;
+    END IF;
+    IF has_table_privilege('public', t::regclass, 'SELECT, INSERT, UPDATE, DELETE')
+       OR has_any_column_privilege('public', t::regclass, 'SELECT, INSERT, UPDATE') THEN
+      RAISE EXCEPTION 'RLS GUARD STOP: PUBLIC can use %; enabling RLS would hide rows from every role; nothing was changed. Use option 2 (file 02).', t;
+    END IF;
+    SELECT string_agg(x.rolname, ', ' ORDER BY x.rolname) INTO who FROM pg_roles x
+    WHERE NOT x.rolsuper AND NOT x.rolbypassrls
+      AND x.rolname NOT LIKE 'pg\_%'
+      AND x.oid <> (SELECT relowner FROM pg_class WHERE oid = t::regclass)
+      AND x.rolname <> 'vowasia_migrator'
+      AND (has_table_privilege(x.oid, t::regclass, 'SELECT, INSERT, UPDATE, DELETE')
+           OR has_any_column_privilege(x.oid, t::regclass, 'SELECT, INSERT, UPDATE'));
+    IF who IS NOT NULL THEN
+      RAISE EXCEPTION 'RLS GUARD STOP: another role (login or not; not owner, not BYPASSRLS) can use %: %; enabling RLS would hide its rows; nothing was changed. Use option 2 (file 02).', t, who;
+    END IF;
+  END LOOP;
+END $$;
+
+CREATE ROLE vowasia_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT 3;
+DO $$
+BEGIN
+  EXECUTE format('ALTER ROLE vowasia_migrator VALID UNTIL %L', (now() + interval '14 days')::text);
+END $$;
+ALTER ROLE vowasia_migrator SET default_transaction_read_only = on;
+ALTER ROLE vowasia_migrator SET statement_timeout = '30s';
+ALTER ROLE vowasia_migrator SET idle_in_transaction_session_timeout = '60s';
+
+GRANT USAGE ON SCHEMA public TO vowasia_migrator;
+GRANT SELECT ("id", "slug", "name") ON public.sites TO vowasia_migrator;
+GRANT SELECT (__ARTICLE_COLUMNS__) ON public.articles TO vowasia_migrator;
+
+ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.articles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY vowasia_migrator_sites ON public.sites FOR SELECT TO vowasia_migrator USING ("id" = '__VOWASIA_SITE_ID__');
+CREATE POLICY vowasia_migrator_articles ON public.articles FOR SELECT TO vowasia_migrator USING ("site_id" = '__VOWASIA_SITE_ID__');
+
+-- TỰ KIỂM, TRONG giao dịch: RAISE EXCEPTION => cả giao dịch huỷ (RLS, policy, role).
+DO $$
+DECLARE
+  bad text;
+  n_definer int;
+  -- Đổi thành 'yes' CHỈ sau khi đã xem file 01 mục 5d và chấp nhận các hàm đó.
+  allow_definer_outside_public constant text := 'no';
+BEGIN
+  IF (SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = 'vowasia_migrator') THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator bypasses RLS or is superuser; nothing was changed (HS5)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = 'vowasia_migrator') THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator is a member of another role; nothing was changed (HS5)';
+  END IF;
+  IF has_database_privilege('vowasia_migrator', current_database(), 'CREATE') THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can CREATE in this database (PUBLIC grant?); nothing was changed (HS5)';
+  END IF;
+  SELECT string_agg(n.nspname, ', ') INTO bad FROM pg_namespace n
+  WHERE has_schema_privilege('vowasia_migrator', n.oid, 'CREATE');
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can CREATE in a schema (PUBLIC grant?); nothing was changed (HS5)';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+      AND c.oid NOT IN ('public.articles'::regclass, 'public.sites'::regclass)
+      AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
+      AND (has_table_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+           OR has_any_column_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))) THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator has a privilege on a table other than articles/sites (PUBLIC grant?); nothing was changed (HS5)';
+  END IF;
+  IF has_table_privilege('vowasia_migrator', 'public.articles', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR has_table_privilege('vowasia_migrator', 'public.sites', 'INSERT, UPDATE, DELETE, TRUNCATE') THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can write articles/sites; nothing was changed (HS5)';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prosecdef
+      AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)
+      AND has_function_privilege('vowasia_migrator', p.oid, 'EXECUTE')) THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can EXECUTE a SECURITY DEFINER function in schema public; nothing was changed (HS5)';
+  END IF;
+  SELECT count(*) INTO n_definer FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'public') AND p.prosecdef
+    AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)
+    AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
+    AND has_function_privilege('vowasia_migrator', p.oid, 'EXECUTE');
+  IF n_definer > 0 AND allow_definer_outside_public <> 'yes' THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can EXECUTE % SECURITY DEFINER function(s) outside public (see file 01, 5d); nothing was changed (HS5)', n_definer;
+  END IF;
+  -- Trạng thái cuối: RLS bật trên cả hai bảng, đúng hai policy của role.
+  IF (SELECT count(*) FROM pg_class WHERE oid IN ('public.articles'::regclass, 'public.sites'::regclass) AND relrowsecurity) <> 2
+     OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND policyname IN ('vowasia_migrator_articles', 'vowasia_migrator_sites')) <> 2 THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: RLS or policies not in the expected final state; nothing was changed (HS5)';
+  END IF;
+  RAISE NOTICE 'vowasia: inherited from PUBLIC: CONNECT=%, TEMP=%',
+    has_database_privilege('vowasia_migrator', current_database(), 'CONNECT'),
+    has_database_privilege('vowasia_migrator', current_database(), 'TEMP');
+END $$;
+
+COMMIT;
+
+-- Dòng trạng thái cuối: chỉ OK khi role, quyền SELECT của role, RLS và hai policy thật sự tồn tại.
+SELECT CASE
+  WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vowasia_migrator') THEN 'RLS SETUP FAILED: nothing changed'
+  WHEN has_any_column_privilege('vowasia_migrator', 'public.articles', 'SELECT')
+   AND has_any_column_privilege('vowasia_migrator', 'public.sites', 'SELECT')
+   AND (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND policyname IN ('vowasia_migrator_articles', 'vowasia_migrator_sites')) = 2
+   AND (SELECT count(*) FROM pg_class WHERE oid IN ('public.articles'::regclass, 'public.sites'::regclass) AND relrowsecurity) = 2 THEN 'RLS SETUP OK'
+  ELSE 'RLS SETUP FAILED: nothing changed'
+END AS vowasia_rls_check;

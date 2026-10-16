@@ -1,0 +1,17 @@
+{
+  "_note": "FIXTURE overlay for the local keyset probe only (fake site id, fake renamed columns). A real overlay is kept by the owner outside the repo.",
+  "source": {
+    "schema": "vowasia_ro",
+    "siteIdKind": "uuid",
+    "siteFilter": "00000000-0000-0000-0000-00000000f002",
+    "tables": {
+      "articles": { "name": "articles", "siteColumn": "site_id", "keyColumns": ["id"], "createdAtColumn": "inserted_at" }
+    },
+    "columnRoles": {
+      "createdAt": "inserted_at",
+      "category": "category",
+      "body": "body_html",
+      "image": "hero_url"
+    }
+  }
+}
