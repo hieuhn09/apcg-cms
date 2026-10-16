@@ -4,3 +4,4 @@ iteration	timestamp	gaps_found	fail_count	concern_count	applied	saturation_statu
 2	2026-10-16T06:46:18Z	7	0	7	7	ACTIVE	CONTINUE	VALIDATE pass 2: CONDITIONAL 0 FAIL 7 CONCERN (T1-T7); SUPPLEMENT_APPLIED 7 gaps. T1 = repoRoot() 3 vs 4 levels in copied out-dir.ts. Re-validate (pass 3) next.
 3	2026-10-16T06:53:22Z	0	0	0	4	SATURATED	HALTED_SUCCESS	VALIDATE pass 3: Gate PASS for phase A. 0 FAIL 0 CONCERN. 4 wording fixes applied by the validator. AC-A9 remains a named Known-Gap.
 4	2026-10-16T07:54:41Z	20	0	7	0	ACTIVE	CONTINUE	EVL cycle 1: gates green but G9 REQUEST_CHANGES (7 MAJOR M1-M7, 9 MINOR, 4 NIT). Fix cycle -> vc-execute-agent supplement, then EVL re-run + G9 re-review.
+5	2026-10-16T08:03:16Z	20	0	0	20	ACTIVE	CONTINUE	EVL cycle 1 fix applied (commit a96e8f1): M1-M7, m1-m9, n1/n2/n4 fixed per executor; n3 note. Independent EVL re-run and G9 re-review next.
