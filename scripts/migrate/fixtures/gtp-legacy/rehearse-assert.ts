@@ -611,7 +611,7 @@ async function main(): Promise<number> {
   {
     const d1 = tool(T("import-gtp-legacy.ts"), importArgs("delta1", ["--apply"]));
     check("A5 delta: first run exits 0", d1.code === 0 && (await markerCount()) === importable + 12, { code: d1.code, marker: await markerCount() });
-    const centralSnap = async () => q<Doc>(CENTRAL, "SELECT a.id, a.slug, a.version, a.updated_at, a.author_id, a.workflow_status FROM articles a JOIN tenants t ON t.id = a.tenant_id WHERE t.slug = 'gtp' ORDER BY a.id");
+    const centralSnap = async () => q<Doc>(CENTRAL, "SELECT a.id, l.slug, a.version, a.updated_at, a.author_id, a.workflow_status FROM articles a JOIN articles_locales l ON l._parent_id = a.id AND l._locale = 'en' JOIN tenants t ON t.id = a.tenant_id WHERE t.slug = 'gtp' ORDER BY a.id");
     const before = await centralSnap();
     // Two NEW published legacy articles (same millisecond, different microseconds), cloned from an imported row.
     const srcEntry = slugMap("delta1").find((e) => e.kind === "article" && e.status === "published" && e.pillar !== "press-room" && e.legacyId !== expected.internalLinkFrom) as SlugMapEntry;
