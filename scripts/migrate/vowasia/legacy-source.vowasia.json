@@ -1,0 +1,24 @@
+{
+  "_hypothesis": true,
+  "_note": "HYPOTHESIS only (phase A). Guessed from the GTP side of the same shared database; discover checks every table and column below against the real catalog and reports each mismatch. Real values (site filter, site id kind, renamed tables or columns, the read-only view schema) go into an overlay kept OUTSIDE the repo. No site id, no image host, no URL here on purpose.",
+  "source": {
+    "schema": "public",
+    "siteIdKind": "uuid",
+    "expectedSiteSlug": "vowasia",
+    "tables": {
+      "articles": { "name": "articles", "siteColumn": "site_id", "keyColumns": ["id"], "createdAtColumn": "created_at" },
+      "sites": { "name": "sites", "siteColumn": "id", "keyColumns": ["id"], "createdAtColumn": null, "slugColumn": "slug", "nameColumn": "name" }
+    },
+    "columnRoles": {
+      "createdAt": "created_at",
+      "publishedAt": "published_at",
+      "status": "status",
+      "section": "section",
+      "subsection": "subsection",
+      "slug": "slug",
+      "title": "title",
+      "body": "body_sections",
+      "image": "featured_image"
+    }
+  }
+}

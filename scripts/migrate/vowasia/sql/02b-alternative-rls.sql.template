@@ -1,0 +1,45 @@
+-- OWNER-RUN. KHÔNG tự chạy. Đọc scripts/migrate/vowasia/VOWASIA-LEGACY.md trước.
+--
+-- 02b-alternative-rls.sql.template: PHƯƠNG ÁN 1 (KHÔNG khuyên dùng).
+--
+-- CẢNH BÁO: file này BẬT ROW LEVEL SECURITY trên bảng DÙNG CHUNG public.articles
+-- và public.sites. Khi RLS bật, MỌI role không phải chủ bảng, không BYPASSRLS
+-- và không có policy sẽ thấy 0 dòng: site cũ đang chạy có thể HỎNG NGAY.
+-- Chỉ dùng khi file 01 (mục 2 và 5) chứng minh MỌI role của site cũ là chủ bảng
+-- hoặc có BYPASSRLS, và bảng chưa bật FORCE RLS. Nếu không chắc: dùng file 02.
+--
+-- Điền: __VOWASIA_SITE_ID__ (id site VowAsia), __ARTICLE_COLUMNS__ (cột tường
+-- minh, không cột cá nhân). Chạy: psql -v ON_ERROR_STOP=1 -f <bản đã điền>.
+-- Mật khẩu đặt bằng \password vowasia_migrator, KHÔNG ghi vào file.
+--
+-- Gỡ (đúng thứ tự, đưa về trạng thái ban đầu):
+--   DROP POLICY vowasia_migrator_articles ON public.articles;
+--   DROP POLICY vowasia_migrator_sites ON public.sites;
+--   Chỉ nếu trước đó RLS đang TẮT: ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY;
+--                                  ALTER TABLE public.sites DISABLE ROW LEVEL SECURITY;
+--   rồi chạy 03-drop-role-and-views.sql.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF '__VOWASIA_SITE_ID__' LIKE '\_\_VOWASIA%' THEN
+    RAISE EXCEPTION 'vowasia: placeholder __VOWASIA_SITE_ID__ not filled; nothing was changed.';
+  END IF;
+END $$;
+
+CREATE ROLE vowasia_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 3;
+ALTER ROLE vowasia_migrator SET default_transaction_read_only = on;
+ALTER ROLE vowasia_migrator SET statement_timeout = '30s';
+ALTER ROLE vowasia_migrator SET idle_in_transaction_session_timeout = '60s';
+
+GRANT USAGE ON SCHEMA public TO vowasia_migrator;
+GRANT SELECT ("id", "slug", "name") ON public.sites TO vowasia_migrator;
+GRANT SELECT (__ARTICLE_COLUMNS__) ON public.articles TO vowasia_migrator;
+
+ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.articles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY vowasia_migrator_sites ON public.sites FOR SELECT TO vowasia_migrator USING ("id" = '__VOWASIA_SITE_ID__');
+CREATE POLICY vowasia_migrator_articles ON public.articles FOR SELECT TO vowasia_migrator USING ("site_id" = '__VOWASIA_SITE_ID__');
+
+COMMIT;
