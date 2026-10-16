@@ -70,8 +70,9 @@ async function withClient<T>(db: string, fn: (c: pg.Client) => Promise<T>, user 
   }
 }
 
-function psql(db: string, file: string, user = "postgres", extra: string[] = []): { status: number; out: string; err: string } {
-  const r = spawnSync("psql", ["-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", ...extra, "-h", "127.0.0.1", "-p", String(PORT), "-U", user, "-d", db, "-f", file], { encoding: "utf8" });
+/** Same flags as the owner commands in VOWASIA-LEGACY.md: -X -q -t -A -v ON_ERROR_STOP=1 (stop=false drops ON_ERROR_STOP). */
+function psql(db: string, file: string, user = "postgres", extra: string[] = [], stop = true): { status: number; out: string; err: string } {
+  const r = spawnSync("psql", ["-X", "-q", "-t", "-A", ...(stop ? ["-v", "ON_ERROR_STOP=1"] : []), ...extra, "-h", "127.0.0.1", "-p", String(PORT), "-U", user, "-d", db, "-f", file], { encoding: "utf8" });
   return { status: r.status ?? -1, out: r.stdout.trim(), err: r.stderr.trim() };
 }
 
@@ -209,6 +210,10 @@ async function main(): Promise<void> {
   const rDb = psql("probe_uuid", badDb);
   assert.notEqual(rDb.status, 0, "wrong legacy db name must stop");
   assert.match(rDb.err, /DB NAME STOP: connected database is not the filled old database name/);
+  // MINOR-3: without ON_ERROR_STOP the status line still reports the failure honestly.
+  const rDbNoStop = psql("probe_uuid", badDb, "postgres", [], false);
+  assert.equal(lastLine(rDbNoStop.out), "SELF-CHECK FAILED: nothing created", "02 status line without ON_ERROR_STOP");
+  assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "02 without ON_ERROR_STOP on a wrong db creates nothing");
   await withClient("postgres", (c) => c.query("CREATE DATABASE neondb TEMPLATE probe_uuid"));
   const neonFile = path.join(DIR, "02-neon.sql");
   writeFileSync(neonFile, fill(tpl02, u.siteV, "neondb"), { mode: 0o600 });
@@ -336,6 +341,13 @@ async function main(): Promise<void> {
   const wrongVar = drop03("probe_uuid", "postgres", "some_other_db");
   assert.notEqual(wrongVar.status, 0, "03 with a wrong legacy_db must stop");
   assert.match(wrongVar.err, /DB NAME STOP: connected database is not the given legacy_db/);
+  // MINOR-2: without ON_ERROR_STOP, the single transaction still drops nothing (wrong name, or no -v legacy_db).
+  const sqlFile03 = path.join(SQL_DIR, "03-drop-role-and-views.sql");
+  const noStopWrong = psql("probe_uuid", sqlFile03, "postgres", ["-v", "legacy_db=some_other_db"], false);
+  assert.match(noStopWrong.err, /DB NAME STOP/);
+  assert.match(lastLine(noStopWrong.out), /^CLEANUP STOP: role vowasia_migrator still exists$/, "03 without ON_ERROR_STOP on a wrong db: role kept");
+  const noStopNoVar = psql("probe_uuid", sqlFile03, "postgres", [], false);
+  assert.match(lastLine(noStopNoVar.out), /^CLEANUP STOP:/, "03 without ON_ERROR_STOP and without legacy_db: nothing dropped");
   assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 2, "03 refusals drop nothing");
   const drop = drop03("probe_uuid");
   assert.equal(drop.status, 0, `03 failed: ${drop.err}`);
@@ -411,7 +423,9 @@ async function main(): Promise<void> {
   });
   assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT (NOT rolinherit AND rolvaliduntil > now() AND rolvaliduntil < now() + interval '15 days') AS ok FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].ok), true, "02b role NOINHERIT + VALID UNTIL");
   // m-H documented order: manual removal (DROP POLICY + DISABLE RLS, since BEFORE was f) THEN 03.
-  await withClient("probe_rls", (c) => c.query("DROP POLICY vowasia_migrator_articles ON public.articles; DROP POLICY vowasia_migrator_sites ON public.sites; ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY; ALTER TABLE public.sites DISABLE ROW LEVEL SECURITY"));
+  // Exactly the documented one-command manual removal (psql -c, one implicit transaction, lock_timeout first).
+  const manual = spawnSync("psql", ["-X", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", String(PORT), "-U", "postgres", "-d", "probe_rls", "-c", "SET lock_timeout = '3s'; DROP POLICY vowasia_migrator_articles ON public.articles; DROP POLICY vowasia_migrator_sites ON public.sites; ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY; ALTER TABLE public.sites DISABLE ROW LEVEL SECURITY"], { encoding: "utf8" });
+  assert.equal(manual.status, 0, `manual 02b removal failed: ${manual.stderr}`);
   const rbDrop = drop03("probe_rls");
   assert.equal(rbDrop.status, 0, `03 after manual 02b removal failed: ${rbDrop.err}`);
   assert.equal(lastLine(rbDrop.out), "CLEANUP OK");

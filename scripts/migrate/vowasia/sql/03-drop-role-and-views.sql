@@ -3,10 +3,12 @@
 -- 03-drop-role-and-views.sql: DỌN sau khi xong (hoặc khi tự kiểm của 02 báo STOP).
 -- Xoá schema vowasia_ro (kèm hai view), mọi quyền/đối tượng của vowasia_migrator
 -- trong database này, rồi xoá role. Không đụng bảng gốc, không đụng role khác.
---   psql -v ON_ERROR_STOP=1 -v legacy_db=TÊN_DB_CŨ -f scripts/migrate/vowasia/sql/03-drop-role-and-views.sql
--- -v legacy_db là BẮT BUỘC: tên database CŨ. Thiếu nó, psql báo lỗi cú pháp ở dòng
--- set_config và dừng trước mọi thay đổi. File dừng nếu đang nối vào 'neondb'
--- (Central) hoặc database khác tên đã đưa.
+--   psql "$LEGACY_ADMIN_URL" -X -q -t -A -v ON_ERROR_STOP=1 -v legacy_db=TÊN_DB_CŨ -f scripts/migrate/vowasia/sql/03-drop-role-and-views.sql
+-- -v legacy_db là BẮT BUỘC: tên database CŨ. Toàn bộ phần xoá nằm trong MỘT giao dịch
+-- (BEGIN ... COMMIT): thiếu -v legacy_db (lỗi cú pháp ở dòng set_config), nối vào
+-- 'neondb' (Central) hoặc database khác tên đã đưa => lỗi, giao dịch bị huỷ, KHÔNG xoá
+-- gì, kể cả khi quên -v ON_ERROR_STOP=1 (các lệnh sau lỗi đều bị từ chối, COMMIT thành
+-- ROLLBACK). Với -t -A, dòng cuối in ra là đúng 'CLEANUP OK' khi xong.
 -- Thứ tự quan trọng: DROP OWNED BY trước DROP ROLE (nếu không, DROP ROLE lỗi khi còn grant).
 -- Nếu role còn quyền ở database KHÁC trong cùng cụm: chạy DROP OWNED BY ở database đó trước.
 -- Chạy lại nhiều lần vẫn an toàn.
@@ -16,13 +18,17 @@
 -- Đang nối vào đâu, bằng ai (chỉ để ghi lại; chốt thật là khối DO ngay dưới).
 SELECT current_database() AS database_name, current_user AS running_as;
 
-SELECT set_config('vowasia.legacy_db', :'legacy_db', false) IS NOT NULL AS legacy_db_given;
+BEGIN;
+
+-- set_config(..., true): chỉ sống trong giao dịch này; khối DO ngay dưới đọc nó trong
+-- cùng giao dịch. Lỗi ở bất kỳ dòng nào => cả giao dịch huỷ, không xoá gì.
+SELECT set_config('vowasia.legacy_db', :'legacy_db', true) IS NOT NULL AS legacy_db_given;
 DO $$
 BEGIN
   IF current_database() = 'neondb' THEN
     RAISE EXCEPTION 'DB NAME STOP: connected to neondb (Central), not the old database; nothing was dropped.';
   END IF;
-  IF current_database() <> current_setting('vowasia.legacy_db') THEN
+  IF coalesce(current_setting('vowasia.legacy_db', true), '') = '' OR current_database() <> current_setting('vowasia.legacy_db', true) THEN
     RAISE EXCEPTION 'DB NAME STOP: connected database is not the given legacy_db; nothing was dropped.';
   END IF;
 END $$;
@@ -45,6 +51,8 @@ BEGIN
 END $$;
 
 DROP ROLE IF EXISTS vowasia_migrator;
+
+COMMIT;
 
 -- Trạng thái RLS/policy của hai bảng gốc (chỉ đọc), để đối chiếu với bước gỡ tay của 02b.
 DO $$

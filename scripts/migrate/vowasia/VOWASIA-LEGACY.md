@@ -1,6 +1,6 @@
 # VowAsia: chuyển bài từ DB cũ, Giai đoạn A (đọc / discover)
 
-TL;DR: Giai đoạn A chỉ ĐỌC DB cũ để lập báo cáo cấu trúc. Chủ dự án chạy mọi lệnh trên DB thật (O1-O6). Không lệnh nào ở đây ghi vào DB cũ hay Central, trừ hai file SQL tạo/xoá role chỉ-đọc mà chủ tự chạy. Giai đoạn B (import) CHƯA có công cụ; chỉ mở sau khi có báo cáo discover và các quyết định C3, C8, C10, host ảnh.
+TL;DR: Giai đoạn A chỉ ĐỌC DB cũ để lập báo cáo cấu trúc. Chủ dự án chạy mọi lệnh trên DB thật (O1-O6). Không lệnh nào ở đây ghi vào DB cũ hay Central, trừ các file SQL tạo/xoá role chỉ-đọc mà chủ tự chạy (`02` hoặc `02b`, và `03` khi dọn). Giai đoạn B (import) CHƯA có công cụ; chỉ mở sau khi có báo cáo discover và các quyết định C3, C8, C10, host ảnh.
 
 ## Cách dán lệnh (đọc trước, áp cho MỌI bước)
 
@@ -51,7 +51,7 @@ Ghi lại: tenant `vowasia` có hay không ("not found"), và 49 dòng là `exis
 
 ## O2: đọc cấu trúc DB cũ (chỉ SELECT)
 
-Bước này dùng URL kết nối DB CŨ bằng role hiện có của chủ (không phải Central). Nhập nó bằng `read -s` (xem "Cách dán lệnh"):
+Bước này dùng URL kết nối DB CŨ bằng role hiện có của chủ (không phải Central). Dùng host kết nối TRỰC TIẾP của nhà cung cấp, KHÔNG dùng transaction pooler (ví dụ cổng `6543` của Supabase): file 02/02b/03 cần một phiên giữ nguyên suốt giao dịch. Nhập nó bằng `read -s` (xem "Cách dán lệnh"):
 
 ```bash
 read -s LEGACY_ADMIN_URL
@@ -102,7 +102,7 @@ Chủ chốt phương án sau O2. Phương án 2 (schema `vowasia_ro` + view) kh
    nano ~/vowasia-private/02-filled.sql
    ```
 
-   Điền bốn chỗ giữ chỗ (mỗi chỗ có thể xuất hiện nhiều lần; trong `nano` dùng Ctrl+\ để tìm và thay HẾT; lưu Ctrl+O, Enter, thoát Ctrl+X):
+   Điền bốn chỗ giữ chỗ (mỗi chỗ có thể xuất hiện nhiều lần; trong `nano` dùng Ctrl+\ để tìm và thay, gõ chuỗi tìm rồi Enter, gõ giá trị rồi Enter, rồi nhấn `A` để thay HẾT; lưu Ctrl+O, Enter, thoát Ctrl+X):
    - `__VOWASIA_SITE_ID__`: id site VowAsia;
    - `__VOWASIA_SITE_SLUG__`: slug của dòng site đó (phải là `vowasia`; nếu slug thật khác thì DỪNG và báo);
    - `__ARTICLE_COLUMNS__`: danh sách cột TƯỜNG MINH của bảng bài viết (lấy từ O2 mục 6b), có `"site_id"`, KHÔNG có cột cá nhân (email, IP, ghi chú nội bộ...);
@@ -114,15 +114,16 @@ Chủ chốt phương án sau O2. Phương án 2 (schema `vowasia_ro` + view) kh
 4. Chạy:
 
    ```bash
-   psql "$LEGACY_ADMIN_URL" -X -v ON_ERROR_STOP=1 -f ~/vowasia-private/02-filled.sql
+   psql "$LEGACY_ADMIN_URL" -X -q -t -A -v ON_ERROR_STOP=1 -f ~/vowasia-private/02-filled.sql
    ```
 
-   Dòng đầu in tên database và role. Tên database được chốt TRONG SQL (so với `__LEGACY_DB_NAME__`, và từ chối `neondb`): nếu sai, file dừng với `DB NAME STOP` và không tạo gì. Phần TỰ KIỂM chạy BÊN TRONG giao dịch, trước khi lưu. Hai kết quả có thể có:
-   - Dòng cuối là đúng `SELF-CHECK OK`: role và view đã tạo (dòng này chỉ in OK khi role và schema thật sự tồn tại). Sang bước 5.
-   - Có dòng `ERROR: SELF-CHECK STOP: ...` hoặc `ERROR: DB NAME STOP: ...`: cả giao dịch đã tự huỷ, KHÔNG có role hay schema nào được tạo, không cần dọn. DỪNG (HS5) và báo lại nguyên văn dòng STOP. KHÔNG đặt mật khẩu. Nguyên nhân thường gặp: id site sai, slug không phải `vowasia`, tên database sai, PUBLIC có quyền tạo đối tượng hoặc đọc bảng, hoặc role gọi được hàm SECURITY DEFINER (ở `public`, hoặc ở schema khác khi `allow_definer_outside_public` còn `'no'`).
+   Cờ `-t -A` làm psql chỉ in giá trị (không khung bảng, không dòng `(1 row)`), nên dòng cuối in ra chính là dòng trạng thái. Dòng đầu in `tên_database|role`. Tên database được chốt TRONG SQL (so với `__LEGACY_DB_NAME__`, và từ chối `neondb`): nếu sai, file dừng với `DB NAME STOP` và không tạo gì. Phần TỰ KIỂM chạy BÊN TRONG giao dịch, trước khi lưu. Ba kết cục có thể có:
+   - Dòng cuối là đúng `SELF-CHECK OK`: role, schema, hai view và quyền SELECT của role trên hai view đều thật sự tồn tại (kiểm lại sau khi lưu). Sang bước 5.
+   - Dòng cuối là `SELF-CHECK FAILED: nothing created`: không có lỗi nhưng kết quả không đủ (thường do lệnh bị sửa, ví dụ thiếu `-v ON_ERROR_STOP=1`). KHÔNG đặt mật khẩu; chạy bước Dọn (03) cho chắc, rồi DỪNG và báo.
+   - Có dòng `ERROR: SELF-CHECK STOP: ...`, `ERROR: DB NAME STOP: ...` hoặc lỗi khác (psql dừng ngay, không in dòng trạng thái): cả giao dịch đã tự huỷ, KHÔNG có role hay schema nào được tạo, không cần dọn. DỪNG (HS5) và báo lại nguyên văn dòng lỗi. KHÔNG đặt mật khẩu. Nếu lỗi là `canceling statement due to lock timeout`: bảng gốc đang bận (file chờ tối đa 3 giây), chạy lại lúc vắng. Nguyên nhân thường gặp: id site sai, slug không phải `vowasia`, tên database sai, PUBLIC có quyền tạo đối tượng hoặc đọc bảng, hoặc role gọi được hàm SECURITY DEFINER (ở `public`, hoặc ở schema khác khi `allow_definer_outside_public` còn `'no'`).
    - PostgreSQL 14 trở xuống: PUBLIC mặc định có quyền CREATE trên schema `public`, nên tự kiểm LUÔN dừng. Đó là hành vi đúng: dừng và báo, không tự `REVOKE`.
 
-   Dòng `NOTICE` cho biết số hàm SECURITY DEFINER ở schema khác mà role gọi được (lớn hơn 0 chỉ có thể xảy ra khi chủ đã chủ động đổi `allow_definer_outside_public` thành `'yes'`) và quyền CONNECT/TEMP thừa hưởng từ PUBLIC: chép lại khi báo.
+   Dòng `NOTICE` (in trên màn hình cùng lúc) cho biết số hàm SECURITY DEFINER ở schema khác mà role gọi được (lớn hơn 0 chỉ có thể xảy ra khi chủ đã chủ động đổi `allow_definer_outside_public` thành `'yes'`) và quyền CONNECT/TEMP thừa hưởng từ PUBLIC: chép lại khi báo.
 
 5. CHỈ sau `SELF-CHECK OK` mới đặt mật khẩu. Sinh mật khẩu ngẫu nhiên vào clipboard (chỉ chữ số và a-f, không ký tự đặc biệt nên ghép vào URL không vỡ):
 
@@ -140,13 +141,43 @@ Chủ chốt phương án sau O2. Phương án 2 (schema `vowasia_ro` + view) kh
 
 Ghi chú:
 - Role là cấp cụm (cluster-wide): nếu cụm có nhiều database, chạy O2 mục 5c/5d ở từng database mà role kết nối được (quyền CONNECT của PUBLIC) trước khi đặt mật khẩu.
-- Role có hạn dùng 14 ngày (VALID UNTIL). Đổi mật khẩu KHÔNG gia hạn (lệnh `\password` không đổi hạn dùng). Nếu Giai đoạn B bị hoãn lâu hơn, chọn MỘT trong hai: chạy bước Dọn rồi chạy lại O3 bước 4-5 với file đã điền; HOẶC gia hạn bằng lệnh dưới (đổi ngày trong lệnh thành mốc mới, nên không quá 14 ngày kể từ hôm chạy):
+- Role có hạn dùng 14 ngày (VALID UNTIL). Đổi mật khẩu KHÔNG gia hạn (lệnh `\password` không đổi hạn dùng). Nếu Giai đoạn B bị hoãn lâu hơn, chọn MỘT trong hai:
+  - chạy bước Dọn rồi chạy lại O3 bước 4-5 với file đã điền (khi đó mật khẩu là mới, nên phải làm lại O4: soạn URL mới và nhập lại `LEGACY_VOWASIA_DB_URL`);
+  - HOẶC gia hạn. Biến `LEGACY_ADMIN_URL` đã bị `unset` ở O4, nên nhập lại nó ngay trước:
 
-  ```bash
-  psql "$LEGACY_ADMIN_URL" -X -c "ALTER ROLE vowasia_migrator VALID UNTIL '2026-12-31'"
-  ```
+    ```bash
+    read -s LEGACY_ADMIN_URL
+    ```
+
+    Rồi chạy lệnh dưới, sau khi tự thay `YYYY-MM-DD` bằng một ngày cụ thể KHÔNG quá 14 ngày kể từ hôm chạy (không dùng ngày xa hơn: hạn ngắn là một lớp bảo vệ):
+
+    ```bash
+    psql "$LEGACY_ADMIN_URL" -X -v ON_ERROR_STOP=1 -c "ALTER ROLE vowasia_migrator VALID UNTIL 'YYYY-MM-DD'"
+    ```
+
+    Xong thì `unset LEGACY_ADMIN_URL`.
 
 - View khoá cột của bảng `articles`/`sites`: KHÔNG chạy migration đổi cột các bảng đó của site cũ trong khoảng giữa O3 (chạy 02) và bước Dọn (chạy 03); migration đó có thể lỗi vì view đang phụ thuộc cột.
+
+## O3b: phương án 1 (02b), KHÔNG khuyên dùng
+
+Chỉ làm bước này THAY cho O3 bước 1-4 khi chủ đã chọn phương án 1 sau O2 (xem cảnh báo ở O3 và đầu file `02b`). Chép mẫu ra thư mục riêng và điền giống O3 bước 1-3 (ba chỗ giữ chỗ `__VOWASIA_SITE_ID__`, `__ARTICLE_COLUMNS__`, `__LEGACY_DB_NAME__`):
+
+```bash
+cp scripts/migrate/vowasia/sql/02b-alternative-rls.sql.template ~/vowasia-private/02b-filled.sql
+```
+
+```bash
+nano ~/vowasia-private/02b-filled.sql
+```
+
+Chạy:
+
+```bash
+psql "$LEGACY_ADMIN_URL" -X -q -t -A -v ON_ERROR_STOP=1 -f ~/vowasia-private/02b-filled.sql
+```
+
+GHI LẠI NGAY hai dòng `NOTICE: vowasia: BEFORE: ... rls_enabled=... rls_forced=...` (chép ra giấy hoặc ghi chú tạm không đồng bộ): bước Dọn cần chúng để biết có tắt RLS hay không. Ba kết cục: dòng cuối đúng `RLS SETUP OK` (sang O3 bước 5, đặt mật khẩu); dòng cuối `RLS SETUP FAILED: nothing changed` (KHÔNG đặt mật khẩu; làm bước Dọn rồi DỪNG và báo); hoặc dòng `ERROR: ... STOP: ...` hay lỗi khác (cả giao dịch huỷ, bảng gốc không đổi; DỪNG và báo nguyên văn). File chờ khoá bảng tối đa 3 giây rồi báo lỗi `lock timeout` thay vì chặn site cũ lâu.
 
 ## O4: nhập URL kết nối của role mới
 
@@ -212,7 +243,7 @@ Không `echo` các biến này, không lưu vào file `.env` trong repo.
 
 ## Dọn sau khi xong
 
-Mở terminal mới ở thư mục gốc repo. Nhập lại URL quản trị DB cũ (biến cũ đã bị `unset` ở O4), không `export`:
+Mở terminal mới ở thư mục gốc repo. Nhập lại URL quản trị DB cũ (biến cũ đã bị `unset` ở O4), không `export`; vẫn là host kết nối TRỰC TIẾP, không transaction pooler (cổng `6543`):
 
 ```bash
 read -s LEGACY_ADMIN_URL
@@ -221,14 +252,16 @@ read -s LEGACY_ADMIN_URL
 Nếu đã dùng phương án 1 (02b): gỡ policy BẰNG TAY TRƯỚC khi chạy 03 (một thứ tự duy nhất, giống đầu file `02b`; lý do: 03 không đổi RLS của bảng gốc, gỡ tay trước để trạng thái RLS về đúng như dòng `BEFORE` đã ghi). Nếu dòng `BEFORE` ghi `rls_enabled=f` cho cả hai bảng, chạy:
 
 ```bash
-psql "$LEGACY_ADMIN_URL" -X -v ON_ERROR_STOP=1 -c 'DROP POLICY vowasia_migrator_articles ON public.articles; DROP POLICY vowasia_migrator_sites ON public.sites; ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY; ALTER TABLE public.sites DISABLE ROW LEVEL SECURITY'
+psql "$LEGACY_ADMIN_URL" -X -v ON_ERROR_STOP=1 -c "SET lock_timeout = '3s'; DROP POLICY vowasia_migrator_articles ON public.articles; DROP POLICY vowasia_migrator_sites ON public.sites; ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY; ALTER TABLE public.sites DISABLE ROW LEVEL SECURITY"
 ```
 
 Nếu dòng `BEFORE` ghi `rls_enabled=t` (RLS đã bật từ trước), chỉ xoá policy:
 
 ```bash
-psql "$LEGACY_ADMIN_URL" -X -v ON_ERROR_STOP=1 -c 'DROP POLICY vowasia_migrator_articles ON public.articles; DROP POLICY vowasia_migrator_sites ON public.sites'
+psql "$LEGACY_ADMIN_URL" -X -v ON_ERROR_STOP=1 -c "SET lock_timeout = '3s'; DROP POLICY vowasia_migrator_articles ON public.articles; DROP POLICY vowasia_migrator_sites ON public.sites"
 ```
+
+Mỗi lệnh `-c` trên chạy cả chuỗi trong MỘT giao dịch: lỗi ở bất kỳ câu nào (kể cả `lock timeout` khi bảng bận quá 3 giây) thì không câu nào có hiệu lực; chạy lại lúc vắng.
 
 Kiểm tên database lần nữa (phải đúng tên DB CŨ đã ghi ở O2):
 
@@ -239,15 +272,15 @@ psql "$LEGACY_ADMIN_URL" -X -At -c 'SELECT current_database()'
 Chạy Dọn. Thay `TEN_DB_CU` bằng đúng tên vừa in (file dừng với `DB NAME STOP`, không xoá gì, nếu tên không khớp hoặc là `neondb`):
 
 ```bash
-psql "$LEGACY_ADMIN_URL" -X -v ON_ERROR_STOP=1 -v legacy_db=TEN_DB_CU -f scripts/migrate/vowasia/sql/03-drop-role-and-views.sql
+psql "$LEGACY_ADMIN_URL" -X -q -t -A -v ON_ERROR_STOP=1 -v legacy_db=TEN_DB_CU -f scripts/migrate/vowasia/sql/03-drop-role-and-views.sql
 ```
 
-Dòng đầu in tên database và role. File xoá schema `vowasia_ro`, mọi quyền của `vowasia_migrator`, rồi role; dòng cuối phải là đúng `CLEANUP OK`. Chạy lại vẫn an toàn. Nếu role có quyền ở database khác trong cùng cụm, chạy `DROP OWNED BY vowasia_migrator` ở database đó trước. Nếu đã dùng phương án 1: dòng `NOTICE ... AFTER` của 03 phải ghi `vowasia_policies_left=0` và `rls_enabled` giống dòng `BEFORE` đã ghi; khác thì DỪNG và báo.
+Dòng đầu in `tên_database|role`. Mọi thao tác xoá nằm trong MỘT giao dịch: thiếu `-v legacy_db`, sai tên hay `neondb` thì không xoá gì, kể cả khi lỡ quên `-v ON_ERROR_STOP=1`. File xoá schema `vowasia_ro`, mọi quyền của `vowasia_migrator`, rồi role; dòng cuối phải là đúng `CLEANUP OK`. Chạy lại vẫn an toàn. Nếu role có quyền ở database khác trong cùng cụm, chạy `DROP OWNED BY vowasia_migrator` ở database đó trước. Nếu đã dùng phương án 1: dòng `NOTICE ... AFTER` của 03 phải ghi `vowasia_policies_left=0` và `rls_enabled` giống dòng `BEFORE` đã ghi; khác thì DỪNG và báo.
 
-Xoá các file riêng tư (chứa id site, cấu hình):
+Xoá các file riêng tư (chứa id site, cấu hình) CHỈ khi KHÔNG định chạy lại O3 (nếu định chạy lại, giữ chúng; sau khi tạo lại role phải làm lại O4 vì mật khẩu và URL là mới):
 
 ```bash
-rm -f ~/vowasia-private/02-filled.sql ~/vowasia-private/overlay.json
+rm -f ~/vowasia-private/02-filled.sql ~/vowasia-private/02b-filled.sql ~/vowasia-private/overlay.json
 ```
 
 Cuối cùng bỏ URL khỏi terminal và đóng cửa sổ:

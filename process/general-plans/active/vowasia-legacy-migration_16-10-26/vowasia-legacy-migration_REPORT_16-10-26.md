@@ -210,3 +210,18 @@ Số liệu cổng (tuần tự, G6 một mình):
 - Số file: 26 + 1 backlog = 27; `package.json` +3 dòng.
 
 Known-Gap còn lại: không có zsh (quy tắc dán lệnh chỉ kiểm tĩnh); PG ≤ 14 chỉ phủ bằng logic; probe dùng database tên `neondb` cục bộ giả để chứng minh chốt tên, không phải Central thật.
+
+## Vòng sửa EVL 3 (16-10-26, sửa phát hiện iteration-005)
+
+| Mục | Đã sửa | Bằng chứng |
+|---|---|---|
+| MINOR-1 dòng cuối `(1 row)` | Chọn `-X -q -t -A` cho MỌI lệnh chạy 02/02b/03 trong doc và header SQL; khi đó dòng cuối in ra đúng là dòng trạng thái. Probe chạy đúng cờ đó (hàm `psql` ghi chú khớp doc). | probe C/E/F/G: `lastLine` = `SELF-CHECK OK` / `RLS SETUP OK` / `CLEANUP OK` |
+| MINOR-2 03 một giao dịch | 03 bọc `BEGIN ... COMMIT`; `set_config(..., true)` + khối DO cùng giao dịch; guard đọc `current_setting(..., true)`. Doc O2/Dọn: host trực tiếp, không transaction pooler (6543). | probe E mới: 03 KHÔNG ON_ERROR_STOP, sai tên DB -> `CLEANUP STOP: role ... still exists`; thiếu `-v legacy_db` -> `CLEANUP STOP` |
+| MINOR-3 dòng trạng thái | 02: OK chỉ khi role + schema + 2 view + SELECT của role trên 2 view (CASE lồng, không lỗi khi role thiếu). 02b: thêm quyền SELECT cột của role. Doc + header nêu 3 kết cục. | probe C mới: 02 sai DB không ON_ERROR_STOP -> `SELF-CHECK FAILED: nothing created`, không tạo gì |
+| MINOR-5 gia hạn / dọn | `read -s` ngay trước khi gia hạn; `VALID UNTIL 'YYYY-MM-DD'` chủ tự điền, ≤14 ngày; Dọn: chỉ xoá file riêng khi không chạy lại, chạy lại thì làm lại O4. | doc |
+| MINOR-6 + tester MINOR-1 | Mục O3b mới cho 02b (lệnh một khối, dặn ghi dòng BEFORE ngay); gỡ tay bằng một `psql -c` có `SET lock_timeout = '3s'` đầu chuỗi; header 02b "chờ tối đa 3 giây"; 02 thêm `SET LOCAL lock_timeout = '3s'` sau BEGIN. | probe G chạy đúng lệnh `-c` của doc, exit 0, sau đó 03 -> `rls_enabled=f` |
+| NIT chữ | TL;DR nêu đúng file 02/02b/03; nano Ctrl+\ rồi `A`. | doc |
+
+Không sửa (ghi nhận, chuyển UPDATE PROCESS/backlog): MINOR-4 (hàm trigger SECURITY DEFINER trong `public` và DB tên `neondb` đều -> STOP; cần amendment nếu gặp thật); soạn URL trong ghi chú tạm không đồng bộ (chấp nhận); NIT còn lại (vài ca probe chỉ khẳng định status != 0, comment 03, URL admin trên argv của psql, sslmode có sẵn trong URL nhà cung cấp, 5c/5d chỉ ACL schema, nhãn mục 01).
+
+Cổng chạy lại (16-10-26): G1 `test:migrate-vowasia` fail 0; G2 lint:migrate 0; G3 typecheck 0; G4 test:migrate-gtp 0; G5 test:single-home 0; G6 probe một mình cổng 54336 "ALL PROBE CHECKS PASSED", đã dọn; G7 chỉ `package.json`; G8 0; G7b đúng 3 dòng `vowasia`; G7c rỗng; G10 rỗng; G13 có. Số file: 26 dưới `scripts/migrate/vowasia/` + báo cáo này = 27; `package.json` +3. Không file mới.

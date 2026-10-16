@@ -10,9 +10,13 @@
 --
 -- Điền (thay HẾT mọi lần xuất hiện): __VOWASIA_SITE_ID__ (id site VowAsia),
 -- __ARTICLE_COLUMNS__ (cột tường minh, không cột cá nhân; tên cột lấy từ file 01
--- mục 6b), __LEGACY_DB_NAME__ (tên database CŨ). Chạy file đã điền bằng psql
--- với -v ON_ERROR_STOP=1. Mật khẩu đặt bằng \password vowasia_migrator, KHÔNG
--- ghi vào file, và CHỈ sau khi dòng cuối là đúng 'RLS SETUP OK'.
+-- mục 6b), __LEGACY_DB_NAME__ (tên database CŨ). Chạy file đã điền đúng như
+-- VOWASIA-LEGACY.md: psql "$LEGACY_ADMIN_URL" -X -q -t -A -v ON_ERROR_STOP=1 -f <file>
+-- (-t -A: chỉ in giá trị, không khung bảng). Ba kết cục: dòng cuối đúng 'RLS SETUP OK'
+-- (role, quyền SELECT, RLS và hai policy thật sự tồn tại); dòng cuối 'RLS SETUP FAILED:
+-- nothing changed' (không đủ: DỪNG, gỡ tay + 03 rồi báo); hoặc 'ERROR: ... STOP: ...'
+-- (cả giao dịch huỷ, không đổi gì: DỪNG và báo). Mật khẩu đặt bằng \password
+-- vowasia_migrator, KHÔNG ghi vào file, và CHỈ sau 'RLS SETUP OK'.
 --
 -- HÀNG RÀO TRONG SQL (mọi lỗi => cả giao dịch huỷ, không đổi gì):
 --   - dừng nếu đang nối vào 'neondb' (Central) hoặc database khác tên đã điền;
@@ -23,8 +27,8 @@
 --     bảng, không superuser, không BYPASSRLS, có quyền (trực tiếp hoặc kế thừa) trên
 --     hai bảng: role đó sẽ thấy 0 dòng khi RLS bật. Role hệ thống pg_* được bỏ qua
 --     (thành viên đăng nhập của chúng vẫn bị bắt qua quyền kế thừa);
---   - lock_timeout 3 giây cho ALTER TABLE: nếu bảng đang bận, dừng thay vì chờ
---     và chặn site cũ;
+--   - lock_timeout 3 giây cho ALTER TABLE: nếu bảng đang bận, chờ TỐI ĐA 3 giây rồi
+--     báo lỗi (cả giao dịch huỷ) thay vì chờ lâu và chặn site cũ;
 --   - tự kiểm quyền PUBLIC của role mới (như file 02) và trạng thái cuối, TRƯỚC COMMIT.
 --
 -- Gỡ (MỘT thứ tự duy nhất, giống VOWASIA-LEGACY.md mục Dọn):
@@ -33,6 +37,8 @@
 --      và CHỈ nếu dòng BEFORE ghi rls_enabled=f:
 --                       ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY;
 --                       ALTER TABLE public.sites DISABLE ROW LEVEL SECURITY;
+--      (chạy tất cả trong MỘT lệnh psql -c có 'SET lock_timeout = '3s';' đứng đầu,
+--      xem VOWASIA-LEGACY.md mục Dọn)
 --   2. SAU ĐÓ chạy 03-drop-role-and-views.sql.
 --   Vì sao gỡ tay trước: 03 KHÔNG đổi RLS của bảng gốc (nó không biết trạng thái
 --   ban đầu). Nếu chạy 03 trước, DROP OWNED BY sẽ tự xoá hai policy nhưng RLS vẫn
@@ -169,9 +175,11 @@ END $$;
 
 COMMIT;
 
--- Dòng trạng thái cuối: chỉ OK khi role, RLS và hai policy thật sự tồn tại.
+-- Dòng trạng thái cuối: chỉ OK khi role, quyền SELECT của role, RLS và hai policy thật sự tồn tại.
 SELECT CASE
-  WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vowasia_migrator')
+  WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vowasia_migrator') THEN 'RLS SETUP FAILED: nothing changed'
+  WHEN has_any_column_privilege('vowasia_migrator', 'public.articles', 'SELECT')
+   AND has_any_column_privilege('vowasia_migrator', 'public.sites', 'SELECT')
    AND (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND policyname IN ('vowasia_migrator_articles', 'vowasia_migrator_sites')) = 2
    AND (SELECT count(*) FROM pg_class WHERE oid IN ('public.articles'::regclass, 'public.sites'::regclass) AND relrowsecurity) = 2 THEN 'RLS SETUP OK'
   ELSE 'RLS SETUP FAILED: nothing changed'
