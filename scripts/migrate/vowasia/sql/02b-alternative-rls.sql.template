@@ -153,11 +153,13 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.prosecdef
+      AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)
       AND has_function_privilege('vowasia_migrator', p.oid, 'EXECUTE')) THEN
     RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can EXECUTE a SECURITY DEFINER function in schema public; nothing was changed (HS5)';
   END IF;
   SELECT count(*) INTO n_definer FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'public') AND p.prosecdef
+    AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)
     AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
     AND has_function_privilege('vowasia_migrator', p.oid, 'EXECUTE');
   IF n_definer > 0 AND allow_definer_outside_public <> 'yes' THEN

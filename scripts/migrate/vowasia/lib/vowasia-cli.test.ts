@@ -48,6 +48,14 @@ test("redact covers URL-like text, the env URL and an URL-encoded password", () 
   assert.equal(failureOf("x", new Error(`legacy: bad ${PW}`), ENV).line, "[x] legacy: bad <redacted>");
 });
 
+test("G9 #4: redact masks the Supabase project ref (pooler login name, direct host)", () => {
+  const msg = 'password authentication failed for user "vowasia_migrator.abcdefghijklmnopqrst" at db.abcdefghijklmnopqrst.supabase.co';
+  const out = redact(msg, {});
+  assert.ok(!out.includes("abcdefghijklmnopqrst"), out);
+  assert.equal(out, 'password authentication failed for user "vowasia_migrator.<ref>" at db.<ref>.supabase.co');
+  assert.ok(!failureOf("x", new Error(msg), {}).line.includes("abcdefghijklmnopqrst"));
+});
+
 test("discover flags: the URL is never a flag; defaults point at the repo", () => {
   assert.throws(() => parseDiscover(["--url", "x"]), CliError);
   assert.throws(() => parseDiscover(["--apply"]), CliError);

@@ -3,8 +3,9 @@
  * Fixed messages, banners without credentials, exit codes:
  *   0 success, 2 deliberate refusal (fixed message), 1 any other failure.
  * An unexpected error is printed only after redaction: anything that looks
- * like a connection URL, and the legacy URL / its password from the
- * environment, are replaced, so a driver error can never leak a credential.
+ * like a connection URL, the legacy URL / its password from the environment,
+ * and a Supabase project ref (pooler login name, db.<ref>.supabase.co host)
+ * are replaced, so a driver error can never leak a credential or the ref.
  */
 import path from "node:path";
 import { CliError, parseArgs, type FlagSpec, type ParsedArgs } from "./args";
@@ -49,6 +50,9 @@ export function redact(message: string, env: Record<string, string | undefined> 
     }
   }
   for (const s of secrets) if (s.length >= 3) out = out.split(s).join("<redacted>");
+  // Supabase project ref: pooler login name (vowasia_migrator.<ref>) and direct host (db.<ref>.supabase.co).
+  out = out.replace(/\bvowasia_migrator\.[a-z0-9]{20}\b/g, "vowasia_migrator.<ref>");
+  out = out.replace(/\bdb\.[a-z0-9]{20}\.supabase\.co\b/gi, "db.<ref>.supabase.co");
   return out;
 }
 

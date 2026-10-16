@@ -32,7 +32,7 @@ Agent không giữ, không xin, không nhìn bí mật.
 ## Quy tắc an toàn
 
 - URL kết nối của role `vowasia_migrator` CHỈ nằm trong biến môi trường `LEGACY_VOWASIA_DB_URL`; URL quản trị DB cũ (role hiện có của chủ) CHỈ nằm trong biến `LEGACY_ADMIN_URL` của terminal đang dùng, không `export`. Chế độ SSL đặt bằng `LEGACY_VOWASIA_DB_SSL` (kèm `LEGACY_VOWASIA_DB_CA` nếu cần); URL KHÔNG được chứa `sslmode` hay tham số ssl nào (công cụ từ chối). Không bao giờ truyền URL qua cờ dòng lệnh của công cụ discover, không lưu vào file trong repo.
-- Công cụ chỉ nhận đăng nhập bằng `vowasia_migrator` (hoặc dạng session pooler của Supabase `vowasia_migrator.MÃ_PROJECT`, mã project đúng 20 ký tự chữ thường và số, xem cách B); role khác bị từ chối. Mã project không bao giờ được in ra. Id site chỉ lấy từ overlay ngoài repo (không có cờ dòng lệnh cho id site), và slug site phải là `vowasia`.
+- Công cụ chỉ nhận đăng nhập bằng `vowasia_migrator` (hoặc dạng session pooler của Supabase `vowasia_migrator.MÃ_PROJECT`, mã project đúng 20 ký tự chữ thường và số, xem cách B); role khác bị từ chối. Mã project không được in ra: dòng đầu chỉ in host (host pooler không chứa mã; host trực tiếp `db.MÃ_PROJECT.supabase.co` được in thành `db.<ref>.supabase.co`), và mọi thông báo lỗi đều che tên đăng nhập `vowasia_migrator.MÃ_PROJECT` thành `vowasia_migrator.<ref>`. Id site chỉ lấy từ overlay ngoài repo (không có cờ dòng lệnh cho id site), và slug site phải là `vowasia`.
 - Công cụ in ra đúng `host:port/database` và chế độ SSL thực tế, không in user, mật khẩu, id site, nội dung bài.
 - Hàng rào thật là quyền của role `vowasia_migrator`: chỉ SELECT trên hai view lọc theo id site VowAsia. Nói thật về giới hạn: role không đọc/ghi được bảng gốc, nhưng vẫn thừa hưởng quyền của PUBLIC (kết nối, tạo bảng tạm, gọi các hàm mà PUBLIC gọi được). `default_transaction_read_only` chỉ là MẶC ĐỊNH của phiên, role tự tắt được. Kiểm tra trong mã (chỉ SELECT, chỉ bảng đã cấu hình, luôn lọc site, `BEGIN READ ONLY`) là lớp thứ hai.
 - KHÔNG dùng lại `gtp_migrator`. KHÔNG đổi role/policy/grant của site khác. KHÔNG chạy `REVOKE ... FROM PUBLIC` trên bảng/schema `public`.
@@ -300,14 +300,22 @@ Dùng cách này KHI KHÔNG có mật khẩu của role `postgres` (và không �
 
 Hạn chế (nói thật):
 - Cách B mới chỉ được thử trên PostgreSQL 16 cục bộ (dán cả file như một chuỗi, giống Editor), CHƯA thử trong SQL Editor thật của Supabase. Editor có thể hiển thị kết quả khác dự kiến (ví dụ chỉ hiện ô cuối, hoặc hiện lỗi thay cho bảng). Thấy gì lạ: DỪNG và báo.
-- Editor có thể tự lưu truy vấn (Saved queries, lịch sử). Truy vấn chứa mật khẩu (B4) phải được xoá ngay sau khi chạy.
+- Editor có thể tự lưu truy vấn (Saved queries, lịch sử). Không truy vấn nào ở cách B chứa mật khẩu (B4 sinh nó trong DB); truy vấn B3 chứa id site nên xoá sau khi chạy, và ô kết quả của B4 phải được đóng sau B5.
 - Project Supabase thường có nhiều hàm SECURITY DEFINER ở schema khác `public` (ví dụ của các extension). Khi đó 02 có thể dừng với `SELF-CHECK STOP: ... SECURITY DEFINER function(s) outside public` (không tạo gì). Chỉ nới `allow_definer_outside_public` thành `'yes'` có chủ đích, SAU khi đã xem mục 5d trong kết quả của 01e; nếu không chắc: DỪNG và báo số lượng theo schema (dòng `count by schema`).
 - PostgreSQL 14 trở xuống: 02 luôn dừng (như cách A).
-- Editor chạy bằng role `postgres` của Supabase (không phải superuser thật, có CREATEROLE); trường hợp này đã được thử cục bộ (chủ bảng không phải superuser).
+- Editor chạy bằng role `postgres` của Supabase (không phải superuser thật, có CREATEROLE). Probe cục bộ đã thử 02/03 bằng chủ bảng không phải superuser có CREATEROLE, nhưng `03e` và `02p` CHỈ được thử bằng superuser, CHƯA thử bằng chủ không-superuser.
+- Probe cục bộ dùng xác thực `trust` (riêng bước kiểm mật khẩu của `02p` bật SCRAM tạm cho role `vowasia_migrator`) và chạy phần lớn bằng superuser. Chỉ thử trên PostgreSQL 16, CHƯA thử PostgreSQL 15.
+- Đăng nhập session pooler dạng `vowasia_migrator.MÃ_PROJECT` CHƯA được xác nhận trên Supabase thật (role tự tạo có thể không đăng nhập qua pooler được). Không được thì DỪNG và báo.
+- `LEGACY_VOWASIA_DB_SSL=require` mã hoá đường truyền nhưng KHÔNG kiểm chứng chứng chỉ máy chủ.
+- Editor có thể giới hạn số hàng hiển thị: hàng cuối của `01e` (`9 total rows`) cho tổng số hàng; thấy ít hơn thì cuộn/xem trang sau, hoặc báo lại.
+- Editor KHÔNG hiện dòng `NOTICE`: mọi kết quả cần đọc ở cách B nằm trong ô kết quả cuối. Vì thế cách B KHÔNG dùng `02b` (bước Dọn của 02b cần dòng `NOTICE ... BEFORE` để biết trạng thái RLS cũ); chỉ dùng phương án 2 (`02`).
+- Role `vowasia_migrator` là cấp cụm: Editor chỉ thấy database `postgres` của project; `01e` liệt kê các database mà PUBLIC kết nối được (mục `5c`, dòng `databases PUBLIC can CONNECT to`). Role có thể kết nối các database đó (không đọc được bảng nếu không có quyền); đây là rủi ro đã chấp nhận, không kiểm thêm được từ Editor.
 
 ### B1: mở SQL Editor
 
 Mở Supabase, chọn project `globaltravelpost`, vào SQL Editor, bấm New query (một ô trống).
+
+TRƯỚC KHI dán bất kỳ SQL nào (ở B2, B3, B4, B6): nhìn tên project ở góc trên bên trái của Supabase, phải là đúng `globaltravelpost`. Khác thì DỪNG, chọn lại project. Lý do: trên Supabase mọi database đều tên `postgres`, nên chốt tên database trong file SQL (`__LEGACY_DB_NAME__`) KHÔNG phân biệt được project; chỉ có bước nhìn tên project này phân biệt.
 
 ### B2: đọc cấu trúc DB cũ (chỉ SELECT)
 
@@ -317,52 +325,76 @@ Dán một lệnh rồi đợi dấu nhắc `%` hiện lại. Lệnh này chép 
 cat scripts/migrate/vowasia/sql/01e-inspect-single-result.sql | pbcopy
 ```
 
-Dán vào ô New query (Cmd+V), bấm Run. Kết quả là MỘT bảng ba cột `section`, `item`, `detail`. Dòng đầu (`1 connection`) là tên database và role đang dùng: ghi lại tên database (với Supabase thường là `postgres`). Mục nào không có dữ liệu hiện `(none)`.
+Dán vào ô New query (Cmd+V), bấm Run. Kết quả là MỘT bảng ba cột `section`, `item`, `detail`. Các hàng đầu là mục `6 vowasia site row` (id, slug, name của dòng site có slug chứa `vow`); tiếp theo là `1 connection` (tên database và role đang dùng: ghi lại tên database, với Supabase thường là `postgres`). Hàng CUỐI là `9 total rows` (tổng số hàng): thấy ít hàng hơn số đó thì Editor đã cắt bớt, cuộn hoặc xem trang sau. Mục nào không có dữ liệu hiện `(none)`.
 
-Báo lại đúng các nhóm như mục "Báo lại" của O2 (1 đến 6), đọc từ cột `section`: `6b columns` (cột của hai bảng), `2 public tables/views` và `5 acl of articles/sites` (cờ RLS, quyền), `3 rls policies (public)`, `5 login roles`, `5a nologin roles reading the tables`, `5e role membership`, `5b connected roles`, `5c public privileges`, `5d security definer callable by PUBLIC` (chỉ cần dòng `count by schema`), `4 site_id column types`, và `6 vowasia site row` (id site: chỉ chia sẻ nếu thấy an toàn, qua kênh phù hợp). Không báo tên bảng nhạy cảm nào khác. Trước khi chụp màn hình: chỉ chụp phần cần báo, không chụp dòng chứa thông tin nhạy cảm.
+Nếu cả câu báo lỗi (không ra bảng), hoặc mục 6 ghi `columns missing`: chép lệnh dự phòng dưới vào clipboard, dán vào một New query, Run, rồi báo kết quả (chỉ id, slug, name):
+
+```bash
+echo "SELECT id, slug, name FROM public.sites WHERE lower(slug) LIKE '%vow%';" | pbcopy
+```
+
+Báo lại đúng các nhóm như mục "Báo lại" của O2 (1 đến 6), đọc từ cột `section`: `6b columns` (cột của hai bảng), `2 public tables/views` và `5 acl of articles/sites` (cờ RLS, quyền), `3 rls policies (public)`, `5 login roles`, `5a nologin roles reading the tables`, `5e role membership`, `5b connected roles`, `5c public privileges` (gồm `databases PUBLIC can CONNECT to` và `password_encryption`), `5d security definer callable by PUBLIC` (chỉ cần dòng `count by schema` và giá trị `in_public` trong cột `detail` của từng hàm), `5f PUBLIC-readable relations (02 stops on any)` (chỉ báo SỐ hàng, và tên nếu là bảng VowAsia), `5g schemas where PUBLIC can add objects (02 stops on any)`, `4 site_id column types`, và `6 vowasia site row` (id site: chỉ chia sẻ nếu thấy an toàn, qua kênh phù hợp). Không báo tên bảng nhạy cảm nào khác. Trước khi chụp màn hình: chỉ chụp phần cần báo, không chụp dòng chứa thông tin nhạy cảm.
+
+Đọc trước chỗ 02 sẽ DỪNG: nếu `5d` có hàm `in_public=yes`, hoặc `5f` có hàng nào, hoặc `5g` có schema nào, hoặc `5c` dòng `database CONNECT | TEMP | can add schemas` có giá trị cuối là `true`, thì 02 SẼ dừng ở B3. Khi đó KHÔNG chạy B3; báo lại đúng các hàng đó (xem bảng "02 dừng ở đâu" trong B3).
 
 ### B3: tạo role chỉ-đọc (khuyên phương án 2)
 
-Chọn phương án như O3 (khuyên phương án 2: `02`; phương án 1 `02b` chỉ khi O3 nói được phép). Chép mẫu 02 vào clipboard:
+Cách B CHỈ dùng phương án 2 (`02`). KHÔNG dùng `02b` trong cách B: Editor không hiện dòng `NOTICE ... BEFORE` của 02b, nên mất trạng thái RLS cũ cần cho bước gỡ, và 02b đổi bảng dùng chung. Chép mẫu 02 vào clipboard:
 
 ```bash
 cat scripts/migrate/vowasia/sql/02-create-readonly-role-views.sql.template | pbcopy
 ```
 
-Mở một New query mới, dán (Cmd+V). Dùng Cmd+H (tìm và thay) để thay HẾT mọi lần xuất hiện của từng chỗ giữ chỗ:
+Mở một New query mới, dán (Cmd+V). Mở tìm-và-thay của Editor: trên Mac là Cmd+Option+F (KHÔNG phải Cmd+H: trên Mac Cmd+H ẩn cửa sổ), trên Windows/Linux là Ctrl+H. Gõ chỗ giữ chỗ vào ô tìm, giá trị vào ô thay, bấm Replace All (thay hết). Làm lần lượt cho từng chỗ giữ chỗ:
 - `__VOWASIA_SITE_ID__`: id site VowAsia (mục `6 vowasia site row`);
 - `__VOWASIA_SITE_SLUG__`: slug của dòng đó (phải là `vowasia`; khác thì DỪNG và báo);
 - `__ARTICLE_COLUMNS__`: danh sách cột TƯỜNG MINH của bảng bài viết (mục `6b columns`, mỗi tên trong dấu nháy kép, cách nhau bằng dấu phẩy), có `"site_id"`, KHÔNG có cột cá nhân;
 - `__LEGACY_DB_NAME__`: tên database ở dòng đầu kết quả B2 (thường là `postgres`).
 
-Giữ nguyên `allow_definer_outside_public` là `'no'` (xem Hạn chế ở trên). Bấm Run, đọc ô kết quả cuối:
+Sau khi thay hết: tìm `__` (hai dấu gạch dưới) trong Editor; không được còn kết quả nào (còn thì thay tiếp). Giữ nguyên `allow_definer_outside_public` là `'no'` (xem Hạn chế ở trên). Bấm Run, đọc ô kết quả cuối:
 - đúng `SELF-CHECK OK`: sang B4;
 - `SELF-CHECK FAILED: nothing created`: KHÔNG đặt mật khẩu; làm B6 cho chắc rồi DỪNG và báo;
 - một lỗi (ví dụ `SELF-CHECK STOP: ...`, `DB NAME STOP: ...`, `lock timeout`): cả giao dịch đã huỷ, không tạo gì; DỪNG và báo nguyên văn dòng lỗi.
+
+02 dừng ở đâu, và làm gì (mọi trường hợp: cả giao dịch huỷ, KHÔNG tạo gì, site cũ không đổi). Với MỌI dòng dưới: đọc dòng lỗi, báo lại nguyên văn cho orchestrator, KHÔNG tự sửa DB. Tuyệt đối KHÔNG chạy `REVOKE ... FROM PUBLIC` (hay bất kỳ REVOKE/GRANT nào) để "gỡ" một chỗ dừng: đó là việc DUY NHẤT ở đây có thể làm hỏng site cũ.
+
+| Dòng lỗi (bắt đầu bằng) | Nghĩa | Làm gì |
+|---|---|---|
+| `vowasia: placeholder ... not filled` | còn chỗ giữ chỗ chưa thay | thay hết (tìm `__`), Run lại |
+| `DB NAME STOP: ...` | `__LEGACY_DB_NAME__` sai hoặc đang ở `neondb` | kiểm tên project (B1) và tên ở B2, sửa, Run lại; vẫn dừng thì báo |
+| `SELF-CHECK STOP: view sites does not return exactly 1 row` | id site sai (số dòng site khác 1) | đối chiếu id ở mục `6 vowasia site row`, sửa, Run lại; vẫn dừng thì báo |
+| `SELF-CHECK STOP: the site row slug is not the expected slug` | slug lệch | DỪNG và báo (cần amendment nếu slug thật khác `vowasia`) |
+| `SELF-CHECK STOP: ... bypasses RLS or is superuser` / `... is a member of another role` | role có quyền thừa (có thể do một role cùng tên có sẵn) | DỪNG và báo |
+| `SELF-CHECK STOP: ... can CREATE in this database` | PUBLIC tạo được schema trong database (mục `5c`, giá trị cuối `true`) | DỪNG và báo |
+| `SELF-CHECK STOP: ... can CREATE in a schema` | PUBLIC tạo được đối tượng trong một schema (mục `5g`) | DỪNG và báo |
+| `SELF-CHECK STOP: ... has a privilege on a table outside vowasia_ro` | PUBLIC đọc/ghi được một bảng (mục `5f`) | DỪNG và báo số hàng mục `5f` |
+| `SELF-CHECK STOP: ... SECURITY DEFINER function in schema public` | hàm SECURITY DEFINER thường trong `public` mà PUBLIC gọi được (mục `5d`, `in_public=yes`); hàm trả trigger không tính | DỪNG và báo; không có cách nới |
+| `SELF-CHECK STOP: ... SECURITY DEFINER function(s) outside public` | như trên, ở schema khác (`in_public=no`) | DỪNG và báo dòng `count by schema`; chỉ nới `allow_definer_outside_public` khi orchestrator nói rõ |
+| `lock timeout` | bảng gốc đang bận | đợi vài phút, Run lại; lặp lại thì báo |
 
 Không lưu truy vấn này (nó chứa id site); xoá nó khỏi Editor sau khi chạy.
 
 ### B4: đặt mật khẩu
 
-Chỉ làm khi B3 báo đúng `SELF-CHECK OK`. Chép mẫu 02p vào clipboard:
+Chỉ làm khi B3 báo đúng `SELF-CHECK OK`. Kiểm lại tên project (B1). Chép mẫu 02p vào clipboard:
 
 ```bash
 cat scripts/migrate/vowasia/sql/02p-set-password.sql.template | pbcopy
 ```
 
-Mở New query, dán (Cmd+V). Rồi tạo mật khẩu ngẫu nhiên vào clipboard (chỉ 0-9 và a-f; lệnh không in gì):
+Mở New query, dán (Cmd+V), KHÔNG sửa gì (file không có chỗ giữ chỗ, không gõ mật khẩu). Bấm Run MỘT lần cho cả file. File tự sinh mật khẩu ngẫu nhiên 64 ký tự (0-9, a-f) ngay trong DB, đặt cho role, và hiện nó ĐÚNG MỘT LẦN ở ô kết quả cuối, cột `new_secret`. Văn bản truy vấn không chứa mật khẩu, nên lịch sử truy vấn không giữ nó.
 
-```bash
-openssl rand -hex 24 | pbcopy
-```
+- Ô `new_secret` ghi `NOT SHOWN: ...`: mật khẩu đã đổi nhưng không hiện; Run lại cả file.
+- Lỗi `02P STOP: ...` (role, schema hoặc view của 02 thiếu): không đổi gì; DỪNG và báo.
+- MỖI lần Run sinh mật khẩu MỚI, mật khẩu cũ hết dùng được.
 
-Trong Editor, Cmd+H thay `__PASSWORD__` bằng mật khẩu (dán bằng Cmd+V; giữ nguyên hai dấu nháy đơn quanh nó). Bấm Run. Xong thì XOÁ ngay truy vấn đó khỏi Editor (và khỏi Saved queries/lịch sử truy vấn nếu có). Mật khẩu vẫn trong clipboard cho B5. Không dán mật khẩu vào chat, không chụp màn hình có nó.
+Chép giá trị ô `new_secret` bằng nút copy của ô kết quả (không bôi đen tay). Không chụp màn hình ô đó, không dán vào chat. Mật khẩu vẫn trong clipboard cho B5. Xong B5 thì đóng tab truy vấn này (và xoá nó khỏi Saved queries nếu đã lỡ lưu) để ô kết quả không còn trên màn hình.
 
 ### B5: nhập URL kết nối và chạy discover
 
 Trong Supabase, nút Connect, chọn chuỗi kết nối "Session pooler" (cổng `5432`). KHÔNG dùng "Transaction pooler" (cổng `6543`). Soạn URL trong một ghi chú tạm KHÔNG đồng bộ (xoá ngay sau bước này):
 - tên đăng nhập: đổi `postgres.MÃ_PROJECT` thành `vowasia_migrator.MÃ_PROJECT` (giữ nguyên phần mã project sau dấu chấm; công cụ chỉ nhận đúng dạng này hoặc `vowasia_migrator`);
-- mật khẩu: thay `[YOUR-PASSWORD]` bằng mật khẩu ở B4 (dán từ clipboard);
+- mật khẩu: thay `[YOUR-PASSWORD]` bằng giá trị ô `new_secret` ở B4 (dán từ clipboard);
 - database: `postgres`;
 - KHÔNG thêm `?sslmode=...` hay tham số ssl nào (công cụ từ chối).
 
@@ -390,7 +422,7 @@ Chép mẫu dọn vào clipboard:
 cat scripts/migrate/vowasia/sql/03e-drop-in-editor.sql.template | pbcopy
 ```
 
-Mở New query, dán, Cmd+H thay HẾT `__LEGACY_DB_NAME__` bằng tên database ở B2 (thường là `postgres`). Bấm Run. Ô kết quả cuối phải là đúng `CLEANUP OK`. Nếu thấy lỗi `DB NAME STOP: ...` (chưa thay chỗ giữ chỗ, sai tên, hoặc đang ở `neondb`): không có gì bị xoá; sửa rồi chạy lại. Chạy lại nhiều lần vẫn an toàn. Nếu đã dùng phương án 1 (02b): gỡ policy BẰNG TAY TRƯỚC như mục Dọn của cách A (dán các câu SQL trong lệnh `-c` đó vào Editor thay vì psql). Cuối cùng xoá các file riêng tư như mục Dọn của cách A.
+Kiểm lại tên project (B1). Mở New query, dán, mở tìm-và-thay (Mac: Cmd+Option+F; Windows/Linux: Ctrl+H), thay `__LEGACY_DB_NAME__` bằng tên database ở B2 (thường là `postgres`), bấm Replace All, rồi tìm `__` để chắc không còn chỗ giữ chỗ. Bấm Run. Ô kết quả cuối, cột `vowasia_cleanup_check`, phải là đúng `CLEANUP OK`; cùng hàng có trạng thái RLS của hai bảng gốc và `vowasia_policies_left` (phải là `0`). Không cần (và không có) dòng `NOTICE`. Nếu thấy lỗi `DB NAME STOP: ...` (chưa thay chỗ giữ chỗ, sai tên, hoặc đang ở `neondb`): không có gì bị xoá; sửa rồi chạy lại. Chạy lại nhiều lần vẫn an toàn. Cách B không dùng `02b`; nếu đã lỡ chạy 02b: KHÔNG chạy 03e, DỪNG và báo. Cuối cùng xoá các file riêng tư như mục Dọn của cách A. Role là cấp cụm: Editor chỉ dọn được trong database `postgres` của project (xem Hạn chế).
 
 ## Kiểm thử cục bộ (agent, không cần DB thật)
 
@@ -402,4 +434,4 @@ npm run test:migrate-vowasia
 npm run probe:migrate-vowasia
 ```
 
-Lệnh đầu là unit test (không DB, không mạng). Lệnh thứ hai dựng PG16 tạm cục bộ (cổng 54336, xác thực trust chỉ trên 127.0.0.1), tự dọn; chạy một mình. Probe kiểm keyset (trùng mili-giây khác micro-giây, `created_at` trùng, NULL, 1970), chạy `01` bằng role không có quyền ghi, áp `02` (kể cả trường hợp tự kiểm STOP thì không tạo gì) và `03`, các bản cho SQL Editor (`01e` trả đúng một bảng, `02` dán như một chuỗi, `02p`, `03e`), cả bằng chủ bảng KHÔNG phải superuser có CREATEROLE, kiểm hàng rào của `02b`, kiểm role chỉ đọc đúng site và không ghi được, chạy discover qua role và kiểm đầu ra không lộ id site, mật khẩu, thân bài. Nó không chứng minh hành vi trên DB cũ THẬT (đó là O2-O5).
+Lệnh đầu là unit test (không DB, không mạng). Lệnh thứ hai dựng PG16 tạm cục bộ (cổng 54336, xác thực trust chỉ trên 127.0.0.1), tự dọn; chạy một mình. Probe kiểm keyset (trùng mili-giây khác micro-giây, `created_at` trùng, NULL, 1970), chạy `01` bằng role không có quyền ghi, áp `02` (kể cả trường hợp tự kiểm STOP thì không tạo gì) và `03`, các bản cho SQL Editor (`01e` trả đúng một bảng, mục site đầu tiên, hàng tổng cuối; `02` dán như một chuỗi, hàm SECURITY DEFINER trả trigger không làm 02 dừng còn hàm thường thì dừng; `02p` dừng khi thiếu role/schema/view, sinh mật khẩu trong SQL và role đăng nhập SCRAM được bằng nó; `03e` báo trạng thái trong ô kết quả), cả bằng chủ bảng KHÔNG phải superuser có CREATEROLE, kiểm hàng rào của `02b`, kiểm role chỉ đọc đúng site và không ghi được, chạy discover qua role và kiểm đầu ra không lộ id site, mật khẩu, thân bài. Nó không chứng minh hành vi trên DB cũ THẬT (đó là O2-O5).

@@ -25,7 +25,8 @@
  *      without / with a wrong -v legacy_db drops nothing.
  *   H. Amendment 1 (Supabase SQL Editor variants): 01e returns ONE result set in a
  *      read-only transaction as a non-superuser; 02 pasted as one string ends in
- *      SELF-CHECK OK; 02p sets a password; 03e refuses unfilled / wrong name /
+ *      SELF-CHECK OK; 02p stops without role/schema/views, generates the password in
+ *      SQL (shown only in the last cell), SCRAM login works; 03e refuses unfilled / wrong name /
  *      neondb (with and without ON_ERROR_STOP) and cleans up when filled.
  *   G. 02b: the in-SQL guard refuses (nothing changed) while another login role
  *      or a NOLOGIN role can use the shared tables; then the filled 02b applies
@@ -59,6 +60,8 @@ const SITE_O = "00000000-0000-0000-0000-00000000f001";
 const BODY_MARK = "BODYSAMPLEMARK7f3a";
 const TITLE_MARK = "TITLESAMPLEMARK9c1e";
 const PASSWORD = randomBytes(18).toString("base64url");
+/** Every secret this probe holds; failure messages are redacted against all of them. */
+const SECRETS: string[] = [PASSWORD];
 const ARTICLE_COLUMNS = `"id", "site_id", "inserted_at", "published_at", "status", "category", "slug", "title", "body_html", "hero_url"`;
 
 const url = (db: string, user = "postgres", pw?: string) => `postgres://${user}${pw ? `:${encodeURIComponent(pw)}` : ""}@127.0.0.1:${PORT}/${db}`;
@@ -229,6 +232,23 @@ async function main(): Promise<void> {
   assert.match(rNeon03.err, /DB NAME STOP: connected to neondb/);
   await withClient("postgres", (c) => c.query("DROP DATABASE neondb"));
   assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "DB NAME STOP creates nothing");
+  // G9 #3: SECURITY DEFINER functions returning trigger / event_trigger (Supabase handle_new_user
+  // style) cannot be called directly: they must NOT stop 02 (kept until the filled 02 below applies).
+  await withClient("probe_uuid", async (c) => {
+    await c.query("CREATE FUNCTION public.handle_new_user() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS 'BEGIN RETURN NEW; END'");
+    await c.query("CREATE SCHEMA probe_trg");
+    await c.query("GRANT USAGE ON SCHEMA probe_trg TO PUBLIC");
+    await c.query("CREATE FUNCTION probe_trg.on_ddl() RETURNS event_trigger LANGUAGE plpgsql SECURITY DEFINER AS 'BEGIN END'");
+  });
+  // An ordinary SECURITY DEFINER function in public that PUBLIC can call -> STOP (always).
+  await withClient("probe_uuid", (c) => c.query("CREATE FUNCTION public.leak_pub() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM public.articles'"));
+  const defPub = path.join(DIR, "02-definer-public.sql");
+  writeFileSync(defPub, fill(tpl02, u.siteV, "probe_uuid"), { mode: 0o600 });
+  const rDefPub = psql("probe_uuid", defPub);
+  assert.notEqual(rDefPub.status, 0, "PUBLIC-callable ordinary SECURITY DEFINER in public must stop");
+  assert.match(rDefPub.err, /SELF-CHECK STOP: vowasia_migrator can EXECUTE a SECURITY DEFINER function in schema public/);
+  assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "public definer STOP creates nothing");
+  await withClient("probe_uuid", (c) => c.query("DROP FUNCTION public.leak_pub()"));
   // m-F: a SECURITY DEFINER function outside public that PUBLIC can call -> STOP by default.
   await withClient("probe_uuid", async (c) => {
     await c.query("CREATE SCHEMA probe_ext");
@@ -243,7 +263,7 @@ async function main(): Promise<void> {
   assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "definer STOP creates nothing");
   await withClient("probe_uuid", (c) => c.query("DROP SCHEMA probe_ext CASCADE"));
   assert.equal(await baseState("probe_uuid"), before, "base tables unchanged by a rolled-back 02");
-  log("C 02: wrong site id / wrong slug / wrong db name / neondb / PUBLIC SECURITY DEFINER outside public -> STOP inside the transaction, nothing created");
+  log("C 02: wrong site id / wrong slug / wrong db name / neondb / PUBLIC SECURITY DEFINER in public and outside public -> STOP inside the transaction, nothing created");
   const filled = path.join(DIR, "02-filled.sql");
   writeFileSync(filled, fill(tpl02, u.siteV, "probe_uuid"), { mode: 0o600 });
   const applied = psql("probe_uuid", filled);
@@ -253,7 +273,11 @@ async function main(): Promise<void> {
   assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT (rolvaliduntil > now() AND rolvaliduntil < now() + interval '15 days') AS ok FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].ok), true, "role has VALID UNTIL ~14 days");
   await withClient("postgres", (c) => c.query(`ALTER ROLE vowasia_migrator PASSWORD ${c.escapeLiteral(PASSWORD)}`));
   assert.equal(await baseState("probe_uuid"), before, "base tables RLS/policies/grants unchanged by 02");
-  log("C 02: unfilled template refused; filled template applied; self-check OK; base tables unchanged");
+  await withClient("probe_uuid", async (c) => {
+    await c.query("DROP FUNCTION public.handle_new_user()");
+    await c.query("DROP SCHEMA probe_trg CASCADE");
+  });
+  log("C 02: unfilled template refused; filled template applied (with trigger / event_trigger SECURITY DEFINER functions present: not counted); self-check OK; base tables unchanged");
 
   await withClient(
     "probe_uuid",
@@ -379,16 +403,23 @@ async function main(): Promise<void> {
       assert.ok(!Array.isArray(r), "01e must return exactly ONE result set");
       assert.deepEqual(r.fields.map((f) => f.name), ["section", "item", "detail"]);
       const rows = r.rows as { section: string; item: string; detail: string }[];
-      assert.deepEqual([rows[0]?.section, rows[0]?.item, rows[0]?.detail], ["1 connection", "database | role", "probe_uuid | probe_inspector"], "first row: database and role");
+      assert.equal(rows[0]?.section, "6 vowasia site row", "first rows: the vowasia site row (section 6)");
+      assert.ok(rows.some((x) => x.section === "1 connection" && x.item === "database | role" && x.detail === "probe_uuid | probe_inspector"), "database and role row");
       const sections = new Set(rows.map((x) => x.section.split(" ")[0]));
-      for (const sec of ["1", "2", "4", "5", "5a", "5c", "5d", "5e", "5b", "6b", "6"]) assert.ok(sections.has(sec), `01e section ${sec} present`);
+      for (const sec of ["1", "2", "4", "5", "5a", "5c", "5d", "5e", "5b", "5f", "5g", "6b", "6", "9"]) assert.ok(sections.has(sec), `01e section ${sec} present`);
+      const last = rows[rows.length - 1];
+      assert.deepEqual([last?.section, last?.detail], ["9 total rows", String(rows.length)], "last row: total rows");
+      assert.ok(rows.some((x) => x.section === "5c public privileges" && x.item === "databases PUBLIC can CONNECT to" && x.detail.includes("probe_uuid")));
+      assert.ok(rows.some((x) => x.section === "5c public privileges" && x.item === "password_encryption"));
+      const b6 = rows.filter((x) => x.section === "6b columns").map((x) => x.item.split(".")[0]);
+      assert.deepEqual(b6, [...b6].sort(), "6b ordered by table, then column position (not interleaved)");
       assert.ok(rows.some((x) => x.section === "6 vowasia site row" && x.item === "vowasia" && x.detail.includes(u.siteV)), "01e finds the vowasia site row");
       assert.ok(rows.some((x) => x.section === "6b columns" && x.item === "articles.site_id"), "01e lists article columns");
       assert.ok(rows.some((x) => x.section === "4 site_id column types" && x.item === "articles" && x.detail === "uuid"));
       const all = JSON.stringify(rows);
       for (const needle of [BODY_MARK, TITLE_MARK, "author1@example.invalid", "a@example.invalid"]) assert.ok(!all.includes(needle), "01e prints no article data / personal data");
       const ord = rows.map((x) => x.section);
-      assert.equal(ord.indexOf("6 vowasia site row") > ord.indexOf("5d security definer callable by PUBLIC"), true, "stable section order");
+      assert.equal(ord.indexOf("6 vowasia site row") < ord.indexOf("1 connection"), true, "stable section order: 6 first");
     },
     "probe_inspector",
   );
@@ -400,30 +431,99 @@ async function main(): Promise<void> {
     assert.ok(!Array.isArray(r));
     assert.ok(r.rows.some((x) => x.section === "6 vowasia site row" && x.item === "public.sites" && x.detail === "missing"), "01e does not fail when the tables are missing");
   }, "probe_inspector");
+  await withClient("probe_empty", async (c) => {
+    await c.query("CREATE TABLE public.sites (id int, title text)");
+    await c.query("GRANT SELECT ON public.sites TO PUBLIC");
+    await c.query("CREATE SCHEMA probe_open");
+    await c.query("GRANT USAGE, CREATE ON SCHEMA probe_open TO PUBLIC");
+    await c.query("CREATE FUNCTION public.leak_e() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'");
+    await c.query("CREATE FUNCTION public.trg_e() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS 'BEGIN RETURN NEW; END'");
+  });
+  await withClient("probe_empty", async (c) => {
+    const r = await c.query(sql01e);
+    assert.ok(r.rows.some((x) => x.section === "6 vowasia site row" && x.item === "public.sites" && /^columns missing/.test(x.detail)), "01e does not fail when public.sites lacks slug/name");
+    assert.ok(r.rows.some((x) => x.section.startsWith("5f ") && x.item === "public.sites"), "01e 5f lists a PUBLIC-readable table (02 would stop)");
+    assert.ok(r.rows.some((x) => x.section.startsWith("5g ") && x.item === "probe_open"), "01e 5g lists a schema where PUBLIC can add objects");
+    assert.ok(r.rows.some((x) => x.section.startsWith("5d ") && x.item === "public.leak_e" && x.detail.startsWith("in_public=yes")), "01e 5d marks an ordinary definer in public");
+    assert.ok(!r.rows.some((x) => x.item === "public.trg_e"), "01e 5d does not count trigger-returning functions (same as 02)");
+  }, "probe_inspector");
   await withClient("postgres", (c) => c.query("DROP DATABASE probe_empty"));
-  log("H 01e: one result set (section,item,detail), first row database | role, all sections, read-only transaction as a non-superuser, no article data; tolerates missing tables");
+  log("H 01e: one result set (section,item,detail), site row first, total rows last, all sections incl. 5f/5g/CONNECT list, read-only transaction as a non-superuser, no article data; tolerates missing tables and missing site columns");
 
-  // 02 pasted Editor-style (one multi-statement string), then 02p, then login.
+  // 02p (G9 #1): no placeholder; the password is generated IN SQL and shown only in the
+  // last result cell. STOP when the role / schema / 02 state is missing.
+  const tpl02p = readFileSync(path.join(SQL_DIR, "02p-set-password.sql.template"), "utf8");
+  assert.ok(!tpl02p.includes("__PASSWORD__"), "02p has no password placeholder");
+  const pw02pLines = tpl02p.split("\n").filter((l) => !/^\s*--/.test(l) && /\bpassword\b/i.test(l));
+  assert.deepEqual(pw02pLines, ["  EXECUTE format('ALTER ROLE vowasia_migrator PASSWORD %L', pw);"], "02p: the only PASSWORD line is the generated one");
+  const stop02p = async (why: RegExp, what: string): Promise<void> => {
+    try {
+      await withClient("probe_uuid", (c) => c.query(tpl02p));
+    } catch (e) {
+      assert.equal((e as { code?: string }).code, "P0001", what);
+      assert.match((e as Error).message, why, what);
+      return;
+    }
+    assert.fail(`${what}: expected 02P STOP`);
+  };
+  await stop02p(/02P STOP: role vowasia_migrator does not exist/, "02p before 02 (no role)");
+  await withClient("postgres", (c) => c.query("CREATE ROLE vowasia_migrator LOGIN"));
+  await stop02p(/02P STOP: schema vowasia_ro does not exist/, "02p without schema");
+  await withClient("probe_uuid", (c) => c.query("CREATE SCHEMA vowasia_ro"));
+  await stop02p(/02P STOP: the views of 02 or their SELECT grant are missing/, "02p without the views of 02");
+  const pwNone = await withClient("postgres", async (c) => (await c.query("SELECT rolpassword FROM pg_authid WHERE rolname = 'vowasia_migrator'")).rows[0].rolpassword);
+  assert.equal(pwNone, null, "02P STOP sets no password");
+  await withClient("probe_uuid", (c) => c.query("DROP SCHEMA vowasia_ro"));
+  await withClient("postgres", (c) => c.query("DROP ROLE vowasia_migrator"));
+  log("H 02p: STOP (nothing changed) when the role, the schema, or the views/grants of 02 are missing");
+
+  // 02 pasted Editor-style (one multi-statement string), then 02p, then a SCRAM login.
   const editorResults = (await withClient("probe_uuid", (c) => c.query(fill(tpl02, u.siteV, "probe_uuid")))) as unknown as pg.QueryResult[];
   assert.ok(Array.isArray(editorResults));
   assert.equal(editorResults[editorResults.length - 1]?.rows[0]?.vowasia_self_check, "SELF-CHECK OK", "02 Editor-style: last result is SELF-CHECK OK");
-  const tpl02p = readFileSync(path.join(SQL_DIR, "02p-set-password.sql.template"), "utf8");
-  const pwLines = tpl02p.split("\n").filter((l) => /password\s+'/i.test(l));
-  assert.deepEqual(pwLines, ["ALTER ROLE vowasia_migrator PASSWORD '__PASSWORD__';"], "02p carries only the placeholder");
   const pwBefore = await withClient("postgres", async (c) => (await c.query("SELECT rolpassword FROM pg_authid WHERE rolname = 'vowasia_migrator'")).rows[0].rolpassword);
   assert.equal(pwBefore, null, "role from 02 has no password yet");
-  const filled02p = path.join(DIR, "02p-filled.sql");
-  writeFileSync(filled02p, tpl02p.split("__PASSWORD__").join(PASSWORD), { mode: 0o600 });
-  const r02p = psql("probe_uuid", filled02p);
-  assert.equal(r02p.status, 0, `02p failed: ${r02p.err.split(PASSWORD).join("<redacted>")}`);
-  assert.ok(!(r02p.out + r02p.err).includes(PASSWORD), "02p output does not echo the password");
+  // psql -f (autocommit per statement): the value is not shown, the cell says so.
+  const r02pPsql = psql("probe_uuid", path.join(SQL_DIR, "02p-set-password.sql.template"));
+  assert.equal(r02pPsql.status, 0, "02p via psql -f runs");
+  assert.match(lastLine(r02pPsql.out), /^NOT SHOWN: run the whole file as ONE query/, "02p outside one transaction shows no value");
+  assert.ok(!/[0-9a-f]{64}/.test(r02pPsql.out + r02pPsql.err), "02p via psql -f prints no generated value");
+  const run02p = async (): Promise<string> => {
+    const res = (await withClient("probe_uuid", (c) => c.query(tpl02p))) as unknown as pg.QueryResult[];
+    assert.ok(Array.isArray(res));
+    const row = res[res.length - 1]?.rows[0] as { new_secret?: string; warning?: string } | undefined;
+    assert.ok(row?.warning && /no screenshot/.test(row.warning), "02p warning column");
+    const v = row?.new_secret ?? "";
+    assert.match(v, /^[0-9a-f]{64}$/, "02p shows a 64-hex value in the last cell");
+    SECRETS.push(v);
+    return v;
+  };
+  const gen = await run02p();
   const pwAfter = await withClient("postgres", async (c) => (await c.query("SELECT rolpassword FROM pg_authid WHERE rolname = 'vowasia_migrator'")).rows[0].rolpassword as string);
   assert.match(pwAfter, /^SCRAM-SHA-256\$/, "02p stored a SCRAM verifier");
-  assert.ok(!pwAfter.includes(PASSWORD));
-  await withClient("probe_uuid", async (c) => {
-    assert.deepEqual((await c.query("SELECT slug FROM vowasia_ro.sites")).rows.map((x) => x.slug), ["vowasia"]);
-  }, "vowasia_migrator", PASSWORD);
-  log("H 02 Editor-style -> SELF-CHECK OK; 02p sets a SCRAM password (not echoed); the role logs in (local auth is trust) and reads the view");
+  assert.ok(!pwAfter.includes(gen));
+  // Real password check: SCRAM for vowasia_migrator on 127.0.0.1 (the rest stays trust), then restore.
+  const hba = path.join(DIR, "pg", "pg_hba.conf");
+  const hbaOrig = readFileSync(hba, "utf8");
+  writeFileSync(hba, `host all vowasia_migrator 127.0.0.1/32 scram-sha-256\n${hbaOrig}`);
+  await withClient("postgres", (c) => c.query("SELECT pg_reload_conf()"));
+  await new Promise((r) => setTimeout(r, 300));
+  try {
+    await expectPgError("28P01", () => withClient("probe_uuid", (c) => c.query("SELECT 1"), "vowasia_migrator", "wrong-password-0000"), "SCRAM: a wrong password is refused");
+    await withClient("probe_uuid", async (c) => {
+      assert.deepEqual((await c.query("SELECT slug FROM vowasia_ro.sites")).rows.map((x) => x.slug), ["vowasia"]);
+    }, "vowasia_migrator", gen);
+    const gen2 = await run02p();
+    assert.notEqual(gen2, gen, "each 02p run generates a new value");
+    await expectPgError("28P01", () => withClient("probe_uuid", (c) => c.query("SELECT 1"), "vowasia_migrator", gen), "SCRAM: the old value no longer works after a re-run");
+    await withClient("probe_uuid", (c) => c.query("SELECT 1"), "vowasia_migrator", gen2);
+  } finally {
+    writeFileSync(hba, hbaOrig);
+    await withClient("postgres", (c) => c.query("SELECT pg_reload_conf()"));
+  }
+  const serverLog = readFileSync(path.join(DIR, "pg.log"), "utf8");
+  for (const v of SECRETS.slice(1)) assert.ok(!serverLog.includes(v), "the generated value is not in the server log");
+  log("H 02 Editor-style -> SELF-CHECK OK; 02p generates a 64-hex value in SQL, shows it only in the last cell (<redacted> here), stores SCRAM; SCRAM login works with it, a wrong / old value is refused; not in the server log; psql -f shows NOT SHOWN");
 
   // 03e: refusals drop nothing; the filled file cleans up.
   const tpl03e = readFileSync(path.join(SQL_DIR, "03e-drop-in-editor.sql.template"), "utf8");
@@ -433,14 +533,14 @@ async function main(): Promise<void> {
   assert.notEqual(e1.status, 0, "unfilled 03e must stop");
   assert.match(e1.err, /DB NAME STOP: placeholder __LEGACY_DB_NAME__ not filled/);
   const e2 = psql("probe_uuid", file03eRaw, "postgres", [], false);
-  assert.match(lastLine(e2.out), /^CLEANUP STOP: role vowasia_migrator still exists$/, "unfilled 03e without ON_ERROR_STOP drops nothing");
+  assert.match(lastLine(e2.out).split("|")[0] ?? "", /^CLEANUP STOP: role vowasia_migrator still exists$/, "unfilled 03e without ON_ERROR_STOP drops nothing");
   const wrong03e = path.join(DIR, "03e-wrong.sql");
   writeFileSync(wrong03e, tpl03e.split("__LEGACY_DB_NAME__").join("some_other_db"), { mode: 0o600 });
   const e3 = psql("probe_uuid", wrong03e);
   assert.notEqual(e3.status, 0);
   assert.match(e3.err, /DB NAME STOP: connected database is not the given legacy_db/);
   const e4 = psql("probe_uuid", wrong03e, "postgres", [], false);
-  assert.match(lastLine(e4.out), /^CLEANUP STOP: role vowasia_migrator still exists$/, "wrong-name 03e without ON_ERROR_STOP drops nothing");
+  assert.match(lastLine(e4.out).split("|")[0] ?? "", /^CLEANUP STOP: role vowasia_migrator still exists$/, "wrong-name 03e without ON_ERROR_STOP drops nothing");
   await expectPgError("P0001", () => withClient("probe_uuid", (c) => c.query(readFileSync(wrong03e, "utf8"))), "03e wrong name, Editor-style");
   await withClient("postgres", (c) => c.query("CREATE DATABASE neondb TEMPLATE probe_uuid"));
   const neon03e = path.join(DIR, "03e-neon.sql");
@@ -454,9 +554,10 @@ async function main(): Promise<void> {
   writeFileSync(ok03e, tpl03e.split("__LEGACY_DB_NAME__").join("probe_uuid"), { mode: 0o600 });
   const editor03e = (await withClient("probe_uuid", (c) => c.query(readFileSync(ok03e, "utf8")))) as unknown as pg.QueryResult[];
   assert.equal(editor03e[editor03e.length - 1]?.rows[0]?.vowasia_cleanup_check, "CLEANUP OK", "03e Editor-style: last result is CLEANUP OK");
+  assert.deepEqual(editor03e[editor03e.length - 1]?.rows[0], { vowasia_cleanup_check: "CLEANUP OK", articles_rls_enabled: "false", sites_rls_enabled: "false", vowasia_policies_left: "0" }, "03e Editor-style: AFTER state in the last cell");
   const e6 = psql("probe_uuid", ok03e);
   assert.equal(e6.status, 0, `03e re-run failed: ${e6.err}`);
-  assert.equal(lastLine(e6.out), "CLEANUP OK");
+  assert.equal(lastLine(e6.out), "CLEANUP OK|false|false|0", "03e: AFTER state in the result row (no NOTICE needed)");
   assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0);
   assert.equal(await baseState("probe_uuid"), before, "base tables unchanged after the Editor variants");
   log("H 03e: unfilled / wrong name / neondb stop (with and without ON_ERROR_STOP, and Editor-style) and drop nothing; filled -> CLEANUP OK (Editor-style and psql -f), re-runnable; base tables unchanged");
@@ -548,6 +649,6 @@ async function main(): Promise<void> {
 
 main().catch((e: unknown) => {
   const msg = (e as Error)?.message ?? String(e);
-  console.error(`[probe] FAILED: ${msg.split(PASSWORD).join("<redacted>")}`);
+  console.error(`[probe] FAILED: ${SECRETS.reduce((m, v) => m.split(v).join("<redacted>"), msg)}`);
   process.exit(1);
 });

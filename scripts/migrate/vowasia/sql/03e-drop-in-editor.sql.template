@@ -5,9 +5,12 @@
 -- xoá schema vowasia_ro (kèm hai view), mọi quyền/đối tượng của vowasia_migrator
 -- trong database này, rồi xoá role. Không đụng bảng gốc, không đụng role khác.
 --
--- Cách dùng: dán CẢ file vào SQL Editor, thay __LEGACY_DB_NAME__ (mọi lần xuất hiện,
--- Cmd+H) bằng tên database CŨ (dòng '1 connection' của 01e; với Supabase thường là
--- postgres), rồi Run. Ô kết quả cuối phải là đúng 'CLEANUP OK'.
+-- Cách dùng: dán CẢ file vào SQL Editor, thay __LEGACY_DB_NAME__ (mọi lần xuất hiện:
+-- tìm-và-thay của Editor là Cmd+Option+F trên Mac, Ctrl+H trên Windows/Linux, rồi bấm
+-- Replace All; sau đó tìm '__' để chắc không còn chỗ giữ chỗ) bằng tên database CŨ
+-- (dòng '1 connection' của 01e; với Supabase thường là postgres), rồi Run. Ô kết quả
+-- cuối, cột vowasia_cleanup_check, phải là đúng 'CLEANUP OK'; các cột còn lại của
+-- cùng hàng cho trạng thái RLS/policy SAU khi dọn (Editor không hiện NOTICE).
 -- Toàn bộ phần xoá nằm trong MỘT giao dịch (BEGIN ... COMMIT): placeholder chưa điền,
 -- nối vào 'neondb' (Central) hoặc database khác tên đã điền => lỗi 'STOP', giao dịch
 -- bị huỷ, KHÔNG xoá gì (khi chạy bằng psql không có ON_ERROR_STOP, các lệnh sau lỗi
@@ -15,8 +18,9 @@
 -- Thứ tự quan trọng: DROP SCHEMA, rồi DROP OWNED BY, rồi DROP ROLE.
 -- Nếu role còn quyền ở database KHÁC trong cùng cụm: chạy DROP OWNED BY ở database đó trước.
 -- Chạy lại nhiều lần vẫn an toàn.
--- 03e KHÔNG tắt RLS: nếu đã dùng phương án 1 (02b), gỡ policy và (chỉ khi trước đó RLS
--- đang tắt) tắt RLS BẰNG TAY TRƯỚC, theo đầu file 02b.
+-- Cách B KHÔNG dùng 02b (xem VOWASIA-LEGACY.md B3). 03e KHÔNG tắt RLS: nếu lỡ đã dùng
+-- 02b, gỡ policy và (chỉ khi trước đó RLS đang tắt) tắt RLS BẰNG TAY TRƯỚC, theo đầu
+-- file 02b, rồi DỪNG và báo.
 
 -- Đang nối vào đâu, bằng ai (chỉ để ghi lại; chốt thật là khối DO ngay dưới).
 SELECT current_database() AS database_name, current_user AS running_as;
@@ -60,24 +64,14 @@ DROP ROLE IF EXISTS vowasia_migrator;
 
 COMMIT;
 
--- Trạng thái RLS/policy của hai bảng gốc (chỉ đọc), để đối chiếu với bước gỡ tay của 02b.
-DO $$
-DECLARE
-  t text;
-  r record;
-BEGIN
-  FOREACH t IN ARRAY ARRAY['public.articles', 'public.sites'] LOOP
-    IF to_regclass(t) IS NOT NULL THEN
-      SELECT c.relrowsecurity, (SELECT count(*) FROM pg_policies p WHERE p.schemaname || '.' || p.tablename = t AND p.policyname LIKE 'vowasia_migrator_%') AS n
-        INTO r FROM pg_class c WHERE c.oid = to_regclass(t);
-      RAISE NOTICE 'vowasia: AFTER: % rls_enabled=% vowasia_policies_left=%', t, r.relrowsecurity, r.n;
-    END IF;
-  END LOOP;
-END $$;
-
--- Xác nhận cuối: phải là đúng 'CLEANUP OK'.
+-- Xác nhận cuối (ô kết quả, KHÔNG dựa vào NOTICE): cột đầu phải là đúng 'CLEANUP OK'.
+-- Các cột sau: trạng thái RLS của hai bảng gốc và số policy vowasia_migrator_* còn lại
+-- ('missing' nếu bảng không có), để đối chiếu nếu đã lỡ dùng 02b.
 SELECT CASE
   WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vowasia_migrator') THEN 'CLEANUP STOP: role vowasia_migrator still exists'
   WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'vowasia_ro') THEN 'CLEANUP STOP: schema vowasia_ro still exists'
   ELSE 'CLEANUP OK'
-END AS vowasia_cleanup_check;
+END AS vowasia_cleanup_check,
+  coalesce((SELECT c.relrowsecurity::text FROM pg_class c WHERE c.oid = to_regclass('public.articles')), 'missing') AS articles_rls_enabled,
+  coalesce((SELECT c.relrowsecurity::text FROM pg_class c WHERE c.oid = to_regclass('public.sites')), 'missing') AS sites_rls_enabled,
+  (SELECT count(*) FROM pg_policies p WHERE p.schemaname = 'public' AND p.tablename IN ('articles', 'sites') AND p.policyname LIKE 'vowasia\_migrator\_%') AS vowasia_policies_left;

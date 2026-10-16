@@ -19,7 +19,8 @@ export const BANNER_MESSAGES = {
 /**
  * Accepted login names: the role itself, or the Supabase pooler form
  * `vowasia_migrator.<project ref>` (exactly 20 lowercase letters/digits).
- * The ref is never printed: the banner carries host:port/db only.
+ * The ref is never printed: the banner carries host:port/db only, and a
+ * direct host db.<ref>.supabase.co is shown as db.<ref>.supabase.co.
  */
 const POOLER_USER = new RegExp(`^${LEGACY_ROLE}\\.[a-z0-9]{20}$`);
 export function isAcceptedLegacyUser(user: unknown): boolean {
@@ -46,7 +47,9 @@ export function legacyBanner(url: string | undefined): { banner: string; host: s
   const port = typeof c.port === "string" && c.port !== "" ? c.port : "5432";
   const db = typeof c.database === "string" ? c.database.replace(/[?].*$/, "") : "";
   const local = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(host);
-  return { banner: `${host}:${port}/${db}`, host, local };
+  // A Supabase direct host carries the project ref: mask it in the printed banner.
+  const shown = host.replace(/^db\.[a-z0-9]{20}\.supabase\.co$/i, "db.<ref>.supabase.co");
+  return { banner: `${shown}:${port}/${db}`, host, local };
 }
 
 /** SSL option from LEGACY_VOWASIA_DB_SSL (default require for non-local hosts). */

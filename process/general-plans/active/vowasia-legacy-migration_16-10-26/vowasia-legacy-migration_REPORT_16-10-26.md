@@ -269,3 +269,50 @@ Known-Gap (trung thực):
 - PostgreSQL 14 trở xuống: 02 luôn STOP.
 - Hàm SECURITY DEFINER ngoài `public` trên Supabase: 02 có thể STOP; chỉ nới `allow_definer_outside_public` sau khi xem mục 5d của 01e.
 - Editor có thể lưu truy vấn chứa mật khẩu (02p) hoặc id site (02): doc yêu cầu xoá ngay.
+
+## Vòng sửa Amendment 1 (16-10-26, sửa phát hiện review G9, iteration-009)
+
+TL;DR: 11 phát hiện cần sửa đã sửa (02p tự sinh mật khẩu trong SQL, phím tắt Mac đúng, bảng "02 dừng ở đâu", hàm trả trigger không còn làm 02 dừng, che mã project, giới hạn ghi thật). Mọi cổng xanh; probe G6 xanh một mình. Không thêm file (29 dưới `scripts/migrate/vowasia/` + 1 backlog = 30); `package.json` không đổi.
+
+| # | Trạng thái | Sửa ở đâu | Bằng chứng |
+|---|---|---|---|
+| 1 | đã sửa | `sql/02p` viết lại: không chữ giữ chỗ; khối `DO` dừng (`02P STOP`) khi thiếu role, schema `vowasia_ro`, hai view/quyền SELECT, hoặc role superuser/BYPASSRLS/là thành viên; sinh 64 hex từ hai `gen_random_uuid()`, `EXECUTE format('ALTER ROLE vowasia_migrator PASSWORD %L', pw)`, `set_config(..., true)`; câu SELECT cuối trả `new_secret` + `warning`. Doc B4/B5 viết lại | probe H: 3 ca STOP không đặt mật khẩu; `psql -f` (từng câu) hiện `NOT SHOWN`, không in 64 hex; Editor-style hiện 64 hex; verifier SCRAM; bật SCRAM tạm trong `pg_hba` cho `vowasia_migrator`: mật khẩu sai -> 28P01, mật khẩu sinh ra đăng nhập và đọc view, chạy lại sinh giá trị mới, giá trị cũ -> 28P01; giá trị không có trong `pg.log`; lỗi probe che mọi giá trị đã sinh |
+| 2 | đã sửa | doc B3/B6, header `03e`: Mac Cmd+Option+F, Windows/Linux Ctrl+H, Replace All, tìm `__` sau khi thay | `grep -n "Cmd+H"` chỉ còn câu cảnh báo "KHÔNG phải Cmd+H" |
+| 3 | đã sửa | doc B2 (đọc trước chỗ dừng) + B3 bảng 11 dòng lỗi -> nghĩa -> làm gì, mọi dòng: báo lại, không tự sửa, cấm `REVOKE ... FROM PUBLIC`; `01e` thêm `5f` (relation PUBLIC có quyền, đánh dấu trong/ngoài articles/sites), `5g` (schema PUBLIC tạo được đối tượng), quyền tạo schema của database ở `5c`; `5d` đếm như 02 (USAGE của PUBLIC trên schema, không tính hàm trả trigger) + `in_public=yes/no`; `02` và `02b`: loại `trigger`/`event_trigger` khỏi hai guard DEFINER, phần khác giữ nguyên | probe C: hàm DEFINER thường trong `public` -> STOP; `public.handle_new_user()` (trigger) + `probe_trg.on_ddl()` (event_trigger) có mặt khi 02 đầy đủ chạy -> `SELF-CHECK OK`; m-F vẫn đếm đúng 1. Probe H: 01e liệt kê `5f`, `5g`, `in_public=yes`, không liệt kê hàm trả trigger |
+| 4 | đã sửa | `redact()` che `vowasia_migrator.<20>` và `db.<20>.supabase.co`; banner in host trực tiếp thành `db.<ref>.supabase.co`; câu doc sửa cho đúng | test mới `vowasia-cli.test.ts` (lỗi giả `password authentication failed for user "vowasia_migrator.abcdefghijklmnopqrst"` không còn mã) và `vowasia-db-banner.test.ts` |
+| 5 | không sửa (không cần, như yêu cầu) | | |
+| 6 | đã sửa | doc B1: đối chiếu tên project `globaltravelpost` ở góc trên trái trước mọi SQL; nói rõ chốt tên database vô nghĩa trên Supabase; nhắc lại ở B4/B6 | đọc doc |
+| 7 | đã sửa | doc B3/B6 + Hạn chế: cấm `02b` ở cách B; `03e` trả trạng thái AFTER (RLS hai bảng, số policy còn lại) trong ô kết quả cuối, bỏ khối NOTICE | probe H: Editor-style hàng cuối `{CLEANUP OK, false, false, 0}`; `psql -f` dòng cuối `CLEANUP OK\|false\|false\|0` |
+| 8 | đã sửa | `01e`: mục 6 lên đầu; hàng cuối `9 total rows`; `6b` sắp theo (bảng, vị trí cột); mục 6 không lỗi khi `public.sites` thiếu cột (`pg_attribute` kiểm trước, in `columns missing`); doc B2 có lệnh dự phòng một dòng; header viết lại | probe H: hàng đầu là mục 6, hàng cuối khớp số hàng, 6b không xen kẽ, DB có `sites(id,title)` vẫn ra bảng |
+| 9 | đã sửa | qua #1; `01e` thêm `password_encryption` | probe H |
+| 10 | đã sửa | `01e` `5c` thêm `databases PUBLIC can CONNECT to`; doc Hạn chế + B6 nói Editor chỉ thấy `postgres`, rủi ro cấp cụm đã chấp nhận | probe H (thấy `probe_uuid`) |
+| 11, 13 | đã sửa (doc) | Hạn chế cách B: probe dùng trust + superuser; 03e/02p chưa thử bằng chủ không-superuser; PG15 chưa thử; đăng nhập pooler chưa xác nhận; SSL `require` không kiểm chứng chứng chỉ; Editor có thể giới hạn số hàng; Editor không hiện NOTICE | đọc doc |
+| 12 | đề xuất cổng mới (plan-agent viết vào plan) | xem dưới | đột biến 6/6 đỏ |
+
+Lưu ý cách viết `01e`: cổng G10a (từ khoá ghi, ranh giới từ) bắt cả chữ trong chuỗi, nên `5f`/`5g`/`5c` đọc quyền của PUBLIC bằng `aclexplode` (grantee 0 = PUBLIC; quyền schema chỉ có USAGE và quyền tạo, nên "khác USAGE" = quyền tạo) thay vì truyền tên quyền dạng chữ. Probe xác nhận kết quả khớp điều kiện dừng của 02 trên các ca thử.
+
+### Cổng mật khẩu đề xuất (danh sách trắng, thay G10b; chạy trong `scripts/migrate/vowasia`)
+
+```
+! grep -HnEiw "password" sql/* | grep -vE "^sql/[^:]+:[0-9]+:[[:space:]]*--" | grep -vE "^sql/02p-set-password\.sql\.template:[0-9]+:[[:space:]]*EXECUTE format\('ALTER ROLE vowasia_migrator PASSWORD %L', pw\);$"
+```
+
+Mọi dòng không phải comment có từ `password` (ranh giới từ, nên `new_secret`, `password_encryption` không khớp) đều vi phạm, trừ đúng một dòng `EXECUTE format(...)` của 02p. Bằng chứng (bản sao `sql/` ngoài repo trong scratchpad, xoá sau): nguyên trạng exit 0 (xanh); đột biến exit 1 (đỏ) cả 6: `PASSWORD 'hunter2hunter2'`, `PASSWORD E'...'`, `PASSWORD $$...$$`, `PASSWORD` rồi xuống dòng, đổi `pw` trong dòng EXECUTE thành chữ cố định, nối thêm `ALTER ROLE ... PASSWORD 'x'` sau dòng EXECUTE. Known-Gap của cổng: một bí mật viết sẵn KHÔNG đi kèm từ `password` (ví dụ trong `set_config`) không bị bắt; G9 là lớp bổ sung. G10b cũ vẫn xanh nhưng đã mù với dạng 02p mới.
+
+### Số cổng thật (sau vòng sửa)
+
+- G1 `test:migrate-vowasia` 56/56 pass (có 2 test mới: redact, banner).
+- G2 `lint:migrate` 0 lỗi, 1 cảnh báo có sẵn (`t50sec`). G3 `typecheck` exit 0. G4 `test:migrate-gtp` 69/69. G5 `test:single-home` 267/267.
+- G6 probe (một mình, cổng 54336, tự dọn): ALL PROBE CHECKS PASSED.
+- G7 chỉ `package.json`; G7b đúng 3 dòng `vowasia`; G7c rỗng; G8 exit 0; G13 exit 0.
+- G10: từ khoá ghi trong `01` rỗng; G10b cũ rỗng; `postgres://` ngoài test/probe rỗng; G10a (`01e`): từ khoá ghi rỗng, một `;`, không `\`. Cổng danh sách trắng mới: xanh (đột biến 6/6 đỏ).
+- Số file dưới `scripts/migrate/vowasia/`: 29 (+ 1 backlog = 30).
+- Quét tĩnh doc: mọi khung lệnh một dòng, không `#`, `<`, `>`, `postgres://`; `read -s` khối riêng; không câu nào bảo dán/chụp/gửi bí mật.
+
+### Known-Gap còn lại (nói thật)
+
+- Chưa chạy trong SQL Editor thật: việc `set_config(..., true)` sống tới câu SELECT cuối dựa trên giả định Editor gửi cả file như một truy vấn (một giao dịch ngầm), chỉ thử bằng node-pg nhiều câu một chuỗi. Nếu Editor tách câu: ô hiện `NOT SHOWN` (an toàn: mật khẩu đổi nhưng không lộ, role không đăng nhập được tới khi chạy lại đúng cách).
+- Mật khẩu hiện trong ô kết quả: Supabase có thể lưu kết quả truy vấn hoặc log phía máy chủ (ví dụ pgaudit) mà ta không kiểm được; doc yêu cầu đóng tab sau khi chép.
+- SCRAM chỉ thử trên PG16 cục bộ với `127.0.0.1`; đăng nhập qua session pooler Supabase chưa xác nhận.
+- 02p và 03e chỉ thử bằng superuser cục bộ (02/03 đã thử bằng chủ không-superuser).
+- Điều kiện `5f`/`5g` của 01e dùng ACL (grantee 0) còn 02 dùng `has_*_privilege` của role: tương đương khi role chỉ có quyền của PUBLIC, chỉ thử trên ca probe.

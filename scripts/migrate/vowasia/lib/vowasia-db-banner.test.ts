@@ -80,3 +80,10 @@ test("Amendment 1: Supabase session-pooler login vowasia_migrator.<20 x [a-z0-9]
     );
   }
 });
+
+test("G9 #4: a Supabase direct host db.<ref>.supabase.co is masked in the banner", () => {
+  const REF = "abcdefghijklmnopqrst";
+  const b = legacyBanner(`postgres://vowasia_migrator:${SECRET}@db.${REF}.supabase.co:5432/postgres`);
+  assert.equal(b.banner, "db.<ref>.supabase.co:5432/postgres");
+  assert.ok(!b.banner.includes(REF));
+});
