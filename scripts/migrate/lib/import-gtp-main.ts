@@ -53,7 +53,7 @@ import { fetchImageWithRetry } from "./media-fetch";
 import { normaliseKey } from "./normalise-path";
 import { assertOutDirSafe, writeFileSafe } from "./out-dir";
 import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId, type MediaMapEntry, type RunState, type SlugMapEntry } from "./run-dir";
-import { buildSlugPlan, planEventSlugs, type SlugPlanEntry } from "./slug-plan";
+import { buildSlugPlan, pinPriorSlugs, planEventSlugs, type SlugPlanEntry } from "./slug-plan";
 
 type Doc = Record<string, unknown>;
 type P = Awaited<ReturnType<typeof getPayload>>;
@@ -95,7 +95,11 @@ function newReport() {
     formatTagSkipped: 0,
     countriesUnmatched: {} as Record<string, number>,
     /** Amendment 3: bylines distributed over the 5-author pool (plan totals are over the COMPLETE planned set). */
-    authors: { planTotals: {} as Record<string, number>, planSpread: 0, pillarsUnderTwoAuthors: [] as string[], assignedThisRun: {} as Record<string, number> },
+    authors: {
+      planTotals: {} as Record<string, number>, planSpread: 0, pillarsUnderTwoAuthors: [] as string[], assignedThisRun: {} as Record<string, number>,
+      /** Amendment 5: import-marker rows already in Central; how many planned items kept their Central author; totals over (existing + new). */
+      existingInCentral: 0, fixedFromCentral: 0, actualTotals: {} as Record<string, number>, actualSpread: 0,
+    },
     readMinComputed: 0,
     publishedAtFellBack: 0,
     seoDropped: 0,
@@ -220,6 +224,32 @@ async function main(): Promise<number> {
   };
   console.log(`[import] preflight OK: tenant ${tenantSlug}, ${pillarId.size} pillars, ${subId.size} sub-sections, ${authorId.size} authors, ${countries.length} countries, ${tagId.size} tags`);
 
+  // ── Second run (Amendment 5): items an EARLIER run (another run dir in this out dir) created and
+  // that still exist in Central as import-marker rows. They keep their Central slug (so they are
+  // skipped, never re-created) and their real Central author (fixed in the author plan). Empty on a
+  // first run, which therefore plans exactly as before.
+  const markerDocs = await findAll(payload, "articles", { and: [{ tenant: { equals: tenantId } }, { origin: { equals: MARKER.origin } }, { engineSourceName: { equals: MARKER.engineSourceName } }] }, { draft: true, depth: 0 });
+  const markerById = new Map(markerDocs.map((d) => [String(d.id), d]));
+  const priorDoc = new Map<string, Doc>();
+  for (const r of allRunDirs(out)) {
+    if (path.resolve(r.dir) === path.resolve(run.dir)) continue;
+    for (const e of r.slugMap()) {
+      const d = e.articleId !== undefined ? markerById.get(String(e.articleId)) : undefined;
+      if (d) priorDoc.set(e.legacyId, d);
+    }
+  }
+  // A fresh run must not silently adopt rows an earlier run created (adopted rows would belong to THIS
+  // run's rollback): refuse when Central holds import rows that no run dir in --out has journaled.
+  const journaledAnywhere = new Set(allRunDirs(out).flatMap((r) => r.slugMap()).map((e) => String(e.articleId)));
+  const unjournaled = markerDocs.filter((d) => !journaledAnywhere.has(String(d.id))).length;
+  if (unjournaled && !resume && !run.hasJournal()) {
+    const msg = `import: Central already holds ${unjournaled} import rows that no run directory in --out has journaled; run a second migration with the SAME --out directory as the earlier run (its run dir must be present).`;
+    if (a.apply) throw new CliError(msg);
+    console.warn(`[import] WARNING ${msg}`);
+  }
+  const priorSlug = new Map([...priorDoc].map(([id, d]) => [id, String(d.slug)]));
+  const authorName = new Map([...authorId].map(([n, id]) => [String(id), n]));
+
   // ── Slug plan over the WHOLE population (before any filter) ──
   const planRows = await reader.slugPlanRows();
   let plan = run.readJson<SlugPlanEntry[] | null>("slug-plan.json", null);
@@ -234,7 +264,7 @@ async function main(): Promise<number> {
     const allEvents = [];
     for await (const p of reader.pages("events", "all", 500)) allEvents.push(...p.map(toLegacyEvent));
     const eventPlan = planEventSlugs(allEvents.map((e) => ({ id: e.id, title: e.title, dateStart: e.dateStart })), [...articlePlan.map((x) => x.slug), ...existingSlugs]);
-    plan = [...articlePlan, ...eventPlan];
+    plan = pinPriorSlugs([...articlePlan, ...eventPlan], priorSlug);
     if (a.apply) run.writeJson("slug-plan.json", plan);
   }
   const planById = new Map(plan.map((p) => [p.legacyId, p]));
@@ -276,7 +306,19 @@ async function main(): Promise<number> {
         pillarOf.set(legacyId, "events-awards");
       }
     }
-    const assign = assignAuthors(items, m.authors.distribute, m.authors.map);
+    // Existing items keep their REAL Central author; only new items are balanced (Amendment 5).
+    // An existing item credited to an author outside the staff list is left out: it is never created.
+    const fixed = new Map<string, string>();
+    const keep = items.filter((it) => {
+      const d = priorDoc.get(it.legacyId);
+      if (!d) return true;
+      const n = authorName.get(relId(d.author) ?? "");
+      if (n === undefined) return false;
+      fixed.set(it.legacyId, n);
+      return true;
+    });
+    items.splice(0, items.length, ...keep);
+    const assign = assignAuthors(items, m.authors.distribute, m.authors.map, fixed);
     authorPlan = items.map((it) => ({ legacyId: it.legacyId, author: assign.get(it.legacyId) as string, pillar: pillarOf.get(it.legacyId) as string }));
     if (a.apply) run.writeJson("author-plan.json", authorPlan);
   }
@@ -286,6 +328,18 @@ async function main(): Promise<number> {
     report.authors.planTotals = t.totals;
     report.authors.planSpread = t.spread;
     report.authors.pillarsUnderTwoAuthors = pillarsUnderTwoAuthors(authorOf, new Map(authorPlan.map((e) => [e.legacyId, e.pillar])));
+    // Actual totals = every import-marker row already in Central (its real author) + the planned new items.
+    const actual = new Map<string, string>();
+    for (const d of markerDocs) {
+      const n = authorName.get(relId(d.author) ?? "");
+      if (n !== undefined) actual.set(`central:${String(d.id)}`, n);
+    }
+    for (const e of authorPlan) if (!priorDoc.has(e.legacyId)) actual.set(e.legacyId, e.author);
+    const at = authorTotals(actual, m.authors.distribute.pool);
+    report.authors.existingInCentral = markerDocs.length;
+    report.authors.fixedFromCentral = [...authorPlan].filter((e) => priorDoc.has(e.legacyId)).length;
+    report.authors.actualTotals = at.totals;
+    report.authors.actualSpread = at.spread;
     for (const n of authorOf.values()) if (!authorId.has(n)) throw new CliError(`import: author "${n}" is not in the Central author preflight (the importer never creates authors).`);
     console.log(`[import] authors (plan, ${authorOf.size} items): ${Object.entries(t.totals).map(([n, c]) => `${n} ${c}`).join(", ")}; spread ${t.spread}; pillars with < 2 authors: ${report.authors.pillarsUnderTwoAuthors.join(", ") || "none"}`);
   }
@@ -783,6 +837,8 @@ ${kv(r.mediaFailed)}
 ${kv(r.countriesUnmatched)}
 - authors (plan totals, spread ${r.authors.planSpread}):
 ${kv(r.authors.planTotals)}
+- authors actual totals over Central (${r.authors.existingInCentral} existing import rows, ${r.authors.fixedFromCentral} kept their Central author) + new items, spread ${r.authors.actualSpread}:
+${kv(r.authors.actualTotals)}
 - authors assigned in this run:
 ${kv(r.authors.assignedThisRun)}
 - pillars with fewer than 2 distinct authors: ${r.authors.pillarsUnderTwoAuthors.join(", ") || "none"}

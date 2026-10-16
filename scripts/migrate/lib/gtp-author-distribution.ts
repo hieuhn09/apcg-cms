@@ -18,6 +18,12 @@
  *
  * Callers compute the map ONCE per run from the COMPLETE planned set, never from
  * the rows still to import, so resumed runs and rollback + re-import agree.
+ *
+ * Second run (Amendment 5): items that already exist in Central from an earlier
+ * run are passed in `fixed` (legacyId -> their REAL Central author). They keep
+ * that author and count like kept bylines, so only the new items are balanced
+ * and the spread over (existing + new) stays <= 1 when the new items allow it.
+ * With an empty `fixed` the result is exactly the first-run result.
  */
 
 export interface DistributeConfig {
@@ -61,7 +67,12 @@ function targetsFor(pool: readonly string[], kept: Map<string, number>, free: nu
   return t;
 }
 
-export function assignAuthors(items: readonly AuthorItem[], cfg: DistributeConfig, bylineMap: Readonly<Record<string, string>> = {}): Map<string, string> {
+export function assignAuthors(
+  items: readonly AuthorItem[],
+  cfg: DistributeConfig,
+  bylineMap: Readonly<Record<string, string>> = {},
+  fixed: ReadonlyMap<string, string> = new Map(),
+): Map<string, string> {
   const pool = [...cfg.pool];
   if (!pool.length) throw new Error("authors.distribute: pool is empty.");
   const out = new Map<string, string>();
@@ -71,7 +82,7 @@ export function assignAuthors(items: readonly AuthorItem[], cfg: DistributeConfi
   const kept = new Map<string, number>();
   for (const it of sorted) {
     const b = (it.legacyByline ?? "").replace(/\s+/g, " ").trim();
-    const target = cfg.keepLegacy && b ? bylineMap[b] : undefined;
+    const target = fixed.get(it.legacyId) ?? (cfg.keepLegacy && b ? bylineMap[b] : undefined);
     if (target && pool.includes(target)) {
       out.set(it.legacyId, target);
       kept.set(target, (kept.get(target) ?? 0) + 1);
