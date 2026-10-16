@@ -2,8 +2,9 @@
  * READ-ONLY discovery of the legacy VowAsia source (phase A). Owner-run.
  *
  *   read -s LEGACY_VOWASIA_DB_URL; export LEGACY_VOWASIA_DB_URL
- *   npm run migrate:vowasia:discover -- --mapping-overlay <overlay outside the repo>
- *     [--site-id <id>] [--out <dir>] [--sample N] [--schema S]
+ *   npm run migrate:vowasia:discover -- --mapping-overlay ~/vowasia-private/overlay.json
+ *     [--out DIR] [--sample N] [--schema S]
+ * (the site id comes ONLY from source.siteFilter in that overlay, never a flag)
  *
  * Reads ONLY the tables named by the source config (hypothesis + overlay),
  * always through the closed builders of ./lib/vowasia-sql, always site-filtered:
@@ -23,8 +24,8 @@
 import path from "node:path";
 import { intFlag } from "./lib/args";
 import { CliError, DEFAULT_OUT, DEFAULT_SOURCE, parseDiscover, resolvePath, runMain } from "./lib/vowasia-cli";
-import { loadSourceConfig, withSiteFilter, type ColumnRole } from "./lib/vowasia-config";
-import { legacyBanner, legacySsl } from "./lib/vowasia-db-banner";
+import { loadSourceConfig, type ColumnRole } from "./lib/vowasia-config";
+import { legacyBanner, legacySsl, sslLabel } from "./lib/vowasia-db-banner";
 import { LEGACY_URL_ENV } from "./lib/vowasia-constants";
 import { assertOutDirSafe, writeFileSafe, writeJsonSafe } from "./lib/out-dir";
 import { LiveVowasiaReader, assertVowasiaSite } from "./lib/vowasia-reader";
@@ -55,8 +56,7 @@ function cell(v: unknown): string {
 async function main(): Promise<number> {
   const a = parseDiscover(process.argv.slice(2));
   const overlay = a.get("mapping-overlay");
-  let cfg = loadSourceConfig(DEFAULT_SOURCE, overlay ? resolvePath(overlay) : undefined);
-  cfg = withSiteFilter(cfg, a.get("site-id"));
+  const cfg = loadSourceConfig(DEFAULT_SOURCE, overlay ? resolvePath(overlay) : undefined);
   if (cfg.source.siteFilter === undefined) throw new CliError("discover: no site filter (set source.siteFilter in the overlay outside the repo); refusing.");
   const siteId = cfg.source.siteFilter;
   const schemaFlag = a.get("schema");
@@ -65,9 +65,10 @@ async function main(): Promise<number> {
   const out = assertOutDirSafe(resolvePath(a.get("out") ?? DEFAULT_OUT));
   const url = process.env[LEGACY_URL_ENV];
   const b = legacyBanner(url);
-  console.log(`[discover] legacy source: ${b.banner} (read-only, site-filtered)`);
+  const ssl = legacySsl(process.env, b.local);
+  console.log(`[discover] legacy source: ${b.banner} (${sslLabel(ssl)}; read-only, site-filtered)`);
   const reg = createSqlRegistry(cfg, schemaFlag);
-  const reader = LiveVowasiaReader.open(url as string, legacySsl(process.env, b.local), reg, siteId);
+  const reader = LiveVowasiaReader.open(url as string, ssl, reg, siteId);
   const lines: string[] = [];
   const P = (s = "") => lines.push(s);
   const report = path.join(out, "legacy-schema-report.md");

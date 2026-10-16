@@ -100,3 +100,10 @@ test("optional media block: shape validated, accepted in phase A", () => {
 test("an unreadable config file gives the fixed message", () => {
   assert.throws(() => loadSourceConfig(path.join(HERE, "does-not-exist.json"), undefined), { message: CONFIG_MESSAGES.unreadable });
 });
+
+test("m6: expectedSiteSlug is locked to the vowasia slug (an overlay cannot point discover at another site)", () => {
+  for (const slug of ["gtp", "vowasia-2", "other"]) {
+    assert.throws(() => parseSourceConfig(withSource({ expectedSiteSlug: slug })), { message: CONFIG_MESSAGES.badSlug });
+  }
+  assert.equal(parseSourceConfig(withSource({ expectedSiteSlug: "vowasia" })).source.expectedSiteSlug, "vowasia");
+});

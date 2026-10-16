@@ -51,6 +51,7 @@ test("redact covers URL-like text, the env URL and an URL-encoded password", () 
 test("discover flags: the URL is never a flag; defaults point at the repo", () => {
   assert.throws(() => parseDiscover(["--url", "x"]), CliError);
   assert.throws(() => parseDiscover(["--apply"]), CliError);
+  assert.throws(() => parseDiscover(["--site-id", "1"]), CliError, "m9: the site id comes only from the overlay outside the repo");
   const a = parseDiscover(["--mapping-overlay", "/tmp/o.json", "--sample", "3"]);
   assert.equal(a.get("mapping-overlay"), "/tmp/o.json");
   assert.ok(existsSync(DEFAULT_SOURCE));

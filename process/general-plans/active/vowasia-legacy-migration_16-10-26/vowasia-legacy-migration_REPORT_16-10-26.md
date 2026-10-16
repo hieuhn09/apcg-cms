@@ -135,3 +135,45 @@ G1-G5 như bảng trên; G6 chạy một mình (không song song `npm ci` hay re
 
 ### Dependency Changes
 Không thêm dependency (dùng `zod`, `pg`, `pg-connection-string` có sẵn).
+
+## Vòng sửa EVL 1 (16-10-26, sửa phát hiện review G9)
+
+TL;DR: sửa đủ 7 MAJOR, 9 MINOR, 3 NIT (n3 chỉ ghi chú). Tự kiểm của `02` nay chạy TRONG giao dịch và tự huỷ khi sai; `02b` có hàng rào trong SQL; doc viết lại cho zsh. Probe thêm biến thể chủ bảng KHÔNG-superuser và tìm ra một lỗi thật ở `03` (đã sửa). Mọi cổng xanh. Số file vẫn 27, `package.json` vẫn +3 dòng.
+
+| Mục | Kết quả | Bằng chứng |
+|---|---|---|
+| M1 `#` trong khối lệnh | Đã sửa: không còn `#` trong khối lệnh nào; giải thích ra văn xuôi | awk quét mọi khung `bash`: 0 dòng có `#`, `<`, `>` |
+| M2 `<...>` trong lệnh | Đã sửa: dùng `~/vowasia-private/02-filled.sql`, `~/vowasia-private/overlay.json` | như trên |
+| M3 nhiều lệnh một khối | Đã sửa: mỗi khung đúng 1 lệnh; `read -s` khung riêng; mục "Cách dán lệnh" có câu dặn chờ con trỏ / dấu nhắc `%`, `clear` trước khi chụp | awk: mọi khung 1 dòng |
+| M4 mật khẩu base64 | Đã sửa: `openssl rand -hex 24 \| pbcopy`; O4 nói cách ghép vào URL; không bảo chủ dán/chụp bí mật | doc O3.5, O4 |
+| M5(a) tự kiểm sau COMMIT | Đã sửa: khối `DO` + `RAISE EXCEPTION 'SELF-CHECK STOP: ...'` trước COMMIT; header: tự kiểm trước, mật khẩu sau | probe C: id sai / slug sai -> psql lỗi, 0 role, 0 schema, bảng gốc không đổi |
+| M5(b) dọn dùng biến đã unset | Đã sửa: bước Dọn nhập lại URL bằng `read -s` trong terminal mới; đồng bộ `03` (CLEANUP OK) | doc "Dọn" |
+| M6 `02b`/`03` không có hàng rào | Đã sửa: `02b` NOTICE trạng thái RLS TRƯỚC khi bật, chặn FORCE RLS, chặn khi có role đăng nhập khác (không chủ, không BYPASSRLS) dùng được bảng; `03` NOTICE trạng thái RLS/policy còn lại + SELECT `CLEANUP OK`; cả hai nói rõ tắt RLS là bước tay | probe G: có `probe_inspector` -> `RLS GUARD STOP`, RLS không đổi, không role; bỏ nó -> áp được |
+| M7 quyền PUBLIC | Đã sửa: `01` liệt kê relacl 2 bảng, ACL schema `public`, CONNECT/TEMP của PUBLIC, hàm SECURITY DEFINER PUBLIC gọi được; `02` chặn hàm SECURITY DEFINER trong `public`, NOTICE số ở schema khác + CONNECT/TEMP; doc nói thật giới hạn | G10a xanh (01 vẫn chỉ đọc) |
+| m1 slug placeholder + CREATE | Đã sửa: `__VOWASIA_SITE_SLUG__`; chặn CREATE trên database và mọi schema; thêm chặn membership | probe C |
+| m2 `01` theo relacl + toàn bộ role | Đã sửa: mục 5 (mọi role `rolcanlogin`), 5b giữ phiên đang mở để đối chiếu | probe C0 |
+| m3 `01` chỉ-đọc + probe | Đã sửa: `SET default_transaction_read_only = on;` đầu file; probe chạy `01` bằng role chỉ có `pg_read_all_data` | probe C0 |
+| m4 VALID UNTIL | Đã sửa: 14 ngày (EXECUTE format trong `DO`); doc: xoá role / đổi mật khẩu nếu B bị hoãn | probe C kiểm `rolvaliduntil` |
+| m5 in DB/user + xác nhận cuối | Đã sửa: `SELECT current_database(), current_user` đầu `02`/`03`; `03` kết bằng `CLEANUP OK`; doc dặn xác nhận đúng DB CŨ | probe C/E/F |
+| m6 khoá slug + credential | Đã sửa: `expectedSiteSlug` chỉ nhận `vowasia` (`config: ... must be vowasia`); banner chỉ nhận user `vowasia_migrator` (`LEGACY_ROLE`) | đỏ trước (test m6 fail) -> xanh; probe D2 (đăng nhập `postgres` bị từ chối, exit 2) |
+| m7 SSL hiệu lực | Đã sửa: từ chối tham số `ssl*` trong URL (kiểm trước khi parse); banner in chế độ SSL thực tế (`sslLabel`) | đỏ trước -> xanh; probe D2 (`?sslmode=disable` exit 2) |
+| m8 `fileURLToPath` | Đã sửa: `moduleDir()` trong `out-dir.ts` (repoRoot dùng nó; `vowasia-cli.ts` đi qua repoRoot) | test đường dẫn có dấu cách + ký tự có dấu: đỏ trước -> xanh |
+| m9 `--site-id` | Đã sửa: bỏ khỏi `DISCOVER_FLAGS` và header; id site chỉ từ overlay | test cli; probe D2 (`--site-id` exit 2; site khác thử qua overlay riêng) |
+| n1 chmod | Đã sửa: chỉ chmod thư mục do công cụ tạo; thư mục có sẵn giữ mode | test n1: đỏ trước -> xanh |
+| n2 "3 chỗ" | Đã sửa (header 02 viết lại, "thay HẾT mọi lần xuất hiện") | — |
+| n3 PG tạm trust | Không sửa (theo chỉ dẫn): probe dùng `--auth=trust` chỉ trên 127.0.0.1, thư mục tạm, cổng 54336; ghi chú trong doc | — |
+| n4 dọn biến | Đã sửa: O5 bước 5 `unset LEGACY_VOWASIA_DB_URL` + đóng terminal; cuối "Dọn" `unset LEGACY_ADMIN_URL` | doc |
+
+Phát hiện mới khi probe (đã sửa): chủ bảng KHÔNG-superuser có CREATEROLE (kiểu Supabase/Neon) chạy `03` bị lỗi `permission denied to drop objects` ở `DROP OWNED BY` (PG 16 đòi quyền của role). `03` nay bắt `insufficient_privilege`, tự `GRANT vowasia_migrator TO current_user` (người tạo có ADMIN OPTION) rồi chạy lại; quyền này mất theo `DROP ROLE`. Probe F xanh (02 SELF-CHECK OK, role chỉ đọc view, 03 CLEANUP OK) bằng `site_owner`.
+
+Số liệu cổng (sau sửa, tuần tự, G6 một mình):
+- G1 `test:migrate-vowasia` 53/53 pass (trước 47).
+- G2 `lint:migrate` 0 lỗi, 1 cảnh báo có sẵn (`seed-gtp-legacy-fixture.ts`).
+- G3 `tsc --noEmit` exit 0.
+- G4 `test:migrate-gtp` 69/69. G5 `test:single-home` 267/267.
+- G6 probe PG16 (cổng 54336): ALL PROBE CHECKS PASSED, gồm A/B, C0, C, D, D2, E, F, G; dọn sạch.
+- G7 chỉ `package.json`; G7b 3 dòng đều có `vowasia`; G7c rỗng; G8 exit 0.
+- G10 (a, b, c) rỗng. G13 file backlog có.
+- Số file: 26 dưới `scripts/migrate/vowasia/` + 1 backlog = 27; `package.json` +3 dòng (không đổi). Không file mới.
+
+Known-Gap còn lại (ghi, không chặn): probe không có zsh nên quy tắc dán lệnh chỉ kiểm bằng quét tĩnh; PG ≤ 14 (PUBLIC có CREATE trên `public`) chỉ được phủ bằng logic tự kiểm, không chạy thật; hàm SECURITY DEFINER ở schema ngoài `public` chỉ được báo (NOTICE), không chặn.

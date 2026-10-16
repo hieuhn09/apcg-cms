@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertOutDirSafe, FsyncJournal, OUT_DIR_MESSAGES, repoRoot, writeFileSafe } from "./out-dir";
+import { assertOutDirSafe, FsyncJournal, moduleDir, OUT_DIR_MESSAGES, repoRoot, writeFileSafe } from "./out-dir";
 
 // Built from this file's own location, NOT from repoRoot(): scripts/migrate/vowasia/lib -> 4 levels up.
 const HERE = path.dirname(new URL(import.meta.url).pathname);
@@ -55,6 +55,28 @@ test("an outside-repo dir is accepted, mode 700", () => {
   const outside = mkdtempSync(path.join(os.tmpdir(), "vowasia-out-"));
   try {
     assert.equal(statSync(assertOutDirSafe(outside)).mode & 0o777, 0o700);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("m8: moduleDir decodes file URLs (a repo path with spaces or non-ASCII characters works)", () => {
+  assert.equal(moduleDir("file:///tmp/a%20b/c%C3%A9/x.ts"), "/tmp/a b/cé");
+  assert.equal(moduleDir(new URL("file:///Users/Chu%20Du%20An/apcg-cms/scripts/x.ts").href), "/Users/Chu Du An/apcg-cms/scripts");
+});
+
+test("n1: an existing directory keeps its own mode; only a directory the tool creates is set to 700", () => {
+  const outside = mkdtempSync(path.join(os.tmpdir(), "vowasia-out-"));
+  try {
+    const existing = path.join(outside, "mine");
+    mkdirSync(existing);
+    chmodSync(existing, 0o755);
+    assertOutDirSafe(existing);
+    assert.equal(statSync(existing).mode & 0o777, 0o755, "pre-existing dir must not be chmod-ed");
+    const created = path.join(outside, "new", "deep");
+    assertOutDirSafe(created);
+    assert.equal(statSync(created).mode & 0o777, 0o700);
+    assert.equal(statSync(path.join(outside, "new")).mode & 0o777, 0o700);
   } finally {
     rmSync(outside, { recursive: true, force: true });
   }

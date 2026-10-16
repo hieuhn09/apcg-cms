@@ -5,13 +5,15 @@
  * never a query; every message is fixed and never echoes the URL.
  */
 import { parse } from "pg-connection-string";
-import { LEGACY_CA_ENV, LEGACY_SSL_ENV, LEGACY_URL_ENV } from "./vowasia-constants";
+import { LEGACY_CA_ENV, LEGACY_ROLE, LEGACY_SSL_ENV, LEGACY_URL_ENV } from "./vowasia-constants";
 
 export const BANNER_MESSAGES = {
   missing: `legacy-db: ${LEGACY_URL_ENV} is not set; refusing.`,
   unparseable: `legacy-db: ${LEGACY_URL_ENV} could not be parsed; refusing.`,
   badHost: `legacy-db: ${LEGACY_URL_ENV} has an empty, socket-path or multi-host host; refusing.`,
   badSsl: `legacy-db: ${LEGACY_SSL_ENV} must be disable, require or verify-full; refusing.`,
+  badUser: `legacy-db: ${LEGACY_URL_ENV} must log in as vowasia_migrator (the read-only role); refusing.`,
+  sslInUrl: `legacy-db: ${LEGACY_URL_ENV} must not carry ssl settings (sslmode, ssl, sslrootcert...); use ${LEGACY_SSL_ENV}; refusing.`,
 } as const;
 
 export class DbBannerError extends Error {
@@ -20,12 +22,15 @@ export class DbBannerError extends Error {
 
 export function legacyBanner(url: string | undefined): { banner: string; host: string; local: boolean } {
   if (typeof url !== "string" || url.trim() === "") throw new DbBannerError(BANNER_MESSAGES.missing);
+  const q = url.indexOf("?");
+  if (q >= 0 && /(^|&)ssl[a-z]*=/i.test(url.slice(q + 1))) throw new DbBannerError(BANNER_MESSAGES.sslInUrl);
   let c: ReturnType<typeof parse>;
   try {
     c = parse(url);
   } catch {
     throw new DbBannerError(BANNER_MESSAGES.unparseable);
   }
+  if (c.user !== LEGACY_ROLE) throw new DbBannerError(BANNER_MESSAGES.badUser);
   const host = typeof c.host === "string" ? c.host : "";
   if (host === "" || host.startsWith("/") || host.includes(",")) throw new DbBannerError(BANNER_MESSAGES.badHost);
   const port = typeof c.port === "string" && c.port !== "" ? c.port : "5432";
@@ -41,4 +46,11 @@ export function legacySsl(env: Record<string, string | undefined>, local: boolea
   if (mode === "verify-full") return { rejectUnauthorized: true, ...(env[LEGACY_CA_ENV] ? { ca: env[LEGACY_CA_ENV] } : {}) };
   if (mode === "require") return { rejectUnauthorized: false };
   throw new DbBannerError(BANNER_MESSAGES.badSsl);
+}
+
+/** Human-readable effective SSL mode for the banner (never the CA content). */
+export function sslLabel(ssl: false | { rejectUnauthorized: boolean; ca?: string }): string {
+  if (ssl === false) return "ssl off";
+  if (!ssl.rejectUnauthorized) return "ssl require (certificate not verified)";
+  return ssl.ca ? "ssl verify-full (custom CA)" : "ssl verify-full";
 }

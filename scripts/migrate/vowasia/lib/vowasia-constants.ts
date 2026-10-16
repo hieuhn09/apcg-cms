@@ -14,6 +14,8 @@ export const MARKER_SOURCE_NAME = "legacy:vowasia";
 export const MARKER_ORIGIN = "import";
 /** Slug the legacy `sites` row must carry; any other site is refused. */
 export const LEGACY_SITE_SLUG = "vowasia";
+/** The only legacy role the tools accept (created by sql/02, removed by sql/03). */
+export const LEGACY_ROLE = "vowasia_migrator";
 /** Central database name (re-exported from the existing guard, not redefined). */
 export { CENTRAL_DB_NAME, CENTRAL_DB_PATHNAME };
 /** Environment variable that holds the legacy connection URL (never argv). */

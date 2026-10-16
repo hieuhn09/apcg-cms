@@ -6,11 +6,13 @@
  * `assertOutDirSafe(dir)` before it writes anything:
  *   - a directory INSIDE the repo must be git-ignored (`git check-ignore -q`);
  *   - a directory OUTSIDE the repo is allowed;
- *   - directories are created mode 700, sensitive files are written mode 600.
+ *   - directories it creates are mode 700 (an existing one keeps its mode),
+ *     sensitive files are written mode 600.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const OUT_DIR_MESSAGES = {
   notIgnored: "out-dir guard: the output directory is inside the repository but NOT git-ignored; refusing to write.",
@@ -29,7 +31,12 @@ export class OutDirError extends Error {
  * in-repo directory outside scripts/.)
  */
 export function repoRoot(): string {
-  return path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..", "..", "..");
+  return path.resolve(moduleDir(import.meta.url), "..", "..", "..", "..");
+}
+
+/** Directory of a module from its `import.meta.url` (decodes %20 and non-ASCII, unlike URL.pathname). */
+export function moduleDir(url: string): string {
+  return path.dirname(fileURLToPath(url));
 }
 
 function isInside(child: string, parent: string): boolean {
@@ -50,8 +57,17 @@ export function assertOutDirSafe(dir: string, root: string = repoRoot()): string
       throw new OutDirError(OUT_DIR_MESSAGES.noGit);
     }
   }
-  mkdirSync(abs, { recursive: true, mode: 0o700 });
-  chmodSync(abs, 0o700);
+  // Only directories created here are forced to 700 (umask may widen mkdir's mode);
+  // an existing directory chosen by the owner keeps its own mode.
+  if (!existsSync(abs)) {
+    const first = mkdirSync(abs, { recursive: true, mode: 0o700 });
+    if (first !== undefined) {
+      for (let d = abs; isInside(d, first); d = path.dirname(d)) {
+        chmodSync(d, 0o700);
+        if (d === first) break;
+      }
+    }
+  }
   return abs;
 }
 

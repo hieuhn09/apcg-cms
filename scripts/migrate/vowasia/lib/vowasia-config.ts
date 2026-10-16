@@ -26,6 +26,7 @@ export const CONFIG_MESSAGES = {
   badSiteId: "config: source.siteFilter does not match source.siteIdKind; refusing.",
   noSites: "config: source.tables must contain a sites table; refusing.",
   noArticles: "config: source.tables must contain an articles table; refusing.",
+  badSlug: "config: source.expectedSiteSlug must be vowasia; refusing.",
 } as const;
 
 export class ConfigError extends Error {
@@ -84,7 +85,7 @@ export const sourceConfigSchema = z
         schema: ident,
         siteIdKind: z.enum(SITE_ID_KINDS),
         siteFilter: z.string().min(1).max(64).optional(),
-        expectedSiteSlug: z.string().regex(/^[a-z0-9-]{1,64}$/).default(LEGACY_SITE_SLUG),
+        expectedSiteSlug: z.string().refine((v) => v === LEGACY_SITE_SLUG, { message: CONFIG_MESSAGES.badSlug }).default(LEGACY_SITE_SLUG),
         tables: z
           .object({ articles: tableSchema, sites: sitesTableSchema })
           .catchall(tableSchema)

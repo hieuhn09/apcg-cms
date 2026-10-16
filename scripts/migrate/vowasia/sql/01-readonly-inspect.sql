@@ -8,6 +8,10 @@
 -- Khi báo lại: CHỈ nêu tên bảng LIÊN QUAN tới VowAsia (bài viết, site).
 -- KHÔNG báo tên các bảng nhạy cảm khác của DB dùng chung.
 -- Không file nào ở đây sửa dữ liệu, quyền hay cấu trúc.
+-- Dòng SET dưới đây chỉ đổi mặc định của PHIÊN psql này (không ghi gì vào DB):
+-- mọi câu sau chạy trong giao dịch chỉ-đọc, nên nếu lỡ có câu ghi, nó bị từ chối.
+
+SET default_transaction_read_only = on;
 
 -- 1. Đang nối vào đâu, bằng ai, role có vượt RLS không.
 SELECT current_database() AS database_name, current_user AS current_role_name, version() AS server_version;
@@ -32,14 +36,45 @@ SELECT table_name, data_type FROM information_schema.columns
 WHERE table_schema = 'public' AND column_name = 'site_id'
 ORDER BY table_name;
 
--- 5. Các role ĐANG kết nối vào database này (site cũ): có vượt RLS không.
+-- 5. Quyền trên hai bảng gốc (relacl) và TOÀN BỘ role đăng nhập được của cụm
+--    (không chỉ phiên đang mở: site cũ có thể dùng role chưa kết nối lúc này).
 --    Dùng cho quyết định phương án role (HS5): phương án 1 (RLS) chỉ an toàn khi
---    MỌI role của site cũ vượt RLS hoặc là chủ bảng.
+--    MỌI role đọc/ghi được hai bảng là chủ bảng hoặc vượt RLS.
+--    Sửa tên bảng nếu khác (articles, sites).
+SELECT c.relname AS table_name, pg_get_userbyid(c.relowner) AS table_owner, coalesce(c.relacl::text, '(default: owner only)') AS acl
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relname IN ('articles', 'sites')
+ORDER BY 1;
+
+SELECT r.rolname, r.rolsuper, r.rolbypassrls,
+       has_table_privilege(r.oid, 'public.articles', 'SELECT') AS reads_articles,
+       has_table_privilege(r.oid, 'public.sites', 'SELECT') AS reads_sites
+FROM pg_roles r
+WHERE r.rolcanlogin
+ORDER BY 1;
+
+-- 5b. Các role ĐANG kết nối vào database này (để đối chiếu với 5).
 SELECT DISTINCT a.usename AS connected_role, r.rolbypassrls, r.rolsuper
 FROM pg_stat_activity a
 JOIN pg_roles r ON r.rolname = a.usename
 WHERE a.datname = current_database()
 ORDER BY 1;
+
+-- 5c. Quyền của PUBLIC mà MỌI role (kể cả role mới) thừa hưởng.
+--     ACL của schema public, và quyền trên database này:
+SELECT n.nspname, coalesce(n.nspacl::text, '(default)') AS schema_acl
+FROM pg_namespace n WHERE n.nspname = 'public';
+SELECT has_database_privilege('public', current_database(), 'CONNECT') AS public_connect,
+       has_database_privilege('public', current_database(), 'TEMP') AS public_temp;
+
+-- 5d. Hàm SECURITY DEFINER (chạy bằng quyền chủ hàm) mà PUBLIC thực thi được,
+--     ngoài pg_catalog / information_schema. Role mới cũng gọi được các hàm này.
+SELECT n.nspname AS schema_name, p.proname AS function_name, pg_get_userbyid(p.proowner) AS function_owner
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE p.prosecdef
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND has_function_privilege('public', p.oid, 'EXECUTE')
+ORDER BY 1, 2;
 
 -- 6. Mẫu tìm dòng site của VowAsia. Sửa tên bảng/cột nếu khác (bảng sites, cột slug).
 --    Chỉ chia sẻ id site qua kênh phù hợp nếu thấy an toàn.

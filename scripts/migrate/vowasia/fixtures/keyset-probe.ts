@@ -6,7 +6,10 @@
  *      microseconds at page boundaries, identical created-at with different ids,
  *      NULL created-at, 1970; page sizes 1/2/3; another site interleaved.
  *   B. the same with integer (bigint) site ids.
- *   C. owner SQL: 02 refuses when not filled; 02 filled applies, self-check OK;
+ *   C0. 01 runs to the end as a login role WITHOUT write rights (pg_read_all_data).
+ *   C. owner SQL: 02 refuses when not filled; a wrong site id / slug makes the
+ *      in-transaction self-check STOP and roll back (nothing created); 02 filled
+ *      applies, self-check OK, role has VALID UNTIL;
  *      the role reads only the vowasia rows through the views, cannot read the
  *      base tables, cannot write or create anything; RLS/policies/grants of the
  *      base tables unchanged.
@@ -14,7 +17,11 @@
  *      query-log only site-scoped SELECTs, no site id / password / body / title
  *      in stdout, stderr or any output file, out dir 700, files 600; discover
  *      on the other site is refused (exit 2).
- *   E. 03 removes schema + role and is re-runnable; 02b fill + apply on a
+ *   E. 03 removes schema + role, prints CLEANUP OK and is re-runnable.
+ *   F. 02 + 03 run by a NON-superuser table owner that has CREATEROLE (the
+ *      Supabase/Neon-style owner), on a copy database.
+ *   G. 02b: the in-SQL guard refuses (nothing changed) while another login role
+ *      can read the shared tables; once it is gone, the filled 02b applies on a
  *      throwaway database (syntax only), then removed.
  * The generated role password is never printed and never written to sql/*.
  */
@@ -59,8 +66,8 @@ async function withClient<T>(db: string, fn: (c: pg.Client) => Promise<T>, user 
   }
 }
 
-function psql(db: string, file: string): { status: number; out: string; err: string } {
-  const r = spawnSync("psql", ["-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", String(PORT), "-U", "postgres", "-d", db, "-f", file], { encoding: "utf8" });
+function psql(db: string, file: string, user = "postgres"): { status: number; out: string; err: string } {
+  const r = spawnSync("psql", ["-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", String(PORT), "-U", user, "-d", db, "-f", file], { encoding: "utf8" });
   return { status: r.status ?? -1, out: r.stdout.trim(), err: r.stderr.trim() };
 }
 
@@ -122,9 +129,15 @@ async function baseState(db: string): Promise<string> {
   return withClient(db, async (c) => JSON.stringify([(await c.query(BASE_STATE_SQL)).rows, (await c.query("SELECT * FROM pg_policies ORDER BY policyname")).rows]));
 }
 
-function fill(template: string, site: string): string {
-  return template.split("__VOWASIA_SITE_ID__").join(site).split("__ARTICLE_COLUMNS__").join(ARTICLE_COLUMNS);
+function fill(template: string, site: string, slug = "vowasia"): string {
+  return template.split("__VOWASIA_SITE_ID__").join(site).split("__VOWASIA_SITE_SLUG__").join(slug).split("__ARTICLE_COLUMNS__").join(ARTICLE_COLUMNS);
 }
+
+function lastLine(s: string): string {
+  return s.split("\n").filter((l) => l.trim() !== "").pop() ?? "";
+}
+
+const countSql = "SELECT (SELECT count(*) FROM pg_roles WHERE rolname = 'vowasia_migrator')::int + (SELECT count(*) FROM pg_namespace WHERE nspname = 'vowasia_ro')::int AS n";
 
 async function expectPgError(code: string, fn: () => Promise<unknown>, what: string): Promise<void> {
   try {
@@ -152,19 +165,44 @@ async function main(): Promise<void> {
   const b = await seed("probe_int", "bigint");
   await keysetCheck("probe_int", "integer", b.siteV, b.expected);
 
+  // C0: 01 as a login role that can read but not write.
+  await withClient("postgres", async (c) => {
+    await c.query("CREATE ROLE probe_inspector LOGIN");
+    await c.query("GRANT pg_read_all_data TO probe_inspector");
+  });
+  const inspect = psql("probe_uuid", path.join(SQL_DIR, "01-readonly-inspect.sql"), "probe_inspector");
+  assert.equal(inspect.status, 0, `01 as a read-only role failed: ${inspect.err}`);
+  assert.match(inspect.out, /vowasia/);
+  log("C0 01: runs to the end as a login role without write rights");
+
   // C: owner SQL 02.
   const before = await baseState("probe_uuid");
   const tpl02 = readFileSync(path.join(SQL_DIR, "02-create-readonly-role-views.sql.template"), "utf8");
   assert.ok(!/password\s+'/i.test(tpl02));
   const raw = psql("probe_uuid", path.join(SQL_DIR, "02-create-readonly-role-views.sql.template"));
   assert.notEqual(raw.status, 0, "unfilled 02 must fail");
-  assert.match(raw.err, /placeholder __VOWASIA_SITE_ID__ not filled/);
+  assert.match(raw.err, /placeholder __VOWASIA_SITE_ID__ \/ __VOWASIA_SITE_SLUG__ not filled/);
   assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT count(*)::int AS n FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].n), 0);
+  for (const [site, slug, why] of [
+    ["00000000-0000-0000-0000-0000000000ff", "vowasia", /SELF-CHECK STOP: view sites does not return exactly 1 row/],
+    [u.siteO, "vowasia", /SELF-CHECK STOP: the site row slug is not the expected slug/],
+  ] as const) {
+    const bad = path.join(DIR, "02-bad.sql");
+    writeFileSync(bad, fill(tpl02, site, slug), { mode: 0o600 });
+    const r = psql("probe_uuid", bad);
+    assert.notEqual(r.status, 0, "a failing self-check must stop psql");
+    assert.match(r.err, why);
+    assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "self-check STOP must roll back role and schema");
+  }
+  assert.equal(await baseState("probe_uuid"), before, "base tables unchanged by a rolled-back 02");
+  log("C 02: wrong site id / wrong slug -> SELF-CHECK STOP inside the transaction, nothing created");
   const filled = path.join(DIR, "02-filled.sql");
   writeFileSync(filled, fill(tpl02, u.siteV), { mode: 0o600 });
   const applied = psql("probe_uuid", filled);
   assert.equal(applied.status, 0, `02 apply failed: ${applied.err}`);
-  assert.equal(applied.out, "SELF-CHECK OK", "02 self-check");
+  assert.equal(lastLine(applied.out), "SELF-CHECK OK", "02 self-check");
+  assert.match(applied.out, /^probe_uuid\|postgres$/m, "02 prints database and user first");
+  assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT (rolvaliduntil > now() AND rolvaliduntil < now() + interval '15 days') AS ok FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].ok), true, "role has VALID UNTIL ~14 days");
   await withClient("postgres", (c) => c.query(`ALTER ROLE vowasia_migrator PASSWORD ${c.escapeLiteral(PASSWORD)}`));
   assert.equal(await baseState("probe_uuid"), before, "base tables RLS/policies/grants unchanged by 02");
   log("C 02: unfilled template refused; filled template applied; self-check OK; base tables unchanged");
@@ -234,33 +272,81 @@ async function main(): Promise<void> {
   }
   log(`D discover via role: exit 0, ${qlog.length} logged statements all site-scoped SELECT; outputs carry no site id, password, body or title; modes 700/600`);
 
-  // D2: discover on the other site is refused (exit 2): through the views it is missing, on the base tables its slug is not vowasia.
-  const other = runDiscover(["--mapping-overlay", OVERLAY, "--out", path.join(DIR, "out2"), "--site-id", u.siteO], env);
+  // D2: refusals (exit 2): the other site through the views is missing; a non-vowasia_migrator
+  // credential, SSL inside the URL and the removed --site-id flag are refused; no site filter refused.
+  const otherOverlay = path.join(DIR, "overlay-other.json");
+  writeFileSync(otherOverlay, JSON.stringify(mergeOverlay(JSON.parse(readFileSync(OVERLAY, "utf8")), { source: { siteFilter: u.siteO } })), { mode: 0o600 });
+  const other = runDiscover(["--mapping-overlay", otherOverlay, "--out", path.join(DIR, "out2")], env);
   assert.equal(other.status, 2, "other site through the views must be refused");
   assert.match(other.err, /site row for the site filter was not found/);
-  const admin = runDiscover(["--mapping-overlay", OVERLAY, "--out", path.join(DIR, "out3"), "--schema", "public", "--site-id", u.siteO], { LEGACY_VOWASIA_DB_URL: url("probe_uuid"), LEGACY_VOWASIA_DB_SSL: "disable" });
-  assert.equal(admin.status, 2, "a non-vowasia site must be refused");
-  assert.match(admin.err, /expected vowasia slug/);
+  const admin = runDiscover(["--mapping-overlay", OVERLAY, "--out", path.join(DIR, "out3"), "--schema", "public"], { LEGACY_VOWASIA_DB_URL: url("probe_uuid"), LEGACY_VOWASIA_DB_SSL: "disable" });
+  assert.equal(admin.status, 2, "a credential other than vowasia_migrator must be refused");
+  assert.match(admin.err, /must log in as vowasia_migrator/);
+  const sslUrl = runDiscover(["--mapping-overlay", OVERLAY, "--out", path.join(DIR, "out5")], { LEGACY_VOWASIA_DB_URL: `${env.LEGACY_VOWASIA_DB_URL}?sslmode=disable` });
+  assert.equal(sslUrl.status, 2);
+  assert.match(sslUrl.err, /must not carry ssl settings/);
+  assert.equal(runDiscover(["--mapping-overlay", OVERLAY, "--site-id", u.siteO], env).status, 2, "--site-id is not a flag");
   const noOverlay = runDiscover(["--out", path.join(DIR, "out4")], env);
   assert.equal(noOverlay.status, 2, "no site filter must be refused");
-  log("D2 discover refuses the other site (views: missing; base tables: wrong slug) and a missing site filter (exit 2)");
+  for (const o of [other, admin, sslUrl, noOverlay]) assert.ok(!(o.out + o.err).includes(PASSWORD) && !(o.out + o.err).includes(u.siteO));
+  log("D2 discover refuses the other site, a non-vowasia_migrator credential, ssl in the URL, --site-id and a missing site filter (exit 2)");
 
   // E: 03 removal (twice), then 02b syntax on a throwaway database.
   const drop = psql("probe_uuid", path.join(SQL_DIR, "03-drop-role-and-views.sql"));
   assert.equal(drop.status, 0, `03 failed: ${drop.err}`);
-  assert.equal(psql("probe_uuid", path.join(SQL_DIR, "03-drop-role-and-views.sql")).status, 0, "03 re-run");
+  assert.equal(lastLine(drop.out), "CLEANUP OK");
+  const again = psql("probe_uuid", path.join(SQL_DIR, "03-drop-role-and-views.sql"));
+  assert.equal(again.status, 0, "03 re-run");
+  assert.equal(lastLine(again.out), "CLEANUP OK");
   await withClient("probe_uuid", async (c) => {
     assert.equal((await c.query("SELECT count(*)::int AS n FROM pg_namespace WHERE nspname = 'vowasia_ro'")).rows[0].n, 0);
     assert.equal((await c.query("SELECT count(*)::int AS n FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].n, 0);
   });
   assert.equal(await baseState("probe_uuid"), before, "base tables unchanged after 03");
-  log("E 03: schema and role gone, re-run is clean, base tables unchanged");
+  log("E 03: schema and role gone, CLEANUP OK, re-run is clean, base tables unchanged");
+
+  // F: non-superuser owner with CREATEROLE (Supabase/Neon-style) runs 02 and 03.
+  await withClient("postgres", async (c) => {
+    await c.query("CREATE DATABASE probe_nsu TEMPLATE probe_uuid");
+    await c.query("CREATE ROLE site_owner LOGIN NOSUPERUSER CREATEROLE");
+    await c.query("GRANT CREATE ON DATABASE probe_nsu TO site_owner");
+  });
+  await withClient("probe_nsu", async (c) => {
+    for (const t of ["articles", "sites"]) await c.query(`ALTER TABLE public.${t} OWNER TO site_owner`);
+  });
+  const filledN = path.join(DIR, "02-nsu.sql");
+  writeFileSync(filledN, fill(tpl02, u.siteV), { mode: 0o600 });
+  const nsu = psql("probe_nsu", filledN, "site_owner");
+  assert.equal(nsu.status, 0, `02 as non-superuser owner failed: ${nsu.err}`);
+  assert.equal(lastLine(nsu.out), "SELF-CHECK OK");
+  await withClient("postgres", (c) => c.query(`ALTER ROLE vowasia_migrator PASSWORD ${c.escapeLiteral(PASSWORD)}`));
+  await withClient("probe_nsu", async (c) => {
+    assert.deepEqual((await c.query("SELECT slug FROM vowasia_ro.sites")).rows.map((r) => r.slug), ["vowasia"]);
+    await expectPgError("42501", () => c.query("SELECT 1 FROM public.articles LIMIT 1"), "nsu: read base table");
+  }, "vowasia_migrator", PASSWORD);
+  const nsuDrop = psql("probe_nsu", path.join(SQL_DIR, "03-drop-role-and-views.sql"), "site_owner");
+  assert.equal(nsuDrop.status, 0, `03 as non-superuser owner failed: ${nsuDrop.err}`);
+  assert.equal(lastLine(nsuDrop.out), "CLEANUP OK");
+  await withClient("postgres", async (c) => {
+    await c.query("DROP DATABASE probe_nsu");
+    await c.query("DROP ROLE site_owner");
+  });
+  log("F 02/03 by a non-superuser CREATEROLE owner: SELF-CHECK OK, role reads only the view, CLEANUP OK");
 
   const tpl02b = readFileSync(path.join(SQL_DIR, "02b-alternative-rls.sql.template"), "utf8");
   assert.notEqual(psql("probe_int", path.join(SQL_DIR, "02b-alternative-rls.sql.template")).status, 0, "unfilled 02b must fail");
   await withClient("postgres", (c) => c.query("CREATE DATABASE probe_rls TEMPLATE probe_int"));
   const filledB = path.join(DIR, "02b-filled.sql");
   writeFileSync(filledB, fill(tpl02b, b.siteV), { mode: 0o600 });
+  const blocked = psql("probe_rls", filledB);
+  assert.notEqual(blocked.status, 0, "02b must refuse while another login role can read the tables");
+  assert.match(blocked.err, /RLS GUARD STOP: another login role/);
+  assert.match(blocked.err, /BEFORE: public\.articles rls_enabled=f/);
+  await withClient("probe_rls", async (c) => {
+    assert.equal((await c.query("SELECT count(*)::int AS n FROM pg_class WHERE relname IN ('articles', 'sites') AND relrowsecurity")).rows[0].n, 0, "guard: RLS untouched");
+  });
+  assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT count(*)::int AS n FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].n), 0, "guard: no role");
+  await withClient("postgres", (c) => c.query("DROP ROLE probe_inspector"));
   const rb = psql("probe_rls", filledB);
   assert.equal(rb.status, 0, `02b apply failed: ${rb.err}`);
   await withClient("probe_rls", async (c) => {
@@ -272,7 +358,7 @@ async function main(): Promise<void> {
     await c.query("DROP DATABASE probe_rls");
     await c.query("DROP ROLE vowasia_migrator");
   });
-  log("E 02b: refuses unfilled; filled version applies on a throwaway database (syntax only), then removed");
+  log("G 02b: refuses unfilled; RLS guard stops while another login role can read (nothing changed); filled version applies on a throwaway database (syntax only), then removed");
   log("ALL PROBE CHECKS PASSED");
 }
 

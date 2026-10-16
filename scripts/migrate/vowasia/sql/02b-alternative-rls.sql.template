@@ -9,10 +9,15 @@
 -- hoặc có BYPASSRLS, và bảng chưa bật FORCE RLS. Nếu không chắc: dùng file 02.
 --
 -- Điền: __VOWASIA_SITE_ID__ (id site VowAsia), __ARTICLE_COLUMNS__ (cột tường
--- minh, không cột cá nhân). Chạy: psql -v ON_ERROR_STOP=1 -f <bản đã điền>.
+-- minh, không cột cá nhân). Chạy file đã điền bằng psql với -v ON_ERROR_STOP=1.
 -- Mật khẩu đặt bằng \password vowasia_migrator, KHÔNG ghi vào file.
 --
--- Gỡ (đúng thứ tự, đưa về trạng thái ban đầu):
+-- HÀNG RÀO TRONG SQL: trước khi bật RLS, khối DO dưới đây in (NOTICE) trạng thái
+-- RLS hiện tại của hai bảng (GHI LẠI, cần khi gỡ), và DỪNG cả giao dịch (không đổi
+-- gì) nếu có role đăng nhập nào khác (không phải chủ bảng, không superuser, không
+-- BYPASSRLS) đang có quyền trên hai bảng: role đó sẽ thấy 0 dòng khi RLS bật.
+--
+-- Gỡ (đúng thứ tự, đưa về trạng thái ban đầu; 03 KHÔNG tự tắt RLS, đây là bước TAY):
 --   DROP POLICY vowasia_migrator_articles ON public.articles;
 --   DROP POLICY vowasia_migrator_sites ON public.sites;
 --   Chỉ nếu trước đó RLS đang TẮT: ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY;
@@ -26,6 +31,29 @@ BEGIN
   IF '__VOWASIA_SITE_ID__' LIKE '\_\_VOWASIA%' THEN
     RAISE EXCEPTION 'vowasia: placeholder __VOWASIA_SITE_ID__ not filled; nothing was changed.';
   END IF;
+END $$;
+
+DO $$
+DECLARE
+  t text;
+  r record;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['public.articles', 'public.sites'] LOOP
+    SELECT c.relrowsecurity, c.relforcerowsecurity INTO r FROM pg_class c WHERE c.oid = t::regclass;
+    RAISE NOTICE 'vowasia: BEFORE: % rls_enabled=% rls_forced=% (write this down)', t, r.relrowsecurity, r.relforcerowsecurity;
+    IF r.relforcerowsecurity THEN
+      RAISE EXCEPTION 'RLS GUARD STOP: % has FORCE RLS; option 1 is not safe; nothing was changed', t;
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM pg_roles x
+      WHERE x.rolcanlogin AND NOT x.rolsuper AND NOT x.rolbypassrls
+        AND x.oid <> (SELECT relowner FROM pg_class WHERE oid = t::regclass)
+        AND x.rolname <> 'vowasia_migrator'
+        AND (has_table_privilege(x.oid, t::regclass, 'SELECT, INSERT, UPDATE, DELETE')
+             OR has_any_column_privilege(x.oid, t::regclass, 'SELECT, INSERT, UPDATE'))) THEN
+      RAISE EXCEPTION 'RLS GUARD STOP: another login role (not owner, not BYPASSRLS) can use %; enabling RLS would hide its rows; nothing was changed. Use option 2 (file 02).', t;
+    END IF;
+  END LOOP;
 END $$;
 
 CREATE ROLE vowasia_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 3;

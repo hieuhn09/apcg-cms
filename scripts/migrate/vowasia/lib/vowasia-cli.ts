@@ -17,8 +17,8 @@ import { VowasiaSqlError } from "./vowasia-sql";
 
 export { CliError };
 
-/** Flags of `migrate:vowasia:discover`. The URL is never a flag. */
-export const DISCOVER_FLAGS: FlagSpec = { "mapping-overlay": "value", "site-id": "value", out: "value", sample: "value", schema: "value" };
+/** Flags of `migrate:vowasia:discover`. The URL and the site id are never flags (site id: overlay only). */
+export const DISCOVER_FLAGS: FlagSpec = { "mapping-overlay": "value", out: "value", sample: "value", schema: "value" };
 
 export const DEFAULT_SOURCE = path.join(repoRoot(), "scripts", "migrate", "vowasia", "legacy-source.vowasia.json");
 export const DEFAULT_OUT = path.join(repoRoot(), "scripts", "migrate", "out", "vowasia");
