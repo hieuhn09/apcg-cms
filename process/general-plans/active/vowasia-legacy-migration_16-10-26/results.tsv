@@ -1,0 +1,3 @@
+iteration	timestamp	gaps_found	fail_count	concern_count	applied	saturation_status	loop_status	notes
+0	2026-10-16T06:34:50Z	8	0	8	0	ACTIVE	baseline	VALIDATE pass 1 (outer-pvl): Gate CONDITIONAL. 0 FAIL, 8 CONCERN (S1-S8). S1 = run-id/--resume conflicts with owner rule 4. Baselines measured: test:migrate-gtp 69/69, test:single-home 267/267, lint:migrate 0 err, typecheck 0.
+1	2026-10-16T06:36:45Z	8	0	8	8	ACTIVE	CONTINUE	SUPPLEMENT_APPLIED 8 gaps (S1-S8). Re-validate from V1 next.
