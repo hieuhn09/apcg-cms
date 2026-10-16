@@ -8,7 +8,7 @@ feature: vowasia-launch (lưu ở general-plans; repo này không có process/fe
 # VowAsia legacy migration — PLAN (COMPLEX, 2 giai đoạn)
 
 Date: 16-10-26
-Status: PLANNED (chưa EXECUTE). PVL cycle 1 (S1-S8) và cycle 2 (T1-T7) đã áp dụng; validate pass 3 (16-10-26) đã ghi lại `## Validate Contract` (Gate PASS cho EXECUTE Giai đoạn A; AC-A9 là Known-Gap có tên giữ cổng A -> B ở CONDITIONAL).
+Status: PLANNED (chưa EXECUTE). PVL cycle 1 (S1-S8) và cycle 2 (T1-T7) đã áp dụng; validate pass 3 (16-10-26) đã ghi lại `## Validate Contract` (Gate PASS cho EXECUTE Giai đoạn A; AC-A9 là Known-Gap có tên giữ cổng A -> B ở CONDITIONAL). Amendment 1 (16-10-26, chủ duyệt phạm vi: đường SQL Editor của Supabase, +3 file SQL, xem `## Owner-approved scope amendment 1 (16-10-26)`) KHÔNG được validate lại bằng vòng PVL đầy đủ; phủ bằng EVL độc lập + G9.
 
 ## TL;DR
 
@@ -256,7 +256,11 @@ Mọi file Giai đoạn A là MỚI. Đường dẫn gốc `scripts/migrate/vowa
 | `sql/02-create-readonly-role-views.sql.template` | mới | owner-run, phương án 2 |
 | `sql/02b-alternative-rls.sql.template` | mới | owner-run, phương án 1 (không khuyên) |
 | `sql/03-drop-role-and-views.sql` | mới | owner-run, dọn |
-| `VOWASIA-LEGACY.md` | mới | hướng dẫn chủ |
+| `sql/01e-inspect-single-result.sql` | mới (amendment 1) | owner-run trong SQL Editor; một câu SELECT duy nhất (UNION ALL) |
+| `sql/02p-set-password.sql.template` | mới (amendment 1) | owner-run; một câu `ALTER ROLE ... PASSWORD`, chỉ sau khi 02 báo SELF-CHECK OK |
+| `sql/03e-drop-in-editor.sql.template` | mới (amendment 1) | owner-run trong SQL Editor; bản của 03, placeholder `__LEGACY_DB_NAME__` |
+| `VOWASIA-LEGACY.md` | mới | hướng dẫn chủ (amendment 1: thêm phần "Cách B: SQL Editor của Supabase") |
+| `lib/vowasia-db-banner.ts` (+ test) | đã liệt kê ở trên; amendment 1 mở rộng | chấp nhận tên đăng nhập pooler `vowasia_migrator.<mã-project>` |
 | `package.json` | **sửa (chỉ thêm 3 dòng)** | `migrate:vowasia:discover`, `test:migrate-vowasia`, `probe:migrate-vowasia` |
 | `process/general-plans/active/vowasia-legacy-migration_16-10-26/` | mới | plan này + report EXECUTE/EVL |
 | `process/general-plans/backlog/vowasia-real-db-validation_NOTE_16-10-26.md` | mới | stub Known-Gap AC-A9 |
@@ -273,7 +277,7 @@ Chỉ `package.json` là file hiện có được phép đổi. Docs/context (`d
 
 ## Blast Radius (mục 10)
 
-- Chạm: 26 file mới dưới `scripts/migrate/vowasia/` (đếm từ bảng Touchpoints: 21 file gốc + `args.ts`, `out-dir.ts` + 3 test `args.test.ts`, `out-dir.test.ts`, `vowasia-cli.test.ts` = 26), 1 file backlog (`process/general-plans/backlog/`), thư mục plan, và 3 dòng `package.json`. Tổng file mới ngoài thư mục task: 27.
+- Chạm: 29 file mới dưới `scripts/migrate/vowasia/` (đếm từ bảng Touchpoints: 21 file gốc + `args.ts`, `out-dir.ts` + 3 test `args.test.ts`, `out-dir.test.ts`, `vowasia-cli.test.ts` = 26; amendment 1 thêm 3 file SQL `01e`, `02p`, `03e` = 29), 1 file backlog (`process/general-plans/backlog/`), thư mục plan, và 3 dòng `package.json` (không đổi). Tổng file mới ngoài thư mục task: 30.
 - Không chạm: bất kỳ file nào khác trong `scripts/migrate/` (GTP), `scripts/lib/`, `scripts/audit/`, `src/`, `docs/`, `process/context/`.
 - Runtime: không có (script chạy tay). Không DB Central bị ghi trong A. DB cũ chỉ bị ĐỌC (và DDL role/view do chủ chạy).
 - Bằng chứng GTP không đổi: G7 (`git diff --stat` ngoài danh sách phải rỗng), G8 (`git diff --quiet fe88bc4 -- scripts/migrate ':(exclude)scripts/migrate/vowasia'` thoát 0), kèm G4/G5/G2/G3 xanh (G11 tuỳ chọn, O-Q5).
@@ -321,6 +325,7 @@ Ca biên đã đưa vào test (từ ba hạng mục nguy hiểm nhất: SQL guar
 | G7c `! git ls-files --others --exclude-standard \| grep -vE "^(scripts/migrate/vowasia/\|process/general-plans/)"` (rỗng = pass; bắt file MỚI chưa theo dõi mà G7/G8 mù, vì EVL chạy trước commit) | Fully-Automated | AC-A1 |
 | G9 Review an toàn các file `sql/*` + `vowasia-sql.ts` bởi `vc-code-reviewer` (sonnet) | Agent-Probe | AC-A8 |
 | G10 (dạng `! grep`, rỗng = pass; ranh giới từ, bỏ dòng comment `--`): `! grep -vE "^\s*--" sql/01-*.sql \| grep -nEiw "(insert\|update\|delete\|truncate\|drop\|alter\|grant\|create)"` (ranh giới từ `-w` để `created_at`/`updated_at` không khớp nhầm); `! grep -nEi "password[[:space:]]+'" sql/*`; `! grep -rnEi "postgres(ql)?://" scripts/migrate/vowasia --exclude="*.test.ts" --exclude="keyset-probe.*"` (`postgres://` hợp lệ trong test/probe vì là URL cục bộ giả; `VOWASIA-LEGACY.md` và comment trong `lib/*.ts` KHÔNG được chứa scheme này) | Fully-Automated | AC-A8, HS4 |
+| G10a (amendment 1) `! grep -vE "^\s*--" sql/01e-*.sql \| grep -nEiw "(insert\|update\|delete\|truncate\|drop\|alter\|grant\|create)"` + khẳng định `01e` chỉ có MỘT câu (một dấu `;` kết thúc) và không meta-lệnh psql (`\`); probe G6 mở rộng chạy 01e trong giao dịch chỉ đọc bằng role không-superuser, trả đúng MỘT result set | Fully-Automated + Hybrid (PG16 cục bộ) | AC-A8 (mở rộng: 01e/02p/03e), AC-A6 (banner pooler) |
 | G11 `npm run rehearse:gtp` — KHÔNG bắt buộc sau A (O-Q5; G8 + G7c đã chứng minh 0 byte GTP đổi); chạy MỘT lần, một mình, nền, timeout 7200000, `REHEARSE_MODE=native` ở EVL cuối chương trình sau B, hoặc sớm hơn nếu chủ yêu cầu | Hybrid | AC-A10 (ràng buộc 9) |
 | G12 Discover trên DB cũ THẬT (chủ chạy O5) | **Known-Gap** (backlog stub; cổng A -> B CONDITIONAL) | AC-A9 |
 | G13 `test -f process/general-plans/backlog/vowasia-real-db-validation_NOTE_16-10-26.md` (stub Known-Gap AC-A9 tồn tại; không có thì AC-A9 không hợp lệ) | Fully-Automated | AC-A9 (residual có tên) |
@@ -378,9 +383,34 @@ Rồi `git push -u origin claude/vowasia-launch`, mở PR NHÁP (thân PR kết 
 
 A không phụ thuộc gì ngoài `main` @ `fe88bc4` (đã gồm `central-db-name-guard`, `vowasia-taxonomy`, tooling GTP) và PG16 native cho G6/G11. B phụ thuộc: A xanh, discover thật, quyết định C3/C8/C10/host ảnh, A1 xác nhận, tenant + taxonomy + token đọc + (nếu cần) engine record do chủ tạo tay.
 
+## Owner-approved scope amendment 1 (16-10-26)
+
+Status: phạm vi do chủ duyệt, ghi tại đây. `## Validate Contract` bên dưới và dòng `Gate: PASS` GIỮ NGUYÊN cho phạm vi ban đầu. Amendment này KHÔNG được validate lại bằng vòng PVL đầy đủ; nó được phủ bằng EVL độc lập (`vc-tester`) + G9 (`vc-code-reviewer`), theo tiền lệ GTP (`gtp-mapping-final_14-10-26`). Giới hạn nói thẳng: không có "mắt thứ hai" ở giai đoạn plan cho 3 file SQL mới và thay đổi banner; rủi ro đó chuyển sang EVL + G9.
+
+**Lý do.** Chủ KHÔNG có mật khẩu `postgres` của project Supabase cũ (tên project `globaltravelpost`, chứa DB cũ của cả VowAsia lẫn GTP cùng schema `public`) và cấm đặt lại mật khẩu (có thể làm site cũ ngừng chạy). Đường `psql` bằng role quản trị vì vậy không đi được. Orchestrator khuyến nghị "Cách 1: chạy bằng SQL Editor của Supabase"; chủ trả lời "ok". Ghi trung thực: "ok" là câu trả lời ngắn cho phương án được khuyến nghị, là xác nhận chung, không duyệt từng chi tiết.
+
+**Thêm vào phạm vi (đều dưới `scripts/migrate/vowasia/`):**
+
+1. `sql/01e-inspect-single-result.sql`: bản của `01` để dán vào ô SQL Editor. Editor chỉ hiện kết quả CÂU CUỐI, nên toàn bộ nội dung `01` (mục 1 tới 6b, gồm 5a, 5c, 5d, 5e, 6b) gộp thành MỘT câu SELECT duy nhất, trả các hàng `(section, item, detail)` bằng `UNION ALL`. Chỉ SELECT, không meta-lệnh psql, không tên bảng gắn cứng ngoài `articles`/`sites`; không in dữ liệu bài, mật khẩu, nội dung cá nhân.
+2. `sql/02p-set-password.sql.template`: một câu `ALTER ROLE vowasia_migrator PASSWORD '__PASSWORD__'`, chỉ chạy SAU khi `02` báo SELF-CHECK OK. Tài liệu dặn xoá snippet khỏi lịch sử/saved queries của Editor sau khi chạy.
+3. `sql/03e-drop-in-editor.sql.template`: bản của `03` cho Editor: không biến psql (`:'legacy_db'`), dùng placeholder `__LEGACY_DB_NAME__` điền tay như `02`. Giữ NGUYÊN ngữ nghĩa an toàn: một giao dịch, guard tên DB, thứ tự `DROP SCHEMA` -> `DROP OWNED BY` -> `DROP ROLE`, xử lý chủ không-superuser.
+4. `VOWASIA-LEGACY.md`: thêm phần "Cách B: SQL Editor của Supabase" từng bước: chép nội dung file vào clipboard bằng `cat đường_dẫn | pbcopy` (không dùng `<` làm chuyển hướng), dán vào Editor, thay placeholder bằng Cmd+H trong Editor, đọc kết quả, báo lại. Vẫn theo quy tắc zsh của chủ (mỗi khối một lệnh, không `#`, không `<...>`, bí mật qua `read -s`, không gửi bí mật vào chat). Ghi rõ hạn chế: chưa thử trong Editor thật, chỉ thử trên PG16 cục bộ; Editor có thể lưu snippet chứa mật khẩu.
+5. Công cụ discover: `lib/vowasia-db-banner.ts` (và chỗ liên quan) chấp nhận tên đăng nhập dạng pooler của Supabase `vowasia_migrator.<mã-project>`, khớp CHẶT bằng regex (mã project 20 ký tự chữ thường/số); KHÔNG in phần mã project hay user ra màn hình; kèm test. Tài liệu hướng dẫn dùng host pooler chế độ session (cổng 5432), KHÔNG dùng transaction pooler 6543.
+6. Test/probe: mở rộng test và `fixtures/keyset-probe.*` (không thêm file test mới nếu tránh được): 01e trả đúng MỘT result set và chạy được trong giao dịch chỉ đọc bằng role không-superuser; 03e chạy qua `-f` không cần biến psql, và các ca STOP (sai tên DB, placeholder chưa điền) không xoá gì; banner nhận/từ chối đúng tên pooler (nhận `vowasia_migrator.<20 ký tự hợp lệ>`, từ chối mã sai độ dài/chữ hoa/ký tự lạ và các user khác). G10a mở rộng cho 01e (không từ khoá ghi). Quét tĩnh doc mới theo quy tắc zsh.
+
+**Hệ quả số liệu.** File mới dưới `scripts/migrate/vowasia/`: 26 -> 29 (+3 SQL); tổng file mới kể cả backlog: 27 -> 30. `package.json` vẫn +3 dòng. Không file GTP đổi. Các cổng G1-G13 giữ nguyên, thêm G10a cho `01e` (xem Verification Evidence). Checklist: các bước 5, 9, 10, 11 của Giai đoạn A được mở rộng theo 6 mục trên (không thêm bước đánh số mới); EXECUTE làm chúng trong các bước đó.
+
+**Hard stops giữ nguyên (HS1-HS7).** Đặc biệt HS1: DDL trên DB cũ vẫn chỉ qua file SQL mẫu do chủ chạy (nay gồm `02p` và `03e` chạy trong Editor).
+
+**Rủi ro đã biết thêm:**
+
+- (a) Supabase SQL Editor có thể chạy `BEGIN..COMMIT` và hiển thị kết quả khác dự kiến. Known-Gap: chủ là người thử thật đầu tiên; thiết kế fail-closed (các ca STOP không xoá/đổi gì).
+- (b) Project Supabase có nhiều hàm `SECURITY DEFINER` ngoài `public` mà PUBLIC có thể gọi, nên `02` có thể STOP vì guard. Chủ chỉ nới có chủ đích bằng `allow_definer_outside_public`, sau khi xem kết quả `01e` mục 5d.
+- (c) Mật khẩu role xuất hiện trong văn bản truy vấn trong trình duyệt/lịch sử Editor (`02p`); giảm thiểu: dặn xoá snippet, mật khẩu sinh bằng `openssl rand -base64 24`, chỉ đặt sau SELF-CHECK OK, xoá cả role khi xong (`03e`).
+
 ## Resume and Execution Handoff (mục 17)
 
-1. Plan này; trạng thái: PVL cycle 1 (S1-S8) và cycle 2 (T1-T7) đã áp dụng; validate pass 3 (16-10-26) ghi Validate Contract `Gate: PASS` cho Giai đoạn A (`Accepted by` CHƯA có chủ; AC-A9 Known-Gap có tên). Chưa EXECUTE.
+1. Plan này; trạng thái: PVL cycle 1 (S1-S8) và cycle 2 (T1-T7) đã áp dụng; validate pass 3 (16-10-26) ghi Validate Contract `Gate: PASS` cho Giai đoạn A (`Accepted by` CHƯA có chủ; AC-A9 Known-Gap có tên). Amendment 1 (SQL Editor, +3 SQL, banner pooler) đã ghi, chưa validate lại bằng PVL (phủ bằng EVL + G9). Chưa EXECUTE.
 2. Pha kế: VALIDATE (xem khuyến nghị bên dưới), sau đó chủ nói "ENTER EXECUTE MODE" cho **Giai đoạn A** (khuyến nghị duy nhất).
 3. EXECUTE phải nhận đúng một đường dẫn plan: `process/general-plans/active/vowasia-legacy-migration_16-10-26/vowasia-legacy-migration_PLAN_16-10-26.md`.
 4. Ngữ cảnh cần đọc: `process/context/all-context.md`, `tests/all-tests.md`, `scripts/migrate/GTP-LEGACY.md`, `scripts/lib/vowasia-taxonomy.ts`, `scripts/lib/central-db-name-guard.ts`, và các file GTP được dùng làm mô hình (đọc, không sửa).
