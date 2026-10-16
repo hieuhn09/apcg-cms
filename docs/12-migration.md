@@ -171,4 +171,15 @@ second pass, redirects, parity, rollback, exports, rehearsal). The tools are
 inert until the Phase 5 cutover: every legacy read is a closed, site-filtered
 builder on an allow-listed table; imports are dry runs unless `--apply`; a
 non-local Central needs `--confirm-host`; provisional owner decisions are fatal
-outside the local rehearsal. Rehearse locally with `npm run rehearse:gtp`.
+outside the local rehearsal. All mapping owner decisions were resolved on
+14-10-26 (apex origin, articles at `/article/{slug}`, final static paths); the
+old `/studio` and `/visa-tracker` sections are dropped on the new site (Amendment 4): they are in
+`urls.gonePaths` and old links answer 410 Gone, which only takes effect if gtp-web ships the
+generated redirect map at cutover. Rehearse locally with `npm run rehearse:gtp`.
+
+Bylines (Amendment 3, 14-10-26): legacy bylines are not kept. Every imported
+article and industry-calendar listing is credited to one of the 5 web authors
+(Daniel Cheong, Priya Nair, Marcus Tan, Natalie Ong, Yuki Hamada), split evenly
+(counts differ by at most 1), grouped by country + quarter, never by pillar.
+Nothing is credited to "GTP Newsroom"; that Central author row stays unused and
+can be deleted by the owner later. Details: `scripts/migrate/GTP-LEGACY.md`.

@@ -37,8 +37,8 @@ function sectionTarget(pillar: string, sub?: string): string {
   return sub ? `/${pillar}/${sub}` : `/${pillar}`;
 }
 
-export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping, "urls" | "archivedAs">, kr: KnownRoutes): RedirectBuild {
-  const out: RedirectBuild = { rules: [], counts: { identityDropped: 0, archived: 0, published: 0, sections: 0, static: 0, feeds: 0, draftsNoRule: 0, collisions: 0, normaliseUnconverged: 0 }, collisions: [], unconverged: [], errors: [] };
+export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping, "archivedAs"> & { urls: Omit<Mapping["urls"], "gonePaths"> & { gonePaths?: readonly string[] } }, kr: KnownRoutes): RedirectBuild {
+  const out: RedirectBuild = { rules: [], counts: { identityDropped: 0, archived: 0, published: 0, sections: 0, static: 0, gone: 0, feeds: 0, draftsNoRule: 0, collisions: 0, normaliseUnconverged: 0 }, collisions: [], unconverged: [], errors: [] };
   const byFrom = new Map<string, RedirectRule & { owner: string }>();
   const add = (rawFrom: string, to: string | null, status: 301 | 410, kind: RedirectRule["kind"], source: RedirectRule["source"], owner: string) => {
     const k = normalise(rawFrom);
@@ -93,6 +93,11 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
       add(p, to, 301, "static", "rule", `static:${p}`);
       out.counts.static = (out.counts.static ?? 0) + 1;
     }
+  }
+  // Amendment 4: sections dropped on the new site answer 410 Gone (no target page).
+  for (const p of m.urls.gonePaths ?? []) {
+    add(p, null, 410, "static", "rule", `gone:${p}`);
+    out.counts.gone = (out.counts.gone ?? 0) + 1;
   }
   const feedTarget = kr.static.find((s) => FEEDS.includes(s)) ?? "/news";
   for (const f of FEEDS) {

@@ -23,6 +23,7 @@ import { enText, isoOrNull, jaccard, plainTextForParity, sectionsToHtml, str } f
 import { blocks, nodeTypes } from "./lexical-body";
 import { normaliseKey } from "./normalise-path";
 import { writeFileSafe } from "./out-dir";
+import { applyRewrittenLinks } from "./verify-parity-links";
 import { RunDir, RunDirError, RUN_MESSAGES, checkRunId } from "./run-dir";
 import type { SlugPlanEntry } from "./slug-plan";
 
@@ -154,15 +155,7 @@ async function main(): Promise<number> {
       }
       const s = sectionsToHtml(r.body_sections);
       // Pass 2 (rewrite-links) legitimately replaced old-site URLs with /article/<slug>: apply the same mapping to the source text.
-      let srcText = s.text;
-      for (const u of e?.textLinks ?? []) {
-        try {
-          const to = oldToNew.get(normaliseKey(new URL(u).pathname) ?? "");
-          if (to && blocks(d.body).some((b) => b.text.includes(to))) srcText = srcText.split(u).join(to);
-        } catch {
-          /* keep */
-        }
-      }
+      const srcText = applyRewrittenLinks(s.text, blocks(d.body).map((b) => b.text).join("\n"), e?.textLinks ?? [], oldToNew);
       const a1 = plainTextForParity(srcText);
       const b1 = plainTextForParity(blocks(d.body).map((b) => b.text).join("\n"));
       const ratio = a1.length ? b1.length / a1.length : b1.length ? 9 : 1;

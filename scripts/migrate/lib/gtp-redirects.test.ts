@@ -51,3 +51,19 @@ test("C6/G35: chains, dangling targets and colliding old URLs are detected; cove
   assert.ok(validateGtpWebRedirectFiles({ "/a": { status: 404 } }, [], KR).some((e) => e.startsWith("bad value")));
   assert.ok(validateGtpWebRedirectFiles({}, Array.from({ length: 201 }, () => ({ source: "/a/:x", destination: "/b/:x", permanent: true })), KR).length > 0);
 });
+
+test("Amendment 4: urls.gonePaths yield one 410 rule each, {status:410} in the gtp-web map, no duplicates, hard checks unaffected", () => {
+  const b = buildRedirects([E("1", "a", "published", "/news/a", "news", "aviation")], { ...M, urls: { ...M.urls, gonePaths: ["/studio", "/visa-tracker", "/studio/"] } }, KR);
+  assert.deepEqual(b.errors, []);
+  const gone = b.rules.filter((r) => r.status === 410);
+  assert.deepEqual(gone.map((r) => [r.from, r.to, r.kind, r.source]).sort(), [["/studio", null, "static", "rule"], ["/visa-tracker", null, "static", "rule"]]);
+  assert.equal(b.counts.gone, 3);
+  assert.equal(b.collisions.length, 0);
+  const { map, rules } = gtpWebFiles(b);
+  assert.deepEqual(map["/studio"], { status: 410 });
+  assert.deepEqual(map["/visa-tracker"], { status: 410 });
+  assert.deepEqual(validateGtpWebRedirectFiles(map, rules, KR), []);
+  assert.equal(coverage(["https://www.globaltravelpost.com/studio", "https://www.globaltravelpost.com/visa-tracker"], b).matched, 2);
+  // Builds without gonePaths keep working (no 410 rules, counter 0).
+  assert.equal(buildRedirects([], M, KR).counts.gone, 0);
+});

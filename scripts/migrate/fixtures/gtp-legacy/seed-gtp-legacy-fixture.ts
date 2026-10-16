@@ -19,7 +19,7 @@ import { assertOutDirSafe, repoRoot } from "../../lib/out-dir";
 export const GTP_SITE = "00000000-0000-0000-0000-00000000f001";
 export const WTB_SITE = "00000000-0000-0000-0000-00000000f002";
 export const IMAGE_HOST = "images.fixture.invalid";
-export const OLD_ORIGIN = "https://www.globaltravelpost.com";
+export const OLD_ORIGIN = "https://globaltravelpost.com";
 
 const ADMIN_URL = process.env.LEGACY_FIXTURE_ADMIN_URL ?? "postgres://postgres:password@127.0.0.1:54327/gtp_legacy";
 const IMAGES_DIR = process.env.GTP_FIXTURE_IMAGES_DIR ?? path.join(repoRoot(), "scripts/migrate/out/fixture-images");
@@ -177,7 +177,7 @@ async function main() {
       expected.internalLinkFrom = id;
       expected.internalLinkTo = uuidFrom(51);
       const [t50sec] = tax[50] as [string, string];
-      sections.push({ heading: { en: "Related" }, body: { en: `Read more at ${OLD_ORIGIN}/${t50sec}/fixture-${WORDS[50 % WORDS.length]}-story-50 and ${OLD_ORIGIN}/news/deleted-story.` } });
+      sections.push({ heading: { en: "Related" }, body: { en: `Read more at ${OLD_ORIGIN}/article/fixture-${WORDS[50 % WORDS.length]}-story-50 and ${OLD_ORIGIN}/news/deleted-story.` } });
     }
     sections.push({ heading: { en: "Asian perspective" }, body: { en: `What this means for travellers in Asia (${i}).` } });
     const sourceUrl = i % 17 === 5 ? null : i === 20 || i === 21 || i === 22 ? "https://source.fixture.invalid/shared-story" : `https://source.fixture.invalid/story-${i}`;
