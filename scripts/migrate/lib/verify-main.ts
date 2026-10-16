@@ -6,7 +6,7 @@
  * Exit 0 = every check PASS; exit 2 = at least one FAIL (listed).
  *
  *   npm run migrate:gtp:verify -- --run-id <id> --mapping-overlay <overlay> [--mapping path] [--from-snapshot dir]
- *     [--public-base <url>] [--base <gtp-web url>] [--confirm-host=<host>] [--require-final] [--rehearsal] [--out dir]
+ *     [--public-base <url>] [--base <gtp-web url>] [--confirm-host=<host>] [--require-final] [--rehearsal] [--out dir] [--batch 500]
  *   (read token: GTP_READ_TOKEN env; --read-token accepted with a warning)
  */
 import "../../lib/env";
@@ -14,7 +14,7 @@ import path from "node:path";
 import { getPayload } from "payload";
 import config from "../../../payload.config";
 import { pFind } from "../../lib/payload-loose";
-import { CliError } from "./args";
+import { CliError, intFlag } from "./args";
 import { parseCommand, resolveMappingPath, resolveReadToken, resolveRequireFinal } from "./cli-spec";
 import { assertImportTenant, centralTarget, loadEffectiveMapping, openLegacy, outDir, runMain } from "./cli-common";
 import { expectedFromSource } from "./gtp-expected";
@@ -24,7 +24,7 @@ import { blocks, nodeTypes } from "./lexical-body";
 import { normaliseKey } from "./normalise-path";
 import { writeFileSafe } from "./out-dir";
 import { applyRewrittenLinks } from "./verify-parity-links";
-import { RunDir, RunDirError, RUN_MESSAGES, checkRunId } from "./run-dir";
+import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId } from "./run-dir";
 import type { SlugPlanEntry } from "./slug-plan";
 
 type Doc = Record<string, unknown>;
@@ -73,11 +73,13 @@ async function main(): Promise<number> {
   const add = (id: string, name: string, fails: string[], skip?: string) =>
     checks.push({ id, name, status: skip ? "SKIP" : fails.length ? "FAIL" : "PASS", detail: skip ? [skip] : fails.slice(0, 25) });
 
+  // Page size of the legacy read (default 500). The result must not depend on it (Amendment 5).
+  const batch = intFlag(a, "batch", 500) as number;
   const reader = await openLegacy(a, v, siteId);
   const src: Doc[] = [];
-  for await (const p of reader.pages("articles", ["id", "slug", "title", "status", "section", "subsection", "body_sections", "featured_image", "source_url", "published_at", "byline"], 500)) src.push(...p);
+  for await (const p of reader.pages("articles", ["id", "slug", "title", "status", "section", "subsection", "body_sections", "featured_image", "source_url", "published_at", "byline"], batch)) src.push(...p);
   const eventsSrc: Doc[] = [];
-  for await (const p of reader.pages("events", "all", 500)) eventsSrc.push(...p);
+  for await (const p of reader.pages("events", "all", batch)) eventsSrc.push(...p);
   await reader.close();
   const exp = expectedFromSource(src, m);
 
@@ -86,7 +88,8 @@ async function main(): Promise<number> {
   if (!tenant) throw new CliError(`verify: tenant ${tenantSlug} not found.`);
   const tenantId = tenant.id as number | string;
   const markerRows = await findAll(payload, "articles", { and: [{ tenant: { equals: tenantId } }, { origin: { equals: MARKER.origin } }, { engineSourceName: { equals: MARKER.engineSourceName } }] }, { draft: true, depth: 0 });
-  const eventIds = new Set(slugMap.filter((e) => e.kind === "event").map((e) => String(e.articleId)));
+  // Event listings created by ANY run in this out dir (a second run skips the events of the first; Amendment 5).
+  const eventIds = new Set([run, ...allRunDirs(outDir(a))].flatMap((r) => r.slugMap()).filter((e) => e.kind === "event").map((e) => String(e.articleId)));
   const art = markerRows.filter((d) => !eventIds.has(String(d.id)));
   const ev = markerRows.filter((d) => eventIds.has(String(d.id)));
   const pillars = new Map((await findAll(payload, "pillars", { tenant: { equals: tenantId } })).map((p) => [String(p.id), String(p.slug)]));
