@@ -18,6 +18,8 @@ import { assertLocalDb } from "../../../lib/local-db-guard";
 import { fetchImage } from "../../lib/media-fetch";
 import { validateGtpWebRedirectFiles, type KnownRoutes } from "../../lib/gtp-redirect-contract";
 import { stableFilename } from "../../lib/gtp-transform";
+import { LiveLegacyReader } from "../../lib/legacy-reader";
+import { EPOCH, LegacyReadOnlyDb, keysetPage } from "../../lib/legacy-sql";
 import { normaliseKey } from "../../lib/normalise-path";
 import { readNdjson, type SlugMapEntry } from "../../lib/run-dir";
 import { repoRoot, writeJsonSafe } from "../../lib/out-dir";
@@ -558,6 +560,104 @@ async function main(): Promise<number> {
     const re = tool(T("import-gtp-legacy.ts"), importArgs("reimport", ["--apply"]));
     check("G12 re-import after rollback succeeds", re.code === 0 && (await markerCount()) === importable + 12, await markerCount());
     check("final rollback", rollback("reimport", ["--apply"]).code === 0 && (await markerCount()) === 0);
+  }
+
+  console.log("\n== Amendment 5a: keyset paging is lossless on microsecond timestamps (legacy fixture DB)");
+  {
+    // A throw-away site whose articles carry microsecond created_at: groups sharing a millisecond and
+    // a few sharing the exact microsecond. Removed again at the end (the fixture keeps its meaning).
+    const A5_SITE = "00000000-0000-0000-0000-00000000f0a5";
+    const a5id = (i: number) => `a5a5a5a5-0000-4000-8000-${(i + 1).toString(16).padStart(12, "0")}`;
+    const stamps: string[] = [];
+    for (let i = 0; i < 20; i++) stamps.push(`2026-02-01 10:00:00.${String(i).padStart(3, "0")}${String((i * 137) % 1000).padStart(3, "0")}+00`);
+    for (let g = 0; g < 5; g++) for (let k = 0; k < 4; k++) stamps.push(`2026-02-01 11:00:00.${String(g).padStart(3, "0")}${String(k * 211 + 1).padStart(3, "0")}+00`);
+    for (let k = 0; k < 4; k++) stamps.push("2026-02-01 12:00:00.500654+00");
+    stamps.push("2026-02-01 13:00:00+00", null as unknown as string);
+    const c = new pg.Client({ connectionString: LEGACY_ADMIN });
+    await c.connect();
+    await c.query("INSERT INTO sites (id, slug, name, domain, config) VALUES ($1,'a5','[FIXTURE] A5 paging','a5.fixture.invalid','{}') ON CONFLICT (id) DO NOTHING", [A5_SITE]);
+    for (const [i, ts] of stamps.entries()) {
+      await c.query("INSERT INTO articles (id, site_id, slug, title, status, created_at) VALUES ($1,$2,$3,'{\"en\":\"[FIXTURE] A5\"}','published',$4::timestamptz)", [a5id(stamps.length - 1 - i), A5_SITE, `a5-${i}`, ts]);
+    }
+    const truth = (await q<{ id: string }>(LEGACY_ADMIN, "SELECT id::text FROM articles WHERE site_id = $1 ORDER BY coalesce(created_at, '1970-01-01T00:00:00Z'::timestamptz), id", [A5_SITE])).map((r) => r.id);
+    const r = await LiveLegacyReader.open(process.env.LEGACY_GTP_DB_URL as string, false, "public", A5_SITE, ["articles"]);
+    const sizes: Record<string, boolean> = {};
+    for (const size of [1, 2, 7, 25, 500]) {
+      const got: string[] = [];
+      for await (const page of r.pages("articles", ["id"], size)) got.push(...page.map((x) => String(x.id)));
+      sizes[size] = JSON.stringify(got) === JSON.stringify(truth);
+    }
+    // The pre-Amendment-5 cursor (millisecond ISO from the Date) on the same rows: must re-read rows.
+    const db = new LegacyReadOnlyDb(() => new pg.Client({ connectionString: process.env.LEGACY_GTP_DB_URL }) as never);
+    const old: string[] = [];
+    let cur: unknown[] | null = null;
+    for (let guard = 0; guard < 3 * truth.length; guard++) {
+      const rows = await db.query(keysetPage("public", "articles", ["id", "created_at"], A5_SITE, cur, 7, ["articles"]));
+      old.push(...rows.map((x) => String(x.id)));
+      if (rows.length < 7) break;
+      const last = rows[rows.length - 1] as Doc;
+      cur = [typeof last.created_at === "string" ? last.created_at : EPOCH, last.id];
+    }
+    await r.close();
+    await c.query("DELETE FROM articles WHERE site_id = $1", [A5_SITE]);
+    await c.query("DELETE FROM sites WHERE id = $1", [A5_SITE]);
+    await c.end();
+    check("A5 paged read equals one unpaged ORDER BY for page sizes 1, 2, 7, 25, 500 (no duplicate, no skip)", Object.values(sizes).every(Boolean), sizes);
+    check("A5 red proof: the old millisecond cursor re-reads rows on the same fixture", old.length > truth.length, { old: old.length, truth: truth.length });
+    facts.a5Paging = { rows: truth.length, oldCursorRows: old.length };
+  }
+
+  console.log("\n== Amendment 5b: second run (delta): new legacy articles only, existing untouched, authors balanced");
+  {
+    const d1 = tool(T("import-gtp-legacy.ts"), importArgs("delta1", ["--apply"]));
+    check("A5 delta: first run exits 0", d1.code === 0 && (await markerCount()) === importable + 12, { code: d1.code, marker: await markerCount() });
+    const centralSnap = async () => q<Doc>(CENTRAL, "SELECT a.id, a.slug, a.version, a.updated_at, a.author_id, a.workflow_status FROM articles a JOIN tenants t ON t.id = a.tenant_id WHERE t.slug = 'gtp' ORDER BY a.id");
+    const before = await centralSnap();
+    // Two NEW published legacy articles (same millisecond, different microseconds), cloned from an imported row.
+    const srcEntry = slugMap("delta1").find((e) => e.kind === "article" && e.status === "published" && e.pillar !== "press-room" && e.legacyId !== expected.internalLinkFrom) as SlugMapEntry;
+    const newIds = ["d5d5d5d5-0000-4000-8000-000000000001", "d5d5d5d5-0000-4000-8000-000000000002"];
+    const lc = new pg.Client({ connectionString: LEGACY_ADMIN });
+    await lc.connect();
+    for (const [i, nid] of newIds.entries()) {
+      await lc.query(
+        `INSERT INTO articles (id, site_id, slug, title, excerpt, body_sections, status, section, subsection, tags, format, read_minutes, source_url, byline, countries, published_at, created_at, updated_at)
+         SELECT $1, site_id, $2, jsonb_build_object('en', $3::text), excerpt, body_sections, 'published', section, subsection, tags, format, read_minutes, $4, byline, ARRAY['sg'], $5::timestamptz, $5::timestamptz, $5::timestamptz
+         FROM articles WHERE id = $6`,
+        [nid, `fixture-delta-story-${i + 1}`, `[FIXTURE] Delta story ${i + 1}`, `https://source.fixture.invalid/delta-${i + 1}`, `2026-10-16 03:04:05.12${i === 0 ? "3456" : "3789"}+00`, srcEntry.legacyId],
+      );
+    }
+    await lc.end();
+    const dry = tool(T("import-gtp-legacy.ts"), importArgs("delta2"));
+    const dr = report("delta2");
+    check("A5 delta: dry run plans exactly the 2 new articles and skips every existing item", dry.code === 0 && dr.planned === 2 && dr.skippedExisting === importable + 12 && dr.imported === 0, { code: dry.code, planned: dr.planned, skipped: dr.skippedExisting });
+    check("A5 delta: dry run wrote nothing", JSON.stringify(before) === JSON.stringify(await centralSnap()));
+    const d2 = tool(T("import-gtp-legacy.ts"), importArgs("delta2", ["--apply"]));
+    const r2 = report("delta2");
+    check("A5 delta: run 2 (new run id, --apply) creates exactly the 2 new articles once", d2.code === 0 && r2.imported === 2 && (await markerCount()) === importable + 14, { code: d2.code, imported: r2.imported, marker: await markerCount(), out: d2.out.slice(-300) });
+    check("A5 delta: skippedExisting counts every earlier item", r2.skippedExisting === importable + 12, r2.skippedExisting);
+    const after = await centralSnap();
+    const afterById = new Map(after.map((x) => [String(x.id), JSON.stringify(x)]));
+    check("A5 delta: every previously imported article is unchanged (version, updatedAt, author, slug, status)", before.every((x) => afterById.get(String(x.id)) === JSON.stringify(x)), before.filter((x) => afterById.get(String(x.id)) !== JSON.stringify(x)).length);
+    check("A5 delta: no duplicate slugs in the tenant", new Set(after.map((x) => String(x.slug))).size === after.length);
+    const created = slugMap("delta2");
+    check("A5 delta: run 2 journal holds only the 2 new articles", created.length === 2 && created.every((e) => newIds.includes(e.legacyId)), created.map((e) => e.legacyId));
+    const authorCounts = await q<{ n: number }>(CENTRAL, `SELECT count(*)::int AS n FROM articles a JOIN tenants t ON t.id = a.tenant_id JOIN authors au ON au.id = a.author_id
+      WHERE t.slug = 'gtp' AND a.origin = 'import' AND a.engine_source_name = 'legacy:globaltravelpost' AND au.name = ANY($1::text[]) GROUP BY au.name`, [POOL]);
+    const ns = authorCounts.map((x) => Number(x.n));
+    check("A5 delta: overall author spread over (existing + new) <= 1 in Central", ns.length === 5 && Math.max(...ns) - Math.min(...ns) <= 1, ns);
+    check("A5 delta: report carries plan and actual totals (existing + new) with spread <= 1", r2.authors.fixedFromCentral === importable + 12 && r2.authors.actualSpread <= 1 && Object.values(r2.authors.actualTotals as Record<string, number>).reduce((x, y) => x + y, 0) === importable + 14, r2.authors);
+    const res = tool(T("import-gtp-legacy.ts"), importArgs("delta2", ["--apply", "--resume"]));
+    check("A5 delta: resuming run 2 changes nothing", res.code === 0 && report("delta2").imported === 0 && JSON.stringify(after) === JSON.stringify(await centralSnap()), { code: res.code, imported: report("delta2").imported });
+    const v = tool(T("verify-gtp-parity.ts"), ["--run-id", "delta2", ...RH, "--batch", "1"]);
+    check("A5 verify (page size 1, microsecond rows) passes: status and pillar/sub-section counts equal Central", v.code === 0, v.out.split("\n").filter((l) => /FAIL/.test(l)).slice(0, 6).join(" | "));
+    const rb = rollback("delta2", ["--apply"]);
+    const back = await centralSnap();
+    check("A5 delta: rollback of run 2 removes only run 2's articles", rb.code === 0 && JSON.stringify(back) === JSON.stringify(before), { code: rb.code, rows: back.length, before: before.length });
+    check("A5 delta: final rollback of run 1", rollback("delta1", ["--apply"]).code === 0 && (await markerCount()) === 0, await markerCount());
+    const lc2 = new pg.Client({ connectionString: LEGACY_ADMIN });
+    await lc2.connect();
+    await lc2.query("DELETE FROM articles WHERE id = ANY($1::uuid[])", [newIds]);
+    await lc2.end();
   }
 
   console.log("\n== F2 readbacks, G36 hybrid, G33b canary scan");
