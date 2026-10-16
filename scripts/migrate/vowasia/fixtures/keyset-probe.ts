@@ -23,6 +23,10 @@
  *   C also: wrong legacy DB name / 'neondb' -> DB NAME STOP (02 and 03); a
  *      PUBLIC-callable SECURITY DEFINER function outside public -> STOP; 03
  *      without / with a wrong -v legacy_db drops nothing.
+ *   H. Amendment 1 (Supabase SQL Editor variants): 01e returns ONE result set in a
+ *      read-only transaction as a non-superuser; 02 pasted as one string ends in
+ *      SELF-CHECK OK; 02p sets a password; 03e refuses unfilled / wrong name /
+ *      neondb (with and without ON_ERROR_STOP) and cleans up when filled.
  *   G. 02b: the in-SQL guard refuses (nothing changed) while another login role
  *      or a NOLOGIN role can use the shared tables; then the filled 02b applies
  *      (RLS SETUP OK, NOINHERIT, VALID UNTIL); manual removal then 03 restores
@@ -361,6 +365,101 @@ async function main(): Promise<void> {
   });
   assert.equal(await baseState("probe_uuid"), before, "base tables unchanged after 03");
   log("E 03: schema and role gone, CLEANUP OK, re-run is clean, base tables unchanged");
+
+  // H (Amendment 1): Supabase SQL Editor variants 01e / 02p / 03e (no psql variables).
+  // The Editor sends the whole text as ONE simple-query string and shows only the last
+  // result; a node-pg multi-statement query is the closest local stand-in.
+  const sql01e = readFileSync(path.join(SQL_DIR, "01e-inspect-single-result.sql"), "utf8");
+  await withClient(
+    "probe_uuid",
+    async (c) => {
+      await c.query("BEGIN READ ONLY");
+      const r = await c.query(sql01e);
+      await c.query("ROLLBACK");
+      assert.ok(!Array.isArray(r), "01e must return exactly ONE result set");
+      assert.deepEqual(r.fields.map((f) => f.name), ["section", "item", "detail"]);
+      const rows = r.rows as { section: string; item: string; detail: string }[];
+      assert.deepEqual([rows[0]?.section, rows[0]?.item, rows[0]?.detail], ["1 connection", "database | role", "probe_uuid | probe_inspector"], "first row: database and role");
+      const sections = new Set(rows.map((x) => x.section.split(" ")[0]));
+      for (const sec of ["1", "2", "4", "5", "5a", "5c", "5d", "5e", "5b", "6b", "6"]) assert.ok(sections.has(sec), `01e section ${sec} present`);
+      assert.ok(rows.some((x) => x.section === "6 vowasia site row" && x.item === "vowasia" && x.detail.includes(u.siteV)), "01e finds the vowasia site row");
+      assert.ok(rows.some((x) => x.section === "6b columns" && x.item === "articles.site_id"), "01e lists article columns");
+      assert.ok(rows.some((x) => x.section === "4 site_id column types" && x.item === "articles" && x.detail === "uuid"));
+      const all = JSON.stringify(rows);
+      for (const needle of [BODY_MARK, TITLE_MARK, "author1@example.invalid", "a@example.invalid"]) assert.ok(!all.includes(needle), "01e prints no article data / personal data");
+      const ord = rows.map((x) => x.section);
+      assert.equal(ord.indexOf("6 vowasia site row") > ord.indexOf("5d security definer callable by PUBLIC"), true, "stable section order");
+    },
+    "probe_inspector",
+  );
+  await withClient("postgres", (c) => c.query("CREATE DATABASE probe_empty"));
+  await withClient("probe_empty", async (c) => {
+    await c.query("BEGIN READ ONLY");
+    const r = await c.query(sql01e);
+    await c.query("ROLLBACK");
+    assert.ok(!Array.isArray(r));
+    assert.ok(r.rows.some((x) => x.section === "6 vowasia site row" && x.item === "public.sites" && x.detail === "missing"), "01e does not fail when the tables are missing");
+  }, "probe_inspector");
+  await withClient("postgres", (c) => c.query("DROP DATABASE probe_empty"));
+  log("H 01e: one result set (section,item,detail), first row database | role, all sections, read-only transaction as a non-superuser, no article data; tolerates missing tables");
+
+  // 02 pasted Editor-style (one multi-statement string), then 02p, then login.
+  const editorResults = (await withClient("probe_uuid", (c) => c.query(fill(tpl02, u.siteV, "probe_uuid")))) as unknown as pg.QueryResult[];
+  assert.ok(Array.isArray(editorResults));
+  assert.equal(editorResults[editorResults.length - 1]?.rows[0]?.vowasia_self_check, "SELF-CHECK OK", "02 Editor-style: last result is SELF-CHECK OK");
+  const tpl02p = readFileSync(path.join(SQL_DIR, "02p-set-password.sql.template"), "utf8");
+  const pwLines = tpl02p.split("\n").filter((l) => /password\s+'/i.test(l));
+  assert.deepEqual(pwLines, ["ALTER ROLE vowasia_migrator PASSWORD '__PASSWORD__';"], "02p carries only the placeholder");
+  const pwBefore = await withClient("postgres", async (c) => (await c.query("SELECT rolpassword FROM pg_authid WHERE rolname = 'vowasia_migrator'")).rows[0].rolpassword);
+  assert.equal(pwBefore, null, "role from 02 has no password yet");
+  const filled02p = path.join(DIR, "02p-filled.sql");
+  writeFileSync(filled02p, tpl02p.split("__PASSWORD__").join(PASSWORD), { mode: 0o600 });
+  const r02p = psql("probe_uuid", filled02p);
+  assert.equal(r02p.status, 0, `02p failed: ${r02p.err.split(PASSWORD).join("<redacted>")}`);
+  assert.ok(!(r02p.out + r02p.err).includes(PASSWORD), "02p output does not echo the password");
+  const pwAfter = await withClient("postgres", async (c) => (await c.query("SELECT rolpassword FROM pg_authid WHERE rolname = 'vowasia_migrator'")).rows[0].rolpassword as string);
+  assert.match(pwAfter, /^SCRAM-SHA-256\$/, "02p stored a SCRAM verifier");
+  assert.ok(!pwAfter.includes(PASSWORD));
+  await withClient("probe_uuid", async (c) => {
+    assert.deepEqual((await c.query("SELECT slug FROM vowasia_ro.sites")).rows.map((x) => x.slug), ["vowasia"]);
+  }, "vowasia_migrator", PASSWORD);
+  log("H 02 Editor-style -> SELF-CHECK OK; 02p sets a SCRAM password (not echoed); the role logs in (local auth is trust) and reads the view");
+
+  // 03e: refusals drop nothing; the filled file cleans up.
+  const tpl03e = readFileSync(path.join(SQL_DIR, "03e-drop-in-editor.sql.template"), "utf8");
+  assert.ok(!/:'|^\s*\\/m.test(tpl03e.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n")), "03e has no psql variables or meta-commands");
+  const file03eRaw = path.join(SQL_DIR, "03e-drop-in-editor.sql.template");
+  const e1 = psql("probe_uuid", file03eRaw);
+  assert.notEqual(e1.status, 0, "unfilled 03e must stop");
+  assert.match(e1.err, /DB NAME STOP: placeholder __LEGACY_DB_NAME__ not filled/);
+  const e2 = psql("probe_uuid", file03eRaw, "postgres", [], false);
+  assert.match(lastLine(e2.out), /^CLEANUP STOP: role vowasia_migrator still exists$/, "unfilled 03e without ON_ERROR_STOP drops nothing");
+  const wrong03e = path.join(DIR, "03e-wrong.sql");
+  writeFileSync(wrong03e, tpl03e.split("__LEGACY_DB_NAME__").join("some_other_db"), { mode: 0o600 });
+  const e3 = psql("probe_uuid", wrong03e);
+  assert.notEqual(e3.status, 0);
+  assert.match(e3.err, /DB NAME STOP: connected database is not the given legacy_db/);
+  const e4 = psql("probe_uuid", wrong03e, "postgres", [], false);
+  assert.match(lastLine(e4.out), /^CLEANUP STOP: role vowasia_migrator still exists$/, "wrong-name 03e without ON_ERROR_STOP drops nothing");
+  await expectPgError("P0001", () => withClient("probe_uuid", (c) => c.query(readFileSync(wrong03e, "utf8"))), "03e wrong name, Editor-style");
+  await withClient("postgres", (c) => c.query("CREATE DATABASE neondb TEMPLATE probe_uuid"));
+  const neon03e = path.join(DIR, "03e-neon.sql");
+  writeFileSync(neon03e, tpl03e.split("__LEGACY_DB_NAME__").join("neondb"), { mode: 0o600 });
+  const e5 = psql("neondb", neon03e);
+  assert.notEqual(e5.status, 0);
+  assert.match(e5.err, /DB NAME STOP: connected to neondb/);
+  await withClient("postgres", (c) => c.query("DROP DATABASE neondb"));
+  assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 2, "03e refusals drop nothing");
+  const ok03e = path.join(DIR, "03e-ok.sql");
+  writeFileSync(ok03e, tpl03e.split("__LEGACY_DB_NAME__").join("probe_uuid"), { mode: 0o600 });
+  const editor03e = (await withClient("probe_uuid", (c) => c.query(readFileSync(ok03e, "utf8")))) as unknown as pg.QueryResult[];
+  assert.equal(editor03e[editor03e.length - 1]?.rows[0]?.vowasia_cleanup_check, "CLEANUP OK", "03e Editor-style: last result is CLEANUP OK");
+  const e6 = psql("probe_uuid", ok03e);
+  assert.equal(e6.status, 0, `03e re-run failed: ${e6.err}`);
+  assert.equal(lastLine(e6.out), "CLEANUP OK");
+  assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0);
+  assert.equal(await baseState("probe_uuid"), before, "base tables unchanged after the Editor variants");
+  log("H 03e: unfilled / wrong name / neondb stop (with and without ON_ERROR_STOP, and Editor-style) and drop nothing; filled -> CLEANUP OK (Editor-style and psql -f), re-runnable; base tables unchanged");
 
   // F: non-superuser owner with CREATEROLE (Supabase/Neon-style) runs 02 and 03.
   await withClient("postgres", async (c) => {

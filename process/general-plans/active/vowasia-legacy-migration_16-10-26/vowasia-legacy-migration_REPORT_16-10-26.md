@@ -225,3 +225,47 @@ Known-Gap còn lại: không có zsh (quy tắc dán lệnh chỉ kiểm tĩnh);
 Không sửa (ghi nhận, chuyển UPDATE PROCESS/backlog): MINOR-4 (hàm trigger SECURITY DEFINER trong `public` và DB tên `neondb` đều -> STOP; cần amendment nếu gặp thật); soạn URL trong ghi chú tạm không đồng bộ (chấp nhận); NIT còn lại (vài ca probe chỉ khẳng định status != 0, comment 03, URL admin trên argv của psql, sslmode có sẵn trong URL nhà cung cấp, 5c/5d chỉ ACL schema, nhãn mục 01).
 
 Cổng chạy lại (16-10-26): G1 `test:migrate-vowasia` fail 0; G2 lint:migrate 0; G3 typecheck 0; G4 test:migrate-gtp 0; G5 test:single-home 0; G6 probe một mình cổng 54336 "ALL PROBE CHECKS PASSED", đã dọn; G7 chỉ `package.json`; G8 0; G7b đúng 3 dòng `vowasia`; G7c rỗng; G10 rỗng; G13 có. Số file: 26 dưới `scripts/migrate/vowasia/` + báo cáo này = 27; `package.json` +3. Không file mới.
+
+## Amendment 1: chạy phần SQL bằng SQL Editor của Supabase (16-10-26)
+
+**Kết luận:** Đã thêm cách B (SQL Editor, không cần mật khẩu `postgres`) theo phạm vi chủ đồng ý. Mọi cổng chạy được đều xanh, trừ G10b dạng nguyên văn: nó bắt chỗ giữ chỗ `'__PASSWORD__'` của file 02p mà amendment bắt buộc phải có. Cần sửa lệnh G10b trong plan (xem dưới). Chỉ đụng file dưới `scripts/migrate/vowasia/` + báo cáo này; `package.json` vẫn đúng +3 dòng cũ.
+
+TL;DR: 3 file SQL mới (01e, 02p, 03e), banner nhận `vowasia_migrator.<20 ký tự a-z0-9>` (không in ra), doc có "Cách B" B1-B6, probe thêm phần H. Chưa thử trong Editor thật.
+
+| Mục | Đã làm | Bằng chứng |
+|---|---|---|
+| 1 | `sql/01e-inspect-single-result.sql`: MỘT câu `WITH ... SELECT` (12 nhánh UNION ALL: 1, 2, 3, 4, 5, 5a, 5e, 5b, 5c, 5d, 6b, 6), cột `section, item, detail`, xếp theo mục; dòng đầu `database \| role`; mục trống in `(none)`; bảng thiếu in `missing` (dùng `to_regclass` + `query_to_xml` cho mục 6) thay vì lỗi; không `SET`, không lệnh psql, không `SELECT *` | probe H: một result set duy nhất, chạy trong `BEGIN READ ONLY` bằng role không-superuser (`probe_inspector`), đủ mục, thấy dòng site `vowasia`, không chứa mẫu body/title/email; trên database trống không lỗi. G10a mở rộng cho 01e xanh |
+| 2 | `sql/02p-set-password.sql.template`: đúng một `ALTER ROLE vowasia_migrator PASSWORD '__PASSWORD__';` + comment (chỉ sau SELF-CHECK OK, `openssl rand -hex 24`, xoá snippet) | probe H: chỉ dòng đó khớp `password '`; sau 02 `rolpassword` NULL, sau 02p là `SCRAM-SHA-256$...`, đầu ra psql không lặp mật khẩu, role đăng nhập và đọc view |
+| 3 | `sql/03e-drop-in-editor.sql.template`: logic 03 nguyên vẹn, `:'legacy_db'` thay bằng `'__LEGACY_DB_NAME__'`; thêm STOP khi chỗ giữ chỗ chưa điền | probe H: chưa điền / sai tên / `neondb` -> `DB NAME STOP`, không xoá gì (có và không có ON_ERROR_STOP: dòng cuối `CLEANUP STOP: role vowasia_migrator still exists`; dán kiểu Editor: lỗi P0001, không xoá gì); đã điền -> `CLEANUP OK` (kiểu Editor và `psql -f`), chạy lại vẫn OK; bảng gốc không đổi |
+| 4 | `lib/vowasia-db-banner.ts`: `isAcceptedLegacyUser` nhận `vowasia_migrator` hoặc `^vowasia_migrator\.[a-z0-9]{20}$`; banner vẫn chỉ `host:port/db` | đỏ-trước: test mới `not ok 7` trên mã cũ, rồi 7/7 xanh. Chấp nhận `vowasia_migrator.abcdefghijklmnopqrst`; từ chối `.short`, `postgres.<ref>`, chữ hoa, `.x` thừa, 21 ký tự, `vowasia_migrator.`, tiền tố lạ, rỗng (thông báo cố định); kết quả không chứa mã project |
+| 5 | `VOWASIA-LEGACY.md`: TL;DR + bảng "Ai làm gì" + quy tắc an toàn cập nhật; mục mới "Cách B" (hạn chế trung thực, B1-B6); mỗi khối lệnh đúng một lệnh (`cat ... \| pbcopy`, `openssl rand -hex 24 \| pbcopy`, `read -s`, `export`), không `#`, không `<`/`>`, không scheme URL | quét tay: 8 khối, mỗi khối 1 dòng; G10c xanh |
+| 6 | probe: phần H mới trong `fixtures/keyset-probe.ts` (không file test mới); không có test tĩnh cho doc nên không mở rộng | G6 xanh |
+
+Cổng (chạy tuần tự, 16-10-26, trước commit; G6 chạy cuối, một mình):
+
+| Cổng | Kết quả |
+|---|---|
+| G1 `test:migrate-vowasia` | 54/54 |
+| G2 `lint:migrate` | 0 lỗi, 1 cảnh báo có sẵn |
+| G3 `typecheck` | exit 0 |
+| G4 `test:migrate-gtp` | 69/69 |
+| G5 `test:single-home` | 267/267 |
+| G6 probe | exit 0, ALL PROBE CHECKS PASSED, tự dọn (không còn thư mục `/tmp/vowasia-probe-*`) |
+| G7 / G7b / G7c / G8 | chỉ `package.json` / 3 dòng đều chứa `vowasia` / rỗng / exit 0 |
+| G10a (01 và 01e) | exit 0 (01e kiểm thêm từ `set`) |
+| G10b nguyên văn `! grep -nEi "password[[:space:]]+'" sql/*` | **ĐỎ có chủ đích**: khớp đúng `02p...:15 ALTER ROLE vowasia_migrator PASSWORD '__PASSWORD__';` |
+| G10b đề xuất `! grep -nEi "password[[:space:]]+'" sql/* \| grep -v "'__PASSWORD__'"` | exit 0 |
+| G10c | exit 0 |
+| G13 | exit 0 |
+
+Số file: 29 dưới `scripts/migrate/vowasia/` + 1 backlog = 30.
+
+Sai lệch: G10b phải đổi như trên (plan đang được ghi Amendment 1 bởi agent khác; tôi không sửa plan). Bổ sung ngoài chữ của lệnh, trong phạm vi: 03e thêm STOP riêng cho chỗ giữ chỗ chưa điền; 01e in `(none)`/`missing` để không lỗi khi bảng khác tên.
+
+Known-Gap (trung thực):
+- Chưa thử trong SQL Editor thật của Supabase; "kiểu Editor" chỉ là gửi cả file như một chuỗi qua node-pg tới PG16 cục bộ.
+- Xác thực cục bộ là `trust`: probe chứng minh 02p lưu verifier SCRAM, KHÔNG chứng minh đăng nhập bằng mật khẩu qua pooler Supabase.
+- Supabase session pooler với role tự tạo dạng `vowasia_migrator.<ref>` chưa thử thật.
+- PostgreSQL 14 trở xuống: 02 luôn STOP.
+- Hàm SECURITY DEFINER ngoài `public` trên Supabase: 02 có thể STOP; chỉ nới `allow_definer_outside_public` sau khi xem mục 5d của 01e.
+- Editor có thể lưu truy vấn chứa mật khẩu (02p) hoặc id site (02): doc yêu cầu xoá ngay.

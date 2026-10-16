@@ -16,6 +16,16 @@ export const BANNER_MESSAGES = {
   sslInUrl: `legacy-db: ${LEGACY_URL_ENV} must not carry ssl settings (sslmode, ssl, sslrootcert...); use ${LEGACY_SSL_ENV}; refusing.`,
 } as const;
 
+/**
+ * Accepted login names: the role itself, or the Supabase pooler form
+ * `vowasia_migrator.<project ref>` (exactly 20 lowercase letters/digits).
+ * The ref is never printed: the banner carries host:port/db only.
+ */
+const POOLER_USER = new RegExp(`^${LEGACY_ROLE}\\.[a-z0-9]{20}$`);
+export function isAcceptedLegacyUser(user: unknown): boolean {
+  return typeof user === "string" && (user === LEGACY_ROLE || POOLER_USER.test(user));
+}
+
 export class DbBannerError extends Error {
   override name = "DbBannerError";
 }
@@ -30,7 +40,7 @@ export function legacyBanner(url: string | undefined): { banner: string; host: s
   } catch {
     throw new DbBannerError(BANNER_MESSAGES.unparseable);
   }
-  if (c.user !== LEGACY_ROLE) throw new DbBannerError(BANNER_MESSAGES.badUser);
+  if (!isAcceptedLegacyUser(c.user)) throw new DbBannerError(BANNER_MESSAGES.badUser);
   const host = typeof c.host === "string" ? c.host : "";
   if (host === "" || host.startsWith("/") || host.includes(",")) throw new DbBannerError(BANNER_MESSAGES.badHost);
   const port = typeof c.port === "string" && c.port !== "" ? c.port : "5432";

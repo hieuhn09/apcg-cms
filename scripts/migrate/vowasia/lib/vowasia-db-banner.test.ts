@@ -55,3 +55,28 @@ test("m7: the effective SSL mode is printable for the banner", () => {
   assert.equal(sslLabel({ rejectUnauthorized: true }), "ssl verify-full");
   assert.equal(sslLabel({ rejectUnauthorized: true, ca: "x" }), "ssl verify-full (custom CA)");
 });
+
+test("Amendment 1: Supabase session-pooler login vowasia_migrator.<20 x [a-z0-9]> is accepted; project ref never printed", () => {
+  const REF = "abcdefghijklmnopqrst";
+  const b = legacyBanner(`postgres://vowasia_migrator.${REF}:${SECRET}@aws-0-xx.pooler.example.invalid:5432/postgres`);
+  assert.equal(b.banner, "aws-0-xx.pooler.example.invalid:5432/postgres");
+  assert.ok(!b.banner.includes(REF) && !b.banner.includes("vowasia_migrator") && !b.banner.includes(SECRET));
+  assert.ok(!JSON.stringify(b).includes(REF), "no field of the result carries the project ref");
+  for (const u of [
+    "vowasia_migrator.short",
+    "postgres.abcdefghijklmnopqrst",
+    "vowasia_migrator.ABCDEFGHIJKLMNOPQRST",
+    "vowasia_migrator.abcdefghijklmnopqrst.x",
+    "vowasia_migrator.abcdefghijklmnopqrstu",
+    "vowasia_migrator.",
+    "xvowasia_migrator.abcdefghijklmnopqrst",
+    "",
+  ]) {
+    const url = `postgres://${u}${u ? `:${SECRET}` : ""}@pooler.example.invalid:5432/postgres`;
+    assert.throws(
+      () => legacyBanner(url),
+      (e: unknown) => e instanceof DbBannerError && e.message === BANNER_MESSAGES.badUser && !e.message.includes(SECRET) && !e.message.includes("abcdefghijklmnopqrst"),
+      u,
+    );
+  }
+});
