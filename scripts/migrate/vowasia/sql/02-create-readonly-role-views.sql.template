@@ -12,39 +12,60 @@
 --                                nếu slug thật khác: DỪNG và báo, cần amendment)
 --        __ARTICLE_COLUMNS__     danh sách cột TƯỜNG MINH của bảng articles, có
 --                                cột site_id, KHÔNG có cột cá nhân (email, IP,
---                                ghi chú nội bộ...). Ví dụ: "id", "site_id", "title"
+--                                ghi chú nội bộ...). Lấy tên cột từ file 01 mục 6b.
+--                                Ví dụ: "id", "site_id", "title"
+--        __LEGACY_DB_NAME__      tên database CŨ (dòng database_name của file 01).
+--                                File tự dừng nếu đang nối vào database khác tên này
+--                                hoặc vào 'neondb' (Central).
 --        (tên bảng gốc public.articles / public.sites: sửa nếu file 01 cho thấy khác)
 --   2. Chạy file đã điền bằng psql với -v ON_ERROR_STOP=1.
 --   3. TỰ KIỂM chạy BÊN TRONG giao dịch, TRƯỚC COMMIT. Nếu có gì sai, nó báo
 --      'SELF-CHECK STOP: ...' và cả giao dịch tự huỷ (ROLLBACK): không role, không
 --      schema nào được tạo. Khi đó: DỪNG (HS5) và báo lại.
---      Nếu xong, dòng cuối là đúng 'SELF-CHECK OK'.
+--      Nếu xong, dòng cuối là đúng 'SELF-CHECK OK' (dòng này được tính lại sau
+--      COMMIT: chỉ in OK khi role và schema thật sự tồn tại).
 --   4. CHỈ SAU 'SELF-CHECK OK' mới đặt mật khẩu (bằng \password, KHÔNG ghi vào file này).
 --
 -- Ghi chú (nói thật về giới hạn):
 --   - Role không đọc/ghi được bảng gốc, nhưng vẫn thừa hưởng quyền của PUBLIC:
---     CONNECT, TEMP (bảng tạm), EXECUTE các hàm PUBLIC gọi được. Tự kiểm chặn hàm
---     SECURITY DEFINER trong schema public; hàm ở schema khác: xem file 01 mục 5d.
+--     CONNECT, TEMP (bảng tạm), EXECUTE các hàm PUBLIC gọi được. Tự kiểm DỪNG nếu
+--     role gọi được BẤT KỲ hàm SECURITY DEFINER nào ngoài pg_catalog /
+--     information_schema (hàm đó chạy bằng quyền chủ hàm, có thể đọc/ghi bảng gốc).
+--     Chỉ nới khi chủ đã xem file 01 mục 5d và chấp nhận: đổi allow_definer_outside_public
+--     trong khối TỰ KIỂM từ 'no' thành 'yes' (vẫn chặn hàm trong schema public).
+--   - PostgreSQL <= 14: PUBLIC mặc định có CREATE trên schema public, nên tự kiểm
+--     LUÔN dừng ở đó. Đó là hành vi đúng: dừng và báo, KHÔNG tự REVOKE.
 --   - default_transaction_read_only chỉ là MẶC ĐỊNH của phiên (role tự tắt được);
 --     hàng rào thật là: role chỉ có SELECT trên hai view.
---   - Role có hạn dùng (VALID UNTIL, 14 ngày). Nếu Giai đoạn B bị hoãn lâu hơn:
---     chạy 03 để xoá role, hoặc đổi mật khẩu bằng \password trước khi dùng lại.
+--   - Role có hạn dùng (VALID UNTIL, 14 ngày). Đổi mật khẩu KHÔNG gia hạn. Nếu
+--     Giai đoạn B bị hoãn lâu hơn: chạy 03 rồi chạy lại file này, HOẶC
+--     ALTER ROLE vowasia_migrator VALID UNTIL với mốc mới (xem VOWASIA-LEGACY.md).
 --   - KHÔNG chạy REVOKE ... FROM PUBLIC trên bảng/schema public: có thể làm hỏng site cũ.
 --   - Role là cấp CỤM (cluster-wide), không riêng một database.
 --   - View chạy bằng quyền của chủ view (người chạy file này), nên chủ cần SELECT
 --     trên bảng gốc; nếu người chạy là chủ bảng thì RLS của bảng gốc không lọc view.
---   - Danh sách cột của view bị khoá lúc tạo (nguồn đóng băng là chấp nhận được).
+--   - View khoá cột của bảng articles/sites: KHÔNG chạy migration đổi cột các bảng
+--     đó của site cũ giữa lúc chạy file này và lúc chạy 03 (migration có thể lỗi).
 
--- Đang nối vào đâu, bằng ai. Phải là DB CŨ (không phải Central /neondb). Sai: Ctrl+C ngay.
+-- Đang nối vào đâu, bằng ai (chỉ để ghi lại; chốt thật là khối DO ngay dưới).
 SELECT current_database() AS database_name, current_user AS running_as;
 
 BEGIN;
 
--- Chặn chạy khi chưa điền chỗ giữ chỗ.
+-- Chặn chạy khi chưa điền chỗ giữ chỗ, hoặc khi nối nhầm database.
 DO $$
 BEGIN
   IF '__VOWASIA_SITE_ID__' LIKE '\_\_VOWASIA%' OR '__VOWASIA_SITE_SLUG__' LIKE '\_\_VOWASIA%' THEN
     RAISE EXCEPTION 'vowasia: placeholder __VOWASIA_SITE_ID__ / __VOWASIA_SITE_SLUG__ not filled; nothing was created.';
+  END IF;
+  IF '__LEGACY_DB_NAME__' LIKE '\_\_LEGACY%' THEN
+    RAISE EXCEPTION 'vowasia: placeholder __LEGACY_DB_NAME__ not filled; nothing was created.';
+  END IF;
+  IF current_database() = 'neondb' THEN
+    RAISE EXCEPTION 'DB NAME STOP: connected to neondb (Central), not the old database; nothing was created.';
+  END IF;
+  IF current_database() <> '__LEGACY_DB_NAME__' THEN
+    RAISE EXCEPTION 'DB NAME STOP: connected database is not the filled old database name; nothing was created.';
   END IF;
 END $$;
 
@@ -75,6 +96,8 @@ DO $$
 DECLARE
   bad text;
   n_definer int;
+  -- Đổi thành 'yes' CHỈ sau khi đã xem file 01 mục 5d và chấp nhận các hàm đó.
+  allow_definer_outside_public constant text := 'no';
 BEGIN
   IF (SELECT count(*) FROM vowasia_ro.sites) <> 1 THEN
     RAISE EXCEPTION 'SELF-CHECK STOP: view sites does not return exactly 1 row (wrong site id?); nothing was created (HS5)';
@@ -115,7 +138,10 @@ BEGIN
   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'public') AND p.prosecdef
     AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
     AND has_function_privilege('vowasia_migrator', p.oid, 'EXECUTE');
-  RAISE NOTICE 'vowasia: SECURITY DEFINER functions in other schemas callable by the role: % (see file 01, 5d)', n_definer;
+  IF n_definer > 0 AND allow_definer_outside_public <> 'yes' THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can EXECUTE % SECURITY DEFINER function(s) outside public (see file 01, 5d); nothing was created (HS5)', n_definer;
+  END IF;
+  RAISE NOTICE 'vowasia: SECURITY DEFINER functions in other schemas callable by the role: % (allowed: %)', n_definer, allow_definer_outside_public;
   RAISE NOTICE 'vowasia: inherited from PUBLIC: CONNECT=%, TEMP=%',
     has_database_privilege('vowasia_migrator', current_database(), 'CONNECT'),
     has_database_privilege('vowasia_migrator', current_database(), 'TEMP');
@@ -123,4 +149,9 @@ END $$;
 
 COMMIT;
 
-SELECT 'SELF-CHECK OK' AS vowasia_self_check;
+-- Dòng trạng thái cuối: chỉ OK khi role và schema thật sự đã tạo.
+SELECT CASE
+  WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vowasia_migrator')
+   AND EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'vowasia_ro') THEN 'SELF-CHECK OK'
+  ELSE 'SELF-CHECK FAILED: nothing created'
+END AS vowasia_self_check;

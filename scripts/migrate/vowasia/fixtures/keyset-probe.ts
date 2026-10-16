@@ -20,9 +20,13 @@
  *   E. 03 removes schema + role, prints CLEANUP OK and is re-runnable.
  *   F. 02 + 03 run by a NON-superuser table owner that has CREATEROLE (the
  *      Supabase/Neon-style owner), on a copy database.
+ *   C also: wrong legacy DB name / 'neondb' -> DB NAME STOP (02 and 03); a
+ *      PUBLIC-callable SECURITY DEFINER function outside public -> STOP; 03
+ *      without / with a wrong -v legacy_db drops nothing.
  *   G. 02b: the in-SQL guard refuses (nothing changed) while another login role
- *      can read the shared tables; once it is gone, the filled 02b applies on a
- *      throwaway database (syntax only), then removed.
+ *      or a NOLOGIN role can use the shared tables; then the filled 02b applies
+ *      (RLS SETUP OK, NOINHERIT, VALID UNTIL); manual removal then 03 restores
+ *      RLS off; 03 directly after 02b is recorded (policies dropped, RLS on).
  * The generated role password is never printed and never written to sql/*.
  */
 import assert from "node:assert/strict";
@@ -66,9 +70,14 @@ async function withClient<T>(db: string, fn: (c: pg.Client) => Promise<T>, user 
   }
 }
 
-function psql(db: string, file: string, user = "postgres"): { status: number; out: string; err: string } {
-  const r = spawnSync("psql", ["-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", String(PORT), "-U", user, "-d", db, "-f", file], { encoding: "utf8" });
+function psql(db: string, file: string, user = "postgres", extra: string[] = []): { status: number; out: string; err: string } {
+  const r = spawnSync("psql", ["-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", ...extra, "-h", "127.0.0.1", "-p", String(PORT), "-U", user, "-d", db, "-f", file], { encoding: "utf8" });
   return { status: r.status ?? -1, out: r.stdout.trim(), err: r.stderr.trim() };
+}
+
+/** 03 with the mandatory -v legacy_db (defaults to the database actually connected). */
+function drop03(db: string, user = "postgres", legacyDb: string | null = db): { status: number; out: string; err: string } {
+  return psql(db, path.join(SQL_DIR, "03-drop-role-and-views.sql"), user, legacyDb === null ? [] : ["-v", `legacy_db=${legacyDb}`]);
 }
 
 /** Seed one site-id kind; returns the expected vowasia order (DB ORDER BY). */
@@ -129,8 +138,8 @@ async function baseState(db: string): Promise<string> {
   return withClient(db, async (c) => JSON.stringify([(await c.query(BASE_STATE_SQL)).rows, (await c.query("SELECT * FROM pg_policies ORDER BY policyname")).rows]));
 }
 
-function fill(template: string, site: string, slug = "vowasia"): string {
-  return template.split("__VOWASIA_SITE_ID__").join(site).split("__VOWASIA_SITE_SLUG__").join(slug).split("__ARTICLE_COLUMNS__").join(ARTICLE_COLUMNS);
+function fill(template: string, site: string, db: string, slug = "vowasia"): string {
+  return template.split("__VOWASIA_SITE_ID__").join(site).split("__VOWASIA_SITE_SLUG__").join(slug).split("__ARTICLE_COLUMNS__").join(ARTICLE_COLUMNS).split("__LEGACY_DB_NAME__").join(db);
 }
 
 function lastLine(s: string): string {
@@ -188,16 +197,46 @@ async function main(): Promise<void> {
     [u.siteO, "vowasia", /SELF-CHECK STOP: the site row slug is not the expected slug/],
   ] as const) {
     const bad = path.join(DIR, "02-bad.sql");
-    writeFileSync(bad, fill(tpl02, site, slug), { mode: 0o600 });
+    writeFileSync(bad, fill(tpl02, site, "probe_uuid", slug), { mode: 0o600 });
     const r = psql("probe_uuid", bad);
     assert.notEqual(r.status, 0, "a failing self-check must stop psql");
     assert.match(r.err, why);
     assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "self-check STOP must roll back role and schema");
   }
+  // m-E: database-name chốt in SQL (wrong name, and 'neondb' itself).
+  const badDb = path.join(DIR, "02-baddb.sql");
+  writeFileSync(badDb, fill(tpl02, u.siteV, "some_other_db"), { mode: 0o600 });
+  const rDb = psql("probe_uuid", badDb);
+  assert.notEqual(rDb.status, 0, "wrong legacy db name must stop");
+  assert.match(rDb.err, /DB NAME STOP: connected database is not the filled old database name/);
+  await withClient("postgres", (c) => c.query("CREATE DATABASE neondb TEMPLATE probe_uuid"));
+  const neonFile = path.join(DIR, "02-neon.sql");
+  writeFileSync(neonFile, fill(tpl02, u.siteV, "neondb"), { mode: 0o600 });
+  const rNeon = psql("neondb", neonFile);
+  assert.notEqual(rNeon.status, 0, "neondb must stop");
+  assert.match(rNeon.err, /DB NAME STOP: connected to neondb \(Central\)/);
+  const rNeon03 = drop03("neondb");
+  assert.notEqual(rNeon03.status, 0, "03 on neondb must stop");
+  assert.match(rNeon03.err, /DB NAME STOP: connected to neondb/);
+  await withClient("postgres", (c) => c.query("DROP DATABASE neondb"));
+  assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "DB NAME STOP creates nothing");
+  // m-F: a SECURITY DEFINER function outside public that PUBLIC can call -> STOP by default.
+  await withClient("probe_uuid", async (c) => {
+    await c.query("CREATE SCHEMA probe_ext");
+    await c.query("GRANT USAGE ON SCHEMA probe_ext TO PUBLIC");
+    await c.query("CREATE FUNCTION probe_ext.leak() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM public.articles'");
+  });
+  const defFile = path.join(DIR, "02-definer.sql");
+  writeFileSync(defFile, fill(tpl02, u.siteV, "probe_uuid"), { mode: 0o600 });
+  const rDef = psql("probe_uuid", defFile);
+  assert.notEqual(rDef.status, 0, "PUBLIC-callable SECURITY DEFINER outside public must stop");
+  assert.match(rDef.err, /SELF-CHECK STOP: vowasia_migrator can EXECUTE 1 SECURITY DEFINER function\(s\) outside public/);
+  assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "definer STOP creates nothing");
+  await withClient("probe_uuid", (c) => c.query("DROP SCHEMA probe_ext CASCADE"));
   assert.equal(await baseState("probe_uuid"), before, "base tables unchanged by a rolled-back 02");
-  log("C 02: wrong site id / wrong slug -> SELF-CHECK STOP inside the transaction, nothing created");
+  log("C 02: wrong site id / wrong slug / wrong db name / neondb / PUBLIC SECURITY DEFINER outside public -> STOP inside the transaction, nothing created");
   const filled = path.join(DIR, "02-filled.sql");
-  writeFileSync(filled, fill(tpl02, u.siteV), { mode: 0o600 });
+  writeFileSync(filled, fill(tpl02, u.siteV, "probe_uuid"), { mode: 0o600 });
   const applied = psql("probe_uuid", filled);
   assert.equal(applied.status, 0, `02 apply failed: ${applied.err}`);
   assert.equal(lastLine(applied.out), "SELF-CHECK OK", "02 self-check");
@@ -292,10 +331,16 @@ async function main(): Promise<void> {
   log("D2 discover refuses the other site, a non-vowasia_migrator credential, ssl in the URL, --site-id and a missing site filter (exit 2)");
 
   // E: 03 removal (twice), then 02b syntax on a throwaway database.
-  const drop = psql("probe_uuid", path.join(SQL_DIR, "03-drop-role-and-views.sql"));
+  const noVar = drop03("probe_uuid", "postgres", null);
+  assert.notEqual(noVar.status, 0, "03 without -v legacy_db must stop");
+  const wrongVar = drop03("probe_uuid", "postgres", "some_other_db");
+  assert.notEqual(wrongVar.status, 0, "03 with a wrong legacy_db must stop");
+  assert.match(wrongVar.err, /DB NAME STOP: connected database is not the given legacy_db/);
+  assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 2, "03 refusals drop nothing");
+  const drop = drop03("probe_uuid");
   assert.equal(drop.status, 0, `03 failed: ${drop.err}`);
   assert.equal(lastLine(drop.out), "CLEANUP OK");
-  const again = psql("probe_uuid", path.join(SQL_DIR, "03-drop-role-and-views.sql"));
+  const again = drop03("probe_uuid");
   assert.equal(again.status, 0, "03 re-run");
   assert.equal(lastLine(again.out), "CLEANUP OK");
   await withClient("probe_uuid", async (c) => {
@@ -315,7 +360,7 @@ async function main(): Promise<void> {
     for (const t of ["articles", "sites"]) await c.query(`ALTER TABLE public.${t} OWNER TO site_owner`);
   });
   const filledN = path.join(DIR, "02-nsu.sql");
-  writeFileSync(filledN, fill(tpl02, u.siteV), { mode: 0o600 });
+  writeFileSync(filledN, fill(tpl02, u.siteV, "probe_nsu"), { mode: 0o600 });
   const nsu = psql("probe_nsu", filledN, "site_owner");
   assert.equal(nsu.status, 0, `02 as non-superuser owner failed: ${nsu.err}`);
   assert.equal(lastLine(nsu.out), "SELF-CHECK OK");
@@ -324,7 +369,7 @@ async function main(): Promise<void> {
     assert.deepEqual((await c.query("SELECT slug FROM vowasia_ro.sites")).rows.map((r) => r.slug), ["vowasia"]);
     await expectPgError("42501", () => c.query("SELECT 1 FROM public.articles LIMIT 1"), "nsu: read base table");
   }, "vowasia_migrator", PASSWORD);
-  const nsuDrop = psql("probe_nsu", path.join(SQL_DIR, "03-drop-role-and-views.sql"), "site_owner");
+  const nsuDrop = drop03("probe_nsu", "site_owner");
   assert.equal(nsuDrop.status, 0, `03 as non-superuser owner failed: ${nsuDrop.err}`);
   assert.equal(lastLine(nsuDrop.out), "CLEANUP OK");
   await withClient("postgres", async (c) => {
@@ -337,28 +382,54 @@ async function main(): Promise<void> {
   assert.notEqual(psql("probe_int", path.join(SQL_DIR, "02b-alternative-rls.sql.template")).status, 0, "unfilled 02b must fail");
   await withClient("postgres", (c) => c.query("CREATE DATABASE probe_rls TEMPLATE probe_int"));
   const filledB = path.join(DIR, "02b-filled.sql");
-  writeFileSync(filledB, fill(tpl02b, b.siteV), { mode: 0o600 });
+  writeFileSync(filledB, fill(tpl02b, b.siteV, "probe_rls"), { mode: 0o600 });
   const blocked = psql("probe_rls", filledB);
   assert.notEqual(blocked.status, 0, "02b must refuse while another login role can read the tables");
-  assert.match(blocked.err, /RLS GUARD STOP: another login role/);
+  assert.match(blocked.err, /RLS GUARD STOP: another role \(login or not.*probe_inspector/);
   assert.match(blocked.err, /BEFORE: public\.articles rls_enabled=f/);
   await withClient("probe_rls", async (c) => {
     assert.equal((await c.query("SELECT count(*)::int AS n FROM pg_class WHERE relname IN ('articles', 'sites') AND relrowsecurity")).rows[0].n, 0, "guard: RLS untouched");
   });
   assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT count(*)::int AS n FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].n), 0, "guard: no role");
   await withClient("postgres", (c) => c.query("DROP ROLE probe_inspector"));
+  // m-C(a): a NOLOGIN role (anon/authenticated-style, used via SET ROLE) with SELECT also stops the guard.
+  await withClient("postgres", (c) => c.query("CREATE ROLE probe_anon NOLOGIN"));
+  await withClient("probe_rls", (c) => c.query("GRANT SELECT ON public.articles TO probe_anon"));
+  const nologin = psql("probe_rls", filledB);
+  assert.notEqual(nologin.status, 0, "02b must refuse while a NOLOGIN role can read the tables");
+  assert.match(nologin.err, /RLS GUARD STOP: another role \(login or not.*probe_anon/);
+  await withClient("probe_rls", (c) => c.query("REVOKE ALL ON public.articles FROM probe_anon"));
+  await withClient("postgres", (c) => c.query("DROP ROLE probe_anon"));
+  await withClient("postgres", (c) => c.query("CREATE DATABASE probe_rls2 TEMPLATE probe_rls"));
   const rb = psql("probe_rls", filledB);
   assert.equal(rb.status, 0, `02b apply failed: ${rb.err}`);
+  assert.equal(lastLine(rb.out), "RLS SETUP OK", "02b final status line");
   await withClient("probe_rls", async (c) => {
     const r = await c.query("SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('articles', 'sites') ORDER BY relname");
     assert.deepEqual(r.rows.map((x) => x.relrowsecurity), [true, true]);
     assert.equal((await c.query("SELECT count(*)::int AS n FROM pg_policies WHERE policyname LIKE 'vowasia_migrator_%'")).rows[0].n, 2);
   });
+  assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT (NOT rolinherit AND rolvaliduntil > now() AND rolvaliduntil < now() + interval '15 days') AS ok FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].ok), true, "02b role NOINHERIT + VALID UNTIL");
+  // m-H documented order: manual removal (DROP POLICY + DISABLE RLS, since BEFORE was f) THEN 03.
+  await withClient("probe_rls", (c) => c.query("DROP POLICY vowasia_migrator_articles ON public.articles; DROP POLICY vowasia_migrator_sites ON public.sites; ALTER TABLE public.articles DISABLE ROW LEVEL SECURITY; ALTER TABLE public.sites DISABLE ROW LEVEL SECURITY"));
+  const rbDrop = drop03("probe_rls");
+  assert.equal(rbDrop.status, 0, `03 after manual 02b removal failed: ${rbDrop.err}`);
+  assert.equal(lastLine(rbDrop.out), "CLEANUP OK");
+  assert.match(rbDrop.err, /AFTER: public\.articles rls_enabled=f vowasia_policies_left=0/);
+  // Undocumented order (03 directly after 02b): record what really happens.
+  const filledB2 = path.join(DIR, "02b-rls2.sql");
+  writeFileSync(filledB2, fill(tpl02b, b.siteV, "probe_rls2"), { mode: 0o600 });
+  const rb2 = psql("probe_rls2", filledB2);
+  assert.equal(rb2.status, 0, `02b (copy) apply failed: ${rb2.err}`);
+  const direct = drop03("probe_rls2");
+  assert.equal(direct.status, 0, `03 directly after 02b failed: ${direct.err}`);
+  assert.equal(lastLine(direct.out), "CLEANUP OK");
+  assert.match(direct.err, /AFTER: public\.articles rls_enabled=t vowasia_policies_left=0/, "03 directly: policies gone via DROP OWNED, RLS stays ON (manual step still needed)");
   await withClient("postgres", async (c) => {
     await c.query("DROP DATABASE probe_rls");
-    await c.query("DROP ROLE vowasia_migrator");
+    await c.query("DROP DATABASE probe_rls2");
   });
-  log("G 02b: refuses unfilled; RLS guard stops while another login role can read (nothing changed); filled version applies on a throwaway database (syntax only), then removed");
+  log("G 02b: refuses unfilled; guard stops for another login role AND a NOLOGIN role (nothing changed); applies with RLS SETUP OK, role NOINHERIT + VALID UNTIL; manual removal then 03 -> CLEANUP OK, RLS back off; 03 directly after 02b -> CLEANUP OK, policies dropped, RLS stays ON");
   log("ALL PROBE CHECKS PASSED");
 }
 

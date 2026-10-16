@@ -3,15 +3,29 @@
 -- 03-drop-role-and-views.sql: DỌN sau khi xong (hoặc khi tự kiểm của 02 báo STOP).
 -- Xoá schema vowasia_ro (kèm hai view), mọi quyền/đối tượng của vowasia_migrator
 -- trong database này, rồi xoá role. Không đụng bảng gốc, không đụng role khác.
---   psql -v ON_ERROR_STOP=1 -f scripts/migrate/vowasia/sql/03-drop-role-and-views.sql
+--   psql -v ON_ERROR_STOP=1 -v legacy_db=TÊN_DB_CŨ -f scripts/migrate/vowasia/sql/03-drop-role-and-views.sql
+-- -v legacy_db là BẮT BUỘC: tên database CŨ. Thiếu nó, psql báo lỗi cú pháp ở dòng
+-- set_config và dừng trước mọi thay đổi. File dừng nếu đang nối vào 'neondb'
+-- (Central) hoặc database khác tên đã đưa.
 -- Thứ tự quan trọng: DROP OWNED BY trước DROP ROLE (nếu không, DROP ROLE lỗi khi còn grant).
 -- Nếu role còn quyền ở database KHÁC trong cùng cụm: chạy DROP OWNED BY ở database đó trước.
 -- Chạy lại nhiều lần vẫn an toàn.
 -- 03 KHÔNG tắt RLS: nếu đã dùng phương án 1 (02b), gỡ policy và (chỉ khi trước đó RLS
--- đang tắt) tắt RLS BẰNG TAY theo đầu file 02b; NOTICE cuối file in trạng thái để đối chiếu.
+-- đang tắt) tắt RLS BẰNG TAY TRƯỚC, theo đầu file 02b; NOTICE cuối file in trạng thái để đối chiếu.
 
--- Đang nối vào đâu, bằng ai. Phải là DB CŨ (không phải Central /neondb). Sai: Ctrl+C ngay.
+-- Đang nối vào đâu, bằng ai (chỉ để ghi lại; chốt thật là khối DO ngay dưới).
 SELECT current_database() AS database_name, current_user AS running_as;
+
+SELECT set_config('vowasia.legacy_db', :'legacy_db', false) IS NOT NULL AS legacy_db_given;
+DO $$
+BEGIN
+  IF current_database() = 'neondb' THEN
+    RAISE EXCEPTION 'DB NAME STOP: connected to neondb (Central), not the old database; nothing was dropped.';
+  END IF;
+  IF current_database() <> current_setting('vowasia.legacy_db') THEN
+    RAISE EXCEPTION 'DB NAME STOP: connected database is not the given legacy_db; nothing was dropped.';
+  END IF;
+END $$;
 
 DROP SCHEMA IF EXISTS vowasia_ro CASCADE;
 

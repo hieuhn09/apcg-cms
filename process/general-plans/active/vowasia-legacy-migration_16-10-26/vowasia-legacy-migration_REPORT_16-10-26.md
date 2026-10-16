@@ -177,3 +177,36 @@ Số liệu cổng (sau sửa, tuần tự, G6 một mình):
 - Số file: 26 dưới `scripts/migrate/vowasia/` + 1 backlog = 27; `package.json` +3 dòng (không đổi). Không file mới.
 
 Known-Gap còn lại (ghi, không chặn): probe không có zsh nên quy tắc dán lệnh chỉ kiểm bằng quét tĩnh; PG ≤ 14 (PUBLIC có CREATE trên `public`) chỉ được phủ bằng logic tự kiểm, không chạy thật; hàm SECURITY DEFINER ở schema ngoài `public` chỉ được báo (NOTICE), không chặn.
+
+## Vòng sửa EVL 2 (16-10-26, sửa phát hiện review G9 lần 2)
+
+TL;DR: sửa đủ m-A..m-H và các NIT rẻ; m-I chấp nhận. Mọi cổng xanh, probe thêm 7 ca (DB NAME STOP, STOP vì hàm SECURITY DEFINER PUBLIC gọi được, role NOLOGIN chặn 02b, hai thứ tự gỡ 02b). Số file vẫn 27 (26 dưới `scripts/migrate/vowasia/` + 1 backlog), `package.json` vẫn +3 dòng. Không file mới.
+
+| Mục | Kết quả | Bằng chứng |
+|---|---|---|
+| m-A dòng OK vô điều kiện | Đã sửa: 02 in `SELF-CHECK OK` chỉ khi role VÀ schema tồn tại, còn lại `SELF-CHECK FAILED: nothing created`; 02b in `RLS SETUP OK` chỉ khi role + 2 policy + RLS bật | probe C (`lastLine = SELF-CHECK OK`), G (`RLS SETUP OK`) |
+| m-B gia hạn role | Đã sửa doc + header 02: đổi mật khẩu KHÔNG gia hạn; chọn Dọn rồi chạy lại 02, HOẶC một lệnh `ALTER ROLE vowasia_migrator VALID UNTIL '...'` (một khối, không `#`, không `<...>`) | quét khối lệnh: 0 dòng `#`/`<`/`>`, mỗi khối 1 dòng |
+| m-C 02b | Đã sửa: (a) hàng rào bắt MỌI role không phải chủ/superuser/BYPASSRLS (kể cả NOLOGIN), và PUBLIC; bỏ qua role hệ thống `pg_*` (thành viên đăng nhập vẫn bị bắt qua kế thừa); (b) `SET LOCAL lock_timeout = '3s'`; (c) role NOINHERIT + VALID UNTIL 14 ngày; (d) tự kiểm PUBLIC như 02 (CREATE database/schema, hàm SECURITY DEFINER, bảng ngoài articles/sites, quyền ghi) + kiểm trạng thái cuối trong giao dịch. 01 thêm mục 5a (role NOLOGIN đọc được hai bảng) và 5e (đồ thị thành viên) | probe G: `probe_anon NOLOGIN` có SELECT -> `RLS GUARD STOP ... probe_anon`, không đổi gì; role sau 02b `NOT rolinherit` + `rolvaliduntil` ~14 ngày |
+| m-D view khoá cột | Đã sửa: câu rõ trong doc (ghi chú O3) và header 02: không chạy migration đổi cột articles/sites giữa 02 và 03 | doc |
+| m-E chốt tên DB | Đã sửa: 02/02b có chỗ giữ chỗ `__LEGACY_DB_NAME__` (chặn nếu chưa điền), `RAISE` khi `current_database() = 'neondb'` hoặc khác tên đã điền; 03 bắt buộc `-v legacy_db=...` (thiếu -> lỗi cú pháp psql, dừng trước mọi DROP; sai/`neondb` -> `DB NAME STOP`). Bỏ câu "Ctrl+C ngay"; doc thêm bước một lệnh `psql ... -At -c 'SELECT current_database()'` chạy TRƯỚC | probe C: tên sai, `neondb` (02 và 03) -> STOP, 0 role/schema; E: 03 thiếu/sai biến -> không xoá gì (role + schema còn 2) |
+| m-F SECURITY DEFINER ngoài public | Đã sửa: nâng thành STOP mặc định (02 và 02b). Tham số rõ `allow_definer_outside_public constant text := 'no'` trong khối tự kiểm; chủ chỉ đổi `'yes'` sau khi xem 01 mục 5d. Lý do: hàm đó chạy bằng quyền chủ hàm, có thể đọc/ghi bảng gốc vượt view; im lặng là rủi ro; dừng-và-báo rẻ hơn | probe C: hàm `probe_ext.leak()` SECURITY DEFINER, PUBLIC có USAGE -> `SELF-CHECK STOP ... 1 SECURITY DEFINER function(s) outside public`, không tạo gì |
+| m-G cột articles/sites | Đã sửa: 01 mục 6b SELECT `information_schema.columns` (table_name, column_name, data_type, ordinal_position); doc O2/O3 dặn dùng nó điền `__ARTICLE_COLUMNS__` | G10a xanh (01 vẫn chỉ đọc); probe C0 chạy 01 tới cuối |
+| m-H thứ tự gỡ 02b | Đã sửa: một thứ tự duy nhất ở header 02b và doc: gỡ policy (+ DISABLE RLS chỉ khi BEFORE ghi `f`) BẰNG TAY TRƯỚC, rồi 03. Lý do: 03 không đổi RLS bảng gốc; nếu chạy 03 trước, policy mất nhưng RLS vẫn bật. Probe đo thật cả hai đường | probe G: gỡ tay rồi 03 -> `CLEANUP OK`, `AFTER rls_enabled=f vowasia_policies_left=0`; 03 thẳng sau 02b -> `CLEANUP OK`, `AFTER rls_enabled=t vowasia_policies_left=0` (DROP OWNED xoá policy, RLS VẪN BẬT: xác nhận thứ tự đúng) |
+| NIT `nano` thay TextEdit | Đã sửa (cảnh báo dấu nháy cong; phím tắt nano) | doc O3.3 |
+| NIT `mkdir -m 700` | Đã sửa | doc O3.1 |
+| NIT bỏ `export LEGACY_ADMIN_URL` | Đã sửa ở O2 và Dọn; câu quy tắc an toàn sửa đúng: URL role mới chỉ ở `LEGACY_VOWASIA_DB_URL`, URL quản trị chỉ ở `LEGACY_ADMIN_URL` (không export); "không truyền URL qua cờ dòng lệnh của công cụ discover" | doc |
+| NIT O4 host trực tiếp | Đã sửa: không dùng pooler (`user.projectref`) | doc O4 |
+| NIT xoá file riêng tư | Đã sửa: `rm -f ~/vowasia-private/02-filled.sql ~/vowasia-private/overlay.json` sau Dọn | doc |
+| NIT PG ≤ 14 | Đã sửa: ghi chú tự kiểm luôn STOP, dừng-và-báo là đúng, không tự REVOKE (doc + header 02) | logic; KHÔNG chạy trên PG 14 thật (Known-Gap giữ) |
+| NIT O1 DATABASE_URL | Đã sửa: cần `DATABASE_URL` của Central đã đặt; thiếu thì `Invalid URL`, dừng | doc O1 |
+| m-I role cấp cụm | Chấp nhận (không sửa code): doc thêm câu chạy 01 mục 5c/5d ở từng database role kết nối được | doc O3 ghi chú |
+| Plan còn liệt kê `--site-id` | Không sửa ở đây (plan ngoài phạm vi vòng này): để UPDATE PROCESS sửa Public Contracts/CLI của plan | — |
+
+Số liệu cổng (tuần tự, G6 một mình):
+- G1 `test:migrate-vowasia` 53/53. G2 `lint:migrate` 0 lỗi, 1 cảnh báo có sẵn (`seed-gtp-legacy-fixture.ts`). G3 `typecheck` exit 0. G4 `test:migrate-gtp` 69/69. G5 `test:single-home` 267/267.
+- G6 probe PG16 (cổng 54336): ALL PROBE CHECKS PASSED (A/B, C0, C gồm DB NAME STOP + definer STOP, D, D2, E gồm 03 thiếu/sai `legacy_db`, F, G gồm NOLOGIN + hai thứ tự gỡ); dọn sạch.
+- G7 chỉ `package.json`; G7b 3 dòng đều có `vowasia`; G7c rỗng; G8 exit 0.
+- G10 (a, b, c) rỗng (lần đầu G10a bắt chuỗi `INSERT, UPDATE` trong truy vấn mới 5a của 01; đã thu về `'SELECT'`, 02b vẫn kiểm quyền ghi). G13 file backlog có.
+- Số file: 26 + 1 backlog = 27; `package.json` +3 dòng.
+
+Known-Gap còn lại: không có zsh (quy tắc dán lệnh chỉ kiểm tĩnh); PG ≤ 14 chỉ phủ bằng logic; probe dùng database tên `neondb` cục bộ giả để chứng minh chốt tên, không phải Central thật.
