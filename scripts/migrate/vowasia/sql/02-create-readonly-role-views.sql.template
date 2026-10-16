@@ -37,6 +37,10 @@
 --     information_schema (hàm đó chạy bằng quyền chủ hàm, có thể đọc/ghi bảng gốc).
 --     Hàm trả kiểu trigger / event_trigger KHÔNG tính (không gọi trực tiếp được;
 --     Supabase hay có hàm kiểu handle_new_user).
+--     Hàm SECURITY DEFINER trả trigger/event_trigger KHÔNG bị chặn: về lý thuyết role
+--     (có TEMP thừa hưởng từ PUBLIC) có thể kích hoạt chúng qua bảng tạm nếu tự tắt
+--     default_transaction_read_only; công cụ discover không làm được (BEGIN READ ONLY,
+--     chỉ SELECT), và chính file này không gây hại gì từ đó.
 --     Chỉ nới khi chủ đã xem file 01 mục 5d và chấp nhận: đổi allow_definer_outside_public
 --     trong khối TỰ KIỂM từ 'no' thành 'yes' (vẫn chặn hàm trong schema public).
 --   - PostgreSQL <= 14: PUBLIC mặc định có CREATE trên schema public, nên tự kiểm

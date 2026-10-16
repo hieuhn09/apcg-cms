@@ -7,7 +7,7 @@
 --
 -- Cách dùng: dán CẢ file vào SQL Editor, thay __LEGACY_DB_NAME__ (mọi lần xuất hiện:
 -- tìm-và-thay của Editor là Cmd+Option+F trên Mac, Ctrl+H trên Windows/Linux, rồi bấm
--- Replace All; sau đó tìm '__' để chắc không còn chỗ giữ chỗ) bằng tên database CŨ
+-- Replace All; sau đó tìm chữ LEGACY_DB_NAME để chắc không còn chỗ giữ chỗ) bằng tên database CŨ
 -- (dòng '1 connection' của 01e; với Supabase thường là postgres), rồi Run. Ô kết quả
 -- cuối, cột vowasia_cleanup_check, phải là đúng 'CLEANUP OK'; các cột còn lại của
 -- cùng hàng cho trạng thái RLS/policy SAU khi dọn (Editor không hiện NOTICE).

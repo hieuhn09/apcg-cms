@@ -30,6 +30,10 @@
 --   - lock_timeout 3 giây cho ALTER TABLE: nếu bảng đang bận, chờ TỐI ĐA 3 giây rồi
 --     báo lỗi (cả giao dịch huỷ) thay vì chờ lâu và chặn site cũ;
 --   - tự kiểm quyền PUBLIC của role mới (như file 02) và trạng thái cuối, TRƯỚC COMMIT.
+--   - Hàm SECURITY DEFINER trả trigger/event_trigger KHÔNG bị chặn: về lý thuyết role
+--     (có TEMP thừa hưởng từ PUBLIC) có thể kích hoạt chúng qua bảng tạm nếu tự tắt
+--     default_transaction_read_only; công cụ discover không làm được (BEGIN READ ONLY,
+--     chỉ SELECT), và chính file này không gây hại gì từ đó.
 --
 -- Gỡ (MỘT thứ tự duy nhất, giống VOWASIA-LEGACY.md mục Dọn):
 --   1. BẰNG TAY, TRƯỚC: DROP POLICY vowasia_migrator_articles ON public.articles;

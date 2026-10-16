@@ -316,3 +316,23 @@ Mọi dòng không phải comment có từ `password` (ranh giới từ, nên `n
 - SCRAM chỉ thử trên PG16 cục bộ với `127.0.0.1`; đăng nhập qua session pooler Supabase chưa xác nhận.
 - 02p và 03e chỉ thử bằng superuser cục bộ (02/03 đã thử bằng chủ không-superuser).
 - Điều kiện `5f`/`5g` của 01e dùng ACL (grantee 0) còn 02 dùng `has_*_privilege` của role: tương đương khi role chỉ có quyền của PUBLIC, chỉ thử trên ca probe.
+
+## Vòng sửa tài liệu cuối (Amendment 1, sau review G9 delta, 16-10-26)
+
+Chỉ đổi chữ trong `VOWASIA-LEGACY.md` và dòng chú thích `--` của `sql/02*`, `sql/02b*`, `sql/03e*`. Logic SQL và mã TypeScript không đổi. Vẫn 30 file mới, `package.json` không đổi.
+
+| Mục | Đã sửa | Bằng chứng |
+|---|---|---|
+| MIN-1 `__` trong chú thích 03e | có | chú thích nay nói "tìm chữ LEGACY_DB_NAME"; thay thử 4 chỗ giữ chỗ trên bản sao tạm ngoài repo: `grep -c __` = 0 ở 02, 02p, 03e |
+| MIN-2 bảng chỗ dừng thiếu "already exists" | có | thêm hàng `role "vowasia_migrator" already exists` (đã OK thì sang B4, không thì B6 rồi B3); hàng "bypasses RLS" sửa: role cùng tên có sẵn bị chặn sớm hơn bởi `CREATE ROLE` (02 dòng 84) |
+| MIN-3 dự báo dừng ở B2 | có | nêu cả `in_public=yes` (dừng cứng) và `in_public=no` (dừng khi `allow_definer_outside_public` = `'no'`) |
+| MIN-4 clipboard | có, phương án đơn giản | B4 không chép mật khẩu; B5: chép chuỗi Session pooler vào ghi chú, đổi user, RỒI quay lại B4 chép `new_secret` và thay `[YOUR-PASSWORD]`; tab lỡ đóng thì Run lại 02p. Không dùng phép thay chuỗi của zsh vì chưa thử được trong zsh thật và cú pháp ngoặc vuông mong manh; cách ghi chú ít bước hơn, sai thì chỉ lỗi kết nối |
+| MIN-5 hàm trigger SECURITY DEFINER | có | một câu trung thực ở "Quy tắc an toàn" và chú thích đầu 02, 02b |
+| MIN-6 hạn 14 ngày + view khoá cột ở cách B | có | thêm vào Hạn chế của cách B: quá hạn thì B6, B3, B4, B5 lại (không gia hạn bằng psql); không migration đổi cột articles/sites giữa B3 và B6 |
+| NIT md5 | có | B2 và B4: `password_encryption` = `md5` thì DỪNG, báo orchestrator |
+| NIT nút copy / xoá clipboard | có | dự phòng bấm ô rồi Cmd+C; sau B5 chép một chữ vô hại |
+| NIT Cmd+H | có | `grep -n "Cmd+H"` doc: 0 kết quả |
+| NIT id site | có | O2 mục 6 và B2: không cần gửi cho ai |
+| NIT `\` trong 01e | có | ghi chú ở B2: thoát của LIKE, không phải meta-lệnh |
+
+Cổng chạy lại (16-10-26): G1 56/56; G2 0 lỗi, 1 cảnh báo có sẵn; G3 exit 0; G4 69/69; G5 267/267; G7 chỉ `package.json`; G7b 3 dòng; G7c rỗng; G8 exit 0; G10 (3 lệnh, gồm cổng mật khẩu danh sách trắng) rỗng; G10a rỗng; G13 exit 0. G6 (probe) không chạy: không đổi gì probe dùng. Quét tĩnh doc: mỗi khối bash một dòng, không `#`/`<`/`>`, không `postgres://`/`postgresql://`, không "Cmd+H".
