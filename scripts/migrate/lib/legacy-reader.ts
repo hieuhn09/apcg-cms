@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import pg from "pg";
-import { ALLOWED_TABLES, EPOCH, LegacyReadOnlyDb, catalogColumns, cursorOf, keysetPage, setCatalog, siteAuthorsRows, siteRow, slugPlanRows, type AllowedTable, type TableSpec } from "./legacy-sql";
+import { ALLOWED_TABLES, CURSOR_TS, EPOCH, LegacyReadOnlyDb, catalogColumns, cursorOf, keysetPage, setCatalog, siteAuthorsRows, siteRow, slugPlanRows, type AllowedTable, type TableSpec } from "./legacy-sql";
 import { redactRow } from "./gtp-exports";
 import { writeFileSafe, writeJsonSafe } from "./out-dir";
 import { readNdjson } from "./run-dir";
@@ -36,6 +36,7 @@ export const READER_MESSAGES = {
   siteNotGtp: "legacy: the site filter does not point at the site with slug gtp; refusing (another site must never be read).",
   snapshotMissing: "legacy: --from-snapshot directory has no manifest.json; refusing.",
   snapshotSite: "legacy: the snapshot was taken for a different site filter; refusing.",
+  noProgress: "legacy: keyset paging did not advance (same cursor twice); refusing to loop or re-read rows.",
 } as const;
 
 export class LiveLegacyReader implements LegacyReader {
@@ -86,9 +87,13 @@ export class LiveLegacyReader implements LegacyReader {
     for (;;) {
       const rows = await this.db.query(keysetPage(this.schema, table, cols, this.siteId, cursor, pageSize, this.allow));
       if (!rows.length) return;
+      const next = cursorOf(table, rows[rows.length - 1] as Row);
+      // Amendment 5 guard: a full page whose cursor does not advance would loop or re-read forever.
+      if (cursor !== null && JSON.stringify(next) === JSON.stringify(cursor)) throw new Error(READER_MESSAGES.noProgress);
+      for (const r of rows) delete r[CURSOR_TS];
       yield rows;
       if (rows.length < pageSize) return;
-      cursor = cursorOf(table, rows[rows.length - 1] as Row);
+      cursor = next;
     }
   }
   async close(): Promise<void> {
