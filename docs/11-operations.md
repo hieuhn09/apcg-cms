@@ -159,6 +159,23 @@ and status.
   gtp script. The six author names are confirmed by the owner (13-10-26); roles and short
   bios are in the fixture (no city), editable later; fix names BEFORE `--apply` (renaming later touches every
   mirror, see the playbook).
+- **Asia Economic Review rollout (owner-run; tenant `aer`):** the rule ships in code
+  (`ENGINE_BLOCKED_PILLARS.aer = ["long-view", "interviews", "in-focus"]`; NO
+  `SINGLE_HOME_PILLARS` entry) and is inert until the tenant exists. No migration.
+  **Status 19-10-26: code only, nothing applied.** Steps: (1) merge + deploy; (2) create the
+  tenant by hand in /admin from `AER_TENANT_FIELDS` (`docs/07-website-management.md`;
+  slug `aer`, `autoPublishEngineDrafts` off, frontend URL empty); (3) print host and
+  database name: `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-aer-taxonomy -- --confirm-host=<hostname>` (6 pillars, 12 sub-sections,
+  1 newsletter, 4 authors, 6 tags = 29 rows, all `create`); (5) apply from an interactive
+  terminal: `npm run audit:add-aer-taxonomy -- --apply --confirm-host=<hostname>`;
+  (6) re-run the dry run: all 29 rows must read `exists`; (7) read token:
+  `npx tsx scripts/mint-token.ts read --tenant aer --label frontend-preview`; (8) engine
+  record `content-engine-aer` in Console `/console/engines/new`: writer, allowed tenant only
+  `aer`, actions only `create_article` + `update_article`, hub flags off; (9) add the aer-web
+  origin to `PUBLIC_API_ALLOWED_ORIGINS`. Same guards, never-overwrite and refuse
+  behaviour as the vowasia script. Author bios and the tag set are PENDING OWNER wording.
 
 ## Token rotation
 
