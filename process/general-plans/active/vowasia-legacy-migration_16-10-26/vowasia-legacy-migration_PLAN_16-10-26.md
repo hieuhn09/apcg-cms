@@ -616,7 +616,7 @@ Execute start: T1 đỏ-trước (out-dir.test.ts: a, b độc lập, c) rồi c
 
 ## Amendment 3 (19-10-26): kết quả Giai đoạn A thật + kế hoạch Giai đoạn B
 
-Status: PLANNED cho B (chưa EXECUTE). HS7 nay ĐƯỢC MỞ cho việc LẬP PLAN B: đã có discover thật + quyết định C8/C3/C10/ảnh. Việc THỰC THI B vẫn cần: PVL của mục này (`### Validate Contract (Giai đoạn B)`), xác nhận A1 (O1), và trả lời các câu hỏi mở ở mục 3.9. `## Validate Contract` ở trên chỉ phủ Giai đoạn A, không phủ B.
+Status: PLANNED cho B (chưa EXECUTE). HS7 nay ĐƯỢC MỞ cho việc LẬP PLAN B: đã có discover thật + quyết định C8/C3/C10/ảnh. Việc THỰC THI B vẫn cần: PVL của mục này (`### Validate Contract (Chặng B-α)`: PASS 19-10-26; `### Validate Contract (Chặng B-β)`: chờ đo B-0b + PVL riêng), xác nhận A1 (O1), và trả lời các câu hỏi mở ở mục 3.9. `## Validate Contract` ở trên chỉ phủ Giai đoạn A, không phủ B.
 
 ### 3.1 Sự kiện: chạy thật Giai đoạn A (19-10-26, chủ chạy, một lần ngồi)
 
@@ -784,9 +784,9 @@ Danh sách AC giai đoạn B (PVL-S2, U25): AC-B1 C8 đúng bảng, cặp lạ r
 
 - Touchpoints (PVL-S2, U20; mọi đường dẫn dưới `scripts/migrate/vowasia/` trừ khi ghi khác; file ngoài danh sách -> HS2 dừng):
   - Chặng B-α, file ĐÃ CÓ (giai đoạn A) được sửa: `lib/vowasia-config.ts` (thêm `excerpt`, `imageCredit`, `tags`, `updatedAt` vào enum `ROLE_NAMES`, U1) + test của nó; `legacy-source.vowasia.json` (thêm 4 vai `columnRoles`, U1); `fixtures/overlay.fixture.json` và mọi fixture/test giai đoạn A đọc cấu hình đó (để vai mới hợp lệ); `package.json` (2 dòng). Vì đầu vào cấu hình/reader đổi nên chạy lại G1 và G6.
-  - Chặng B-α, file MỚI: `snapshot-vowasia.ts`, `lib/snapshot-vowasia-main.ts` (+ test); `measure-vowasia.ts`, `lib/measure-vowasia-main.ts` (+ test); `lib/assert-outside-repo.ts` (+ test, guard nghiêm U22); `lib/vowasia-stable-filename.ts` (+ test, bản `stableFilename` tiền tố `vowasia-`, U4); `lib/gtp-import-pins.ts` hoặc tệp ghim sha256 tương đương (+ test, U5); fixture tối thiểu snapshot/measure dưới `fixtures/vowasia-legacy/` và server ảnh giả.
+  - Chặng B-α, file MỚI: `snapshot-vowasia.ts`, `lib/snapshot-vowasia-main.ts` (+ test); `lib/vowasia-mapping.ts` (+ test, B-1; sửa chữ PVL-S3 V-W1: B-1 thuộc chặng B-α theo dòng chia chặng ở 3.5); `measure-vowasia.ts`, `lib/measure-vowasia-main.ts` (+ test); `lib/assert-outside-repo.ts` (+ test, guard nghiêm U22); `lib/vowasia-stable-filename.ts` (+ test, bản `stableFilename` tiền tố `vowasia-`, U4); `lib/gtp-import-pins.ts` hoặc tệp ghim sha256 tương đương (+ test, U5); fixture tối thiểu snapshot/measure dưới `fixtures/vowasia-legacy/` và server ảnh giả.
   - Chặng B-β, file ĐÃ CÓ được sửa: `VOWASIA-LEGACY.md`; `package.json` (7 dòng); fixture `fixtures/vowasia-legacy/**` mở rộng.
-  - Chặng B-β, file MỚI: `lib/vowasia-{mapping,transform,body,author-distribution,slug-plan,media}.ts` (+ test), `lib/{import,rollback,verify,rewrite-links}-vowasia-main.ts` (+ test), CLI `import-vowasia.ts`, `rollback-vowasia.ts`, `rewrite-links-vowasia.ts`, `build-vowasia-redirects.ts` (+ test), `verify-vowasia.ts`, `lib/vowasia-timestamps.ts` (+ test, bản sao bộ sinh `gtp-timestamps.ts` cho B-10), `fixtures/rehearse-vowasia.sh`, `rehearse-assert.ts`; backlog stub G23.
+  - Chặng B-β, file MỚI: `lib/vowasia-{transform,body,author-distribution,slug-plan,media}.ts` (+ test), `lib/{import,rollback,verify,rewrite-links}-vowasia-main.ts` (+ test), CLI `import-vowasia.ts`, `rollback-vowasia.ts`, `rewrite-links-vowasia.ts`, `build-vowasia-redirects.ts` (+ test), `verify-vowasia.ts`, `lib/vowasia-timestamps.ts` (+ test, bản sao bộ sinh `gtp-timestamps.ts` cho B-10), `fixtures/rehearse-vowasia.sh`, `rehearse-assert.ts`; backlog stub G23.
   - Chỉ ĐỌC (import) các file GTP liệt kê ở 3.4.
 - Public Contracts mới: 9 npm script; định dạng snapshot + manifest ảnh; journal run (định dạng ndjson riêng vowasia, NGOÀI repo); marker `legacy:vowasia`; mục cho `vowasia-web` `src/redirects/redirect-map.json` (giá trị chuỗi hoặc `{"status":410}`, khoá qua `normalise-path`, phục vụ 308 vĩnh viễn bởi `src/lib/redirect-middleware.ts:41`; KHÔNG phải `src/lib/redirect-config.ts`). Không đổi schema Payload, không migration, không đổi API.
 - Blast Radius: dữ liệu Central tenant `vowasia` (bài + Media + object R2 dưới `vowasia/`) KHI chủ chạy `--apply`; không chạm tenant khác (mọi truy vấn qua tenant filter; rollback lọc marker + tenant + run). Tenant vowasia đang TỐI nên không ảnh hưởng người đọc. DB cũ: chỉ đọc qua role tạm.
@@ -808,6 +808,135 @@ Known-Gap B (có tên): KB-1 TLS pooler không kiểm chứng chỉ (`ssl=requir
 
 `vc-agent-strategy-compare`: S2, S6, S7 có (3/7). Khuyến nghị PVL: 3 parallel subagents sonnet (an toàn ghi/rollback; dữ liệu/mapping/ảnh; khả thi rehearsal). EXECUTE: 1 agent opus tuần tự (file gắn chặt). EVL: `vc-tester` sonnet; G19 chạy một mình.
 
-### Validate Contract (Giai đoạn B)
+### Validate Contract (Chặng B-α)
 
-(Placeholder: `vc-validate-agent` viết mục này. Chưa có Gate. Theo U14 sẽ có HAI contract: `Validate Contract (Chặng B-α)` và `Validate Contract (Chặng B-β)`. Giai đoạn B KHÔNG được EXECUTE trước khi mục này có `Gate: PASS` hoặc CONDITIONAL được chủ chấp nhận. B-0/B-0b có thể EXECUTE trước; B-2/B-3 chờ kết quả đo Q2/Q3.)
+Status: PASS
+Date: 19-10-26
+date: 2026-10-19
+generated-by: inner-pvl: phase-B (chặng B-α)
+
+Phạm vi PASS: CHỈ chặng B-α (B-0 snapshot, B-0b measure, B-1 mapping, fixture tối thiểu snapshot/measure + server ảnh giả, các file MỚI/SỬA của chặng B-α ở 3.8). Chặng B-β (B-2..B-14) KHÔNG được EXECUTE: nó chờ kết quả đo B-0b (Q2, Q3, KB-2) do chủ chạy (OB3b), một plan-supplement ghi kết quả đo, rồi inner PVL riêng với contract riêng (xem `### Validate Contract (Chặng B-β)` bên dưới). Không có contract trước đó cho Giai đoạn B nên không có dòng `supersedes:`; `## Validate Contract` (Giai đoạn A, outer-pvl, 16-10-26) giữ nguyên, không bị thay.
+
+Parallel strategy: sequential (EXECUTE B-α: MỘT `vc-execute-agent` opus tuần tự; EVL: MỘT `vc-tester` sonnet; G22: MỘT `vc-code-reviewer` sonnet)
+Rationale: 7 tín hiệu = 3/7 (S2 bề mặt DB cũ qua role tạm; S6 trust-boundary/secret: URL DB cũ trong env, kho ảnh tải từ host ngoài; S7: khoảng 14 file mới + 4 file sửa). Ngưỡng 2-3 nghiêng parallel subagents, nhưng các file gắn chặt (snapshot dùng config, guard, pins, mapping cùng một cây test) nên tuần tự là đúng việc. Model: opus chỉ cho EXECUTE; còn lại sonnet.
+
+Bằng chứng PVL-S3 (chỉ đọc, 19-10-26, HEAD `84928ca`, cây sạch trước khi ghi contract): `validate-plan-artifact.mjs` 0 FAIL / 0 warning; `test:migrate-vowasia` 59/59; `test:migrate-gtp` 69/69; `lint:migrate` 0 lỗi + 1 cảnh báo có sẵn (`seed-gtp-legacy-fixture.ts:179 't50sec'`); `typecheck` exit 0; `git diff --quiet fe88bc4 HEAD -- scripts/migrate ':(exclude)scripts/migrate/vowasia'` exit 0; G7 hiện chỉ in `package.json` (3 dòng giai đoạn A); G7c rỗng.
+
+Kiểm lại U19-U25 (cycle 2) trong plan đã supplement (`84928ca`):
+- U19 ĐÃ XỬ LÝ: dòng outcome sau mỗi lần thử create (L696); intent treo chỉ quy về bài khi đủ 5 điều kiện (a) không `failed`, (b) (tenant, slug) + marker, (c) id không thuộc run khác, (d) `version === 1`, (e) `createdAt >= startedAt` (L697); preflight `--apply` từ chối khi BẤT KỲ run nào còn intent treo, rollback ghi `resolved` (L698); B-7 (L734), B-8 ba ca bắt buộc (L735), B-12 ca U19 (L739), G17 (L771), G19 (L773), AC-B6 (L781). Kịch bản cycle 2 (sập trước create, run B tạo cùng slug, rollback A xoá nhầm) nay không xảy ra: run B không chạy được khi A còn intent treo, và sau khi A được resolve thì intent không còn "treo".
+- U20 ĐÃ XỬ LÝ: Touchpoints chia theo chặng, liệt kê file giai đoạn A bị sửa kèm lý do (L786) và mọi file mới (L787, L789); G1/G6 chạy lại (L766). Đối chiếu code: `ROLE_NAMES` ở `vowasia-config.ts:65` là enum strict (`:68`), mọi vai `.optional()`, nên thêm 4 vai không làm hỏng overlay fixture; `discover-vowasia.ts:103` chỉ ghi "role skipped" khi cột vai không có, không chặn. Test mới nằm ở `lib/*.test.ts` được glob `test:migrate-vowasia` (`package.json:49`) tự nhặt, nên không phải đổi dòng `package.json` nào. Một lệch chặng còn sót (B-1 `vowasia-mapping.ts` thuộc B-α theo L717 nhưng nằm trong danh sách B-β) đã được validator sửa chữ, xem V-W1.
+- U21 ĐÃ XỬ LÝ: B-α có G6, G7 + G7b (gốc riêng, đúng 2 dòng), G7c (L717); B-β gốc = commit cuối B-α, 7 dòng (L719, L766).
+- U22 ĐÃ XỬ LÝ: guard mới `assertOutsideRepo` từ chối cả thư mục git-ignore trong repo (L701, L710, L787), `assertOutDirSafe` giữ nguyên cho discover; G17/G21 có ca thư mục git-ignore trong repo (L771, L775). Đối chiếu code: `scripts/migrate/vowasia/lib/out-dir.ts` đúng là CHẤP NHẬN thư mục git-ignore trong repo.
+- U23 ĐÃ XỬ LÝ: manifest ghi sha256 của `snapshot.ndjson`, MỘT digest `--expect-sha256` neo cả dòng bài lẫn ảnh (L705, L724, L754); G21 có ca lệch (L775).
+- U24 ĐÃ XỬ LÝ (với một chỗ chưa chặt ở B-β, xem CF1): ảnh thân bài hỏng -> bỏ đoạn ảnh, nháp, dòng báo cáo (L690); map dựng từ trạng thái Central, nhập-nhưng-không-công-khai -> `/<pillar>` là ORCHESTRATOR DEFAULT đã báo chủ (L702); bị importer từ chối -> không mục + báo cáo; G16b + AC-B11/AC-B13 (L778, L781).
+- U25 ĐÃ XỬ LÝ: G16 ghi "redirect vĩnh viễn (308)" và AC-B12 (L770); danh sách AC-B1..AC-B13 riêng (L781).
+
+Sửa chữ do validate-agent áp dụng ở PVL-S3 (V6 bước 1; chỉ đổi nhãn chặng, không đổi phạm vi/file/cổng):
+- V-W2 (dòng Status đầu Amendment 3): trỏ tới hai contract theo chặng thay cho tên placeholder cũ.
+- V-W1 (3.8 Touchpoints): chuyển `lib/vowasia-mapping.ts` (+ test, B-1) từ danh sách "Chặng B-β, file MỚI" sang "Chặng B-α, file MỚI", khớp dòng chia chặng L717 (B-1 thuộc B-α). Không sửa thì EXECUTE B-α có thể dừng ở HS2 khi viết B-1.
+
+Test gates (C3 5-column table, chặng B-α; gốc `BASE_BA = 84928ca`, hoặc bất kỳ commit sau đó chỉ đổi `process/`; executor kiểm lúc bắt đầu `git diff --name-only 84928ca HEAD -- . ':(exclude)process'` phải rỗng và ghi `BASE_BA` vào report):
+
+| criterion id | behavior | strategy | proving test | gap-resolution |
+|---|---|---|---|---|
+| AC-B9, AC-B3 (phần snapshot), AC-B1 (B-1) | snapshot/measure/mapping/guard/pins/stableFilename đúng; test mới ở `lib/*.test.ts` | Fully-Automated | G1 `npm run test:migrate-vowasia` (59 test cũ vẫn xanh + test mới; gồm G18 phần snapshot và G21) | B |
+| AC-B9 | snapshot chỉ SELECT qua builder đóng, cột bắt buộc thiếu -> từ chối, sha256 snapshot/manifest sai -> từ chối, measure không mở DB, ghi chỉ ngoài repo (`assertOutsideRepo`, kể cả thư mục git-ignore trong repo và symlink trỏ vào repo -> từ chối) | Fully-Automated | G21 (trong G1): `snapshot-vowasia-main.test.ts`, `measure-vowasia-main.test.ts`, `assert-outside-repo.test.ts` | B |
+| AC-B3 (phần tải ảnh) | host lạ, http, > 20 MB, redirect sang host khác, magic bytes sai, SVG -> loại; URL dưới khoá JSON lạ vẫn được thu (U2); `hostRewrite` không cục bộ hoặc ngoài chế độ rehearsal -> từ chối (U16c); tệp kho đặt tên theo sha256 (U16b) | Fully-Automated | G18 phần snapshot (trong G1), server ảnh giả cục bộ | B |
+| D-B1 | chống drift hàm GTP import chỉ-đọc: ghim sha256 từng file + test hành vi an ninh | Fully-Automated | `gtp-import-pins` test (trong G1) | B |
+| AC-B1 | bảng C8 cứng: 5 pillar, 6 đổi tên, rỗng -> chỉ pillar, cặp lạ -> reject, mọi đích có trong `vowasia-taxonomy.ts` đúng pillar | Fully-Automated | `vowasia-mapping.test.ts` (trong G1) | B |
+| AC-A* (không vỡ A) | config/reader/discover/role SQL vẫn đúng sau khi thêm 4 vai | Hybrid (PG16 native cục bộ, cổng 54331-54339; điều kiện `/usr/lib/postgresql/16/bin`, `runuser`) | G6 `npm run probe:migrate-vowasia` (chạy MỘT MÌNH) | A |
+| chất lượng | lint + kiểu | Fully-Automated | G2 `npm run lint:migrate` (0 lỗi), G3 `npm run typecheck` (exit 0) | A |
+| AC-B8 | GTP không đổi | Fully-Automated | G4 `npm run test:migrate-gtp` (69/69), G5 `npm run test:single-home`, G8/G20 `git diff --quiet fe88bc4 -- scripts/migrate ':(exclude)scripts/migrate/vowasia'` exit 0 | A |
+| AC-B8 | chỉ file được phép đổi | Fully-Automated | G7 `git diff --name-only 84928ca -- . ':(exclude)scripts/migrate/vowasia' ':(exclude)process/general-plans'` chỉ in `package.json`; G7b `git diff -U0 84928ca -- package.json \| grep -E '^\+[^+]'` đúng 2 dòng (`migrate:vowasia:snapshot`, `migrate:vowasia:measure`), mọi dòng chứa `vowasia`, VÀ `git diff -U0 84928ca -- package.json \| grep -E '^-[^-]'` rỗng; G7c `! git ls-files --others --exclude-standard \| grep -vE "^(scripts/migrate/vowasia/\|process/general-plans/)"` | B |
+| HS1 (SQL không đổi) | B-α không chạm SQL chủ chạy | Fully-Automated | `git diff --quiet 84928ca -- scripts/migrate/vowasia/sql` exit 0; G10/G10a/G10c và G13 chạy lại như giai đoạn A | A |
+| AC-B5, AC-B9 | review snapshot/measure/guard/pins/mapping (secret không in, không ghi ngoài thư mục chỉ định, chỉ SELECT) | Agent-Probe | G22 `vc-code-reviewer` (sonnet) | B |
+| AC-B9 (dữ liệu thật) | snapshot thật trên DB cũ (OB2-OB4 + OB3b), 368 dòng, số ảnh lỗi, digest | (residual, xem dưới) | chủ chạy; kết quả ghi vào report task | C |
+
+Failing stub (G1/G21, red-first, tên khớp kịch bản):
+test("should refuse a snapshot --out inside the repo even when git-ignored", () => { throw new Error("NOT IMPLEMENTED — TDD stub: assertOutsideRepo refuses in-repo git-ignored dir") })
+test("should refuse to snapshot when a required column role is not in the view catalog", () => { throw new Error("NOT IMPLEMENTED — TDD stub: snapshot refuses missing required column") })
+test("should refuse import input when snapshot.ndjson sha256 differs from the manifest", () => { throw new Error("NOT IMPLEMENTED — TDD stub: manifest anchors snapshot digest") })
+test("should never open a DB connection in measure", () => { throw new Error("NOT IMPLEMENTED — TDD stub: measure is offline") })
+Failing stub (G18 phần snapshot):
+test("should collect an allow-listed image URL found under an unknown JSON key", () => { throw new Error("NOT IMPLEMENTED — TDD stub: generic URL collection U2") })
+test("should reject SVG, wrong magic bytes, over 20 MB, non-https and off-allowlist redirects", () => { throw new Error("NOT IMPLEMENTED — TDD stub: hardened fetch rules") })
+test("should refuse hostRewrite outside explicit rehearsal mode", () => { throw new Error("NOT IMPLEMENTED — TDD stub: hostRewrite U16c") })
+Failing stub (D-B1):
+test("should fail when any imported GTP file changes by one byte", () => { throw new Error("NOT IMPLEMENTED — TDD stub: sha256 pins") })
+Failing stub (AC-B1):
+test("should map the 6 renamed sub-sections and reject an unknown (section, subsection) pair", () => { throw new Error("NOT IMPLEMENTED — TDD stub: C8 table") })
+Failing stub (G7b, lệnh, không phải test file): đỏ trước khi thêm 2 dòng (đếm 0), xanh khi đúng 2.
+
+Legacy line form:
+- snapshot/measure/mapping/guard: Fully-automated: `npm run test:migrate-vowasia`
+- không vỡ A: hybrid: `npm run probe:migrate-vowasia` + precondition PG16 native, chạy một mình
+- GTP không đổi: Fully-automated: `npm run test:migrate-gtp`; `git diff --quiet fe88bc4 -- scripts/migrate ':(exclude)scripts/migrate/vowasia'`
+- phạm vi file: Fully-automated: G7, G7b, G7c như bảng
+- review: agent-probe: `vc-code-reviewer` trên file B-α
+- snapshot thật: known-gap: documented (owner-run OB2-OB4, OB3b)
+
+Dimension findings:
+- Infra fit: PASS — guard mới nghiêm cho snapshot `--out`/kho ảnh; cổng probe riêng; không chạm Central, không R2, không DB ở B-α trừ lần đọc DB cũ do chủ chạy.
+- Test coverage: PASS — mọi hành vi B-α có cổng Fully-Automated (G1/G21/G18 phần snapshot) hoặc Hybrid (G6); snapshot thật là residual có tên.
+- Breaking changes: PASS — chỉ thêm 2 dòng `package.json`; thêm vai tuỳ chọn vào enum (tương thích ngược); không đổi schema Payload, API, GTP.
+- Security surface: PASS — chỉ SELECT qua builder đóng; URL DB chỉ qua env; kho ảnh ngoài repo, quyền 600; repo PUBLIC nên fixture chỉ dùng host giả (E-B5). High-risk pack: có (trust-boundary/secret).
+- 3.1/3.2/3.3 sự kiện và quyết định: PASS
+- 3.4 thiết kế: PASS (phần B-β có CF1-CF5 cho PVL B-β)
+- 3.5 checklist/chặng: PASS — B-α khả thi cơ học: reader `pages()` nhận danh sách cột bất kỳ đã có trong catalog (`vowasia-reader.ts:79-87`), builder `keysetPage` sẵn (`vowasia-sql.ts:181-193`), không cần sửa builder/reader.
+- 3.6 bước chủ: PASS
+- 3.7 cổng: PASS
+- 3.8 touchpoints: PASS sau V-W1
+- 3.9 câu hỏi mở: PASS (Q2/Q3/KB-2 chặn B-β theo thiết kế)
+
+Execute-agent instructions (chặng B-α):
+- E-B1 Red-first: viết các failing stub ở trên trước code; ghi trong report test nào đỏ trước.
+- E-B2 `LiveVowasiaReader.pages()` LẶNG LẼ bỏ cột không có trong catalog (`vowasia-reader.ts:85`: `columns.filter((c) => known.has(c))`). Snapshot PHẢI tự kiểm mọi cột của vai bắt buộc với `reader.columns("articles")` sau `loadCatalog()` và TỪ CHỐI trước khi đọc dòng (L722 U1). Không sửa reader (file giai đoạn A ngoài danh sách sửa).
+- E-B3 `assertOutsideRepo`: so `realpath` của tổ tiên gần nhất đang tồn tại (bắt symlink trỏ vào repo) với `repoRoot()` của `scripts/migrate/vowasia/lib/out-dir.ts` (4 cấp); bằng hoặc nằm trong -> từ chối. Có test: thư mục git-ignore trong repo, symlink ngoài repo trỏ vào repo, thư mục chưa tồn tại ngoài repo (chấp nhận, tạo mode 700).
+- E-B4 Chế độ rehearsal cho `hostRewrite` phải là cờ CLI tường minh, mặc định tắt (không suy ra từ env), test cả hai nhánh.
+- E-B5 Repo PUBLIC: fixture và test chỉ dùng host giả (`*.invalid`/`localhost`), không bao giờ ghi ref project cũ thật, không dữ liệu thật, không URL DB.
+- E-B6 Tệp ghim sha256 (U5) ghim NGAY ở B-α TOÀN BỘ file GTP liệt kê ở 3.4 để import chỉ-đọc (`media-fetch.ts`, `lexical-body.ts`, `gtp-transform.ts` + `gtp-mapping.ts` mà nó import kiểu, `run-dir.ts` + `out-dir.ts` (GTP) mà nó import, `failure-controls.ts`, `rollback-rules.ts`, `load-guard.ts`, `normalise-path.ts`), để B-β không phải sửa tệp ghim.
+- E-B7 Test mới đặt trong `scripts/migrate/vowasia/lib/*.test.ts` (glob G1); không đổi dòng script nào có sẵn.
+- E-B8 Snapshot ghi `query-log.json` (chỉ SELECT) vào thư mục ra như discover; không in site id, URL DB, mật khẩu, nội dung bài ra stdout/stderr.
+- E-B9 Trước OB2: so 15 tên cột ở L722 với báo cáo schema của discover trên máy chủ (mục 6b của 01) để `02` điền đúng ngay lần đầu.
+- E-B10 G6 chạy MỘT MÌNH; không chạy song song `npm ci` hay probe khác; `rehearse:vowasia`/`rehearse:gtp` KHÔNG chạy ở B-α.
+- E-B11 Không sửa file GTP, SQL (`sql/**`), `VOWASIA-LEGACY.md` (B-β), hay file nào ngoài 3.8 B-α -> HS2 dừng.
+
+Open gaps:
+- Snapshot thật (OB2-OB4 + OB3b) chỉ chứng minh khi chủ chạy; bằng chứng cần thu: digest snapshot + digest manifest, 368 dòng, số ảnh tải lỗi, kết quả measure (Q2/Q3/KB-2). Gap-resolution C (đi vào plan-supplement giữa hai chặng).
+- KB-1 (TLS pooler không kiểm chứng chỉ), KB-5 (K2-K6 cho lần tạo role kế tiếp): giữ nguyên.
+
+**What This Coverage Does NOT Prove** (chặng B-α):
+
+- G1/G21/G18 phần snapshot: chạy trên DB giả qua client giả và server ảnh giả; KHÔNG chứng minh tên cột thật của view, tốc độ/giới hạn của pooler, hay hành vi host ảnh thật (CDN, redirect thật, giới hạn băng thông khi project cũ vượt hạn mức).
+- G6: chứng minh reader/discover/role SQL trên PG16 cục bộ; KHÔNG chạy CLI snapshot trên PG thật.
+- G7/G7b/G7c/G8: chứng minh phạm vi file, không chứng minh hành vi.
+- G22: phán đoán của reviewer, không phải bằng chứng máy.
+- Không cổng B-α nào chứng minh import, rollback, redirect, Central, R2 (tất cả thuộc B-β).
+
+Gate: PASS (0 FAIL, 0 CONCERN mở cho chặng B-α; U1-U25 đã xử lý; V-W1 do validator sửa chữ; snapshot thật là residual có tên). Phạm vi PASS = được phép đề nghị ENTER EXECUTE cho chặng B-α; chặng B-β KHÔNG.
+Accepted by: không cần chấp nhận concern (Gate PASS). Chủ vẫn phải nói "ENTER EXECUTE MODE" cho chặng B-α. Chu kỳ PVL Amendment 3: pass 1 (U1-U18), supplement `a02ed5d` + trả lời chủ `30a3df8`, pass 2 (U19-U25), supplement `84928ca`, pass 3 (PASS B-α, V-W1).
+
+### Validate Contract (Chặng B-β)
+
+Status: GATED (chưa validate; KHÔNG EXECUTE)
+date: 2026-10-19
+generated-by: inner-pvl: phase-B (chặng B-β, placeholder)
+
+B-β chỉ được validate sau: (1) chủ chạy OB1-OB4 + OB3b và gửi kết quả measure; (2) plan-supplement ghi Q2 (hình dạng `title`/`excerpt`), Q3 (vị trí ảnh trong `body_sections`), KB-2 (bảng chéo section/subsection); (3) inner PVL riêng từ V1. Gate: chưa có. Known-gap B-β có tên: Q2, Q3, KB-2, KB-3 (G23), KB-4, KB-6.
+
+Mục PHẢI xử lý ở PVL B-β (carry-forward từ PVL-S3, không chặn B-α):
+- CF1 (U24 còn hở, ảnh hưởng tính kiểm được của cổng) `--min-coverage` (L702, L736, AC-B13): tử số "số URL có mục map" gồm cả mục archived -> `/<pillar>` và rejected -> 410, nên tỉ lệ có thể vượt 1 và che mất bài published thiếu mục. Sửa: tử số = số bài nguồn status `published` CÓ mục map; mẫu số = số bài nguồn status `published`; báo riêng số mục archived/nháp/410.
+- CF2 Rollback chạy dry-run (mặc định) KHÔNG được ghi dòng `resolved`; chỉ `--apply` mới ghi. Nêu rõ trong B-8 và test.
+- CF3 Rollback ghi `resolved` vào `--runs-dir`, nên rollback cũng phải qua `assertOutsideRepo`.
+- CF4 Chạy song song hai `--apply` không có khoá; cân nhắc lockfile trong `--runs-dir` (preflight intent treo không bảo vệ khi hai run chạy cùng lúc). Ghi chú; chủ chạy tuần tự.
+- CF5 Câu Q9 (L674) đọc được thành "107 bài archived nhập thành nháp"; C2 và "Hệ quả số" nói archived GIỮ archived. Viết lại một câu cho rõ (archived giữ archived; cả archived lẫn nháp-thiếu-ảnh-bìa -> `/<pillar>`).
+
+### Autonomous Goal Block (Chặng B-α)
+
+SESSION GOAL: VowAsia legacy migration, Giai đoạn B chặng B-α: CLI snapshot (đọc DB cũ một lần qua role tạm, ghi snapshot + kho ảnh + manifest NGOÀI repo), CLI measure (offline), mapping C8, guard `assertOutsideRepo`, ghim sha256 GTP; không file GTP đổi một byte.
+Charter + umbrella plan: N/A — single plan (không có umbrella plan với `## Stable Program Goal`).
+Autonomy: theo feedback_autonomous_phase_execution.md; EXECUTE chỉ sau "ENTER EXECUTE MODE" của chủ cho chặng B-α của plan này; EXECUTE = 1 vc-execute-agent (opus) tuần tự; EVL = vc-tester (sonnet) chạy lại độc lập; G22 = vc-code-reviewer (sonnet). Autonomy chỉ bỏ điểm dừng phê duyệt, không bỏ spawn subagent.
+Hard stops: chỉ tạo mới, không sửa, không xoá, không bao giờ tạo tác giả; dry-run mặc định; `--apply` cần TTY + `--confirm-host` + banner `/neondb`; mỗi `--apply` một run-id MỚI, không `--resume`; rollback theo từng run; rehearsal chạy MỘT lần, một mình, nền, timeout 7200000, không rehearsal song song, không `npm ci` song song; CHỦ chạy mọi bước production và DB cũ (OB1-OB12); không in/commit bí mật, URL DB, mật khẩu, ref project cũ; HS2: file ngoài 3.8 B-α -> dừng; không EXECUTE B-β (B-2..B-14) trước contract B-β PASS.
+Next phase: EXECUTE chặng B-α: process/general-plans/active/vowasia-legacy-migration_16-10-26/vowasia-legacy-migration_PLAN_16-10-26.md
+Validate contract: inline (### Validate Contract (Chặng B-α)), Gate: PASS, generated-by: inner-pvl: phase-B (chặng B-α), 2026-10-19.
+Execute start: red-first stubs rồi B-0, B-0b, B-1, fixture | G1 `npm run test:migrate-vowasia` | G2 `npm run lint:migrate` | G3 `npm run typecheck` | G4 `npm run test:migrate-gtp` | G5 `npm run test:single-home` | G6 `npm run probe:migrate-vowasia` (một mình) | G7/G7b/G7c gốc 84928ca | G8 `git diff --quiet fe88bc4 -- scripts/migrate ':(exclude)scripts/migrate/vowasia'` | SQL không đổi | G22 review | high-risk pack: yes (trust-boundary/secret).
