@@ -33,11 +33,12 @@
  * host, title or body.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { fetchImageWithRetry, sniffMime, type FetchLike } from "../../lib/media-fetch";
 import { CliError, parseArgs, type FlagSpec } from "./args";
 import { assertOutsideRepo } from "./assert-outside-repo";
+import { URL_IN_TEXT, nonAbsoluteRefs } from "./image-refs";
 import { writeFileSafe, writeJsonSafe } from "./out-dir";
 import { DEFAULT_SOURCE, resolvePath } from "./vowasia-cli";
 import { loadSourceConfig, type ColumnRole, type SourceConfig } from "./vowasia-config";
@@ -45,7 +46,7 @@ import { LEGACY_URL_ENV } from "./vowasia-constants";
 import { legacyBanner, legacySsl, sslLabel } from "./vowasia-db-banner";
 import { parseVowasiaMapping, isAllowedMediaUrl } from "./vowasia-mapping";
 import { LiveVowasiaReader, assertVowasiaSite } from "./vowasia-reader";
-import { createSqlRegistry, type SqlRegistry } from "./vowasia-sql";
+import { countRows, createSqlRegistry, type SqlRegistry } from "./vowasia-sql";
 
 export const SNAPSHOT_FLAGS: FlagSpec = {
   "mapping-overlay": "value",
@@ -74,6 +75,9 @@ export const SNAPSHOT_MESSAGES = {
   manifestSnapshotMismatch: "snapshot: snapshot.ndjson sha256 differs from the value recorded in manifest.json; refusing.",
   manifestDigest: "snapshot: sha256 of manifest.json does not match --expect-sha256; refusing.",
   imageDigest: "snapshot: an image file in the store is missing, changed, too large or not an image (sha256/magic bytes); refusing.",
+  countChanged: "snapshot: the number of article rows changed during the read (count before, rows read and count after differ); nothing was written; run the snapshot again when the old site is quiet; refusing.",
+  storeCorrupt: "snapshot: a file already in images/ does not match the sha256 in its name (a corrupt or truncated earlier download); remove that file yourself and run --download-images again; refusing.",
+  storeForeign: "snapshot: images/ holds a file that is neither a stored image (<sha256>) nor a leftover temp file of a crashed run; images/ is for this tool only, move that file away; refusing.",
   noAllowlist: "snapshot: media.hostAllowlist is empty in the overlay; nothing may be downloaded; refusing.",
   badAllowlist: "snapshot: media.hostAllowlist must hold host names only; refusing.",
   rewriteNeedsRehearsal: "snapshot: media.hostRewrite is set but --rehearsal was not passed; a rewrite would fetch from another host than the one recorded; refusing.",
@@ -94,7 +98,8 @@ export const MANIFEST_FORMAT = "vowasia-image-manifest/1";
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const HEX64 = /^[0-9a-f]{64}$/;
 const IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif|svg|bmp|tiff?|heic)(\?|#|$)/i;
-const URL_IN_TEXT = /https?:\/\/[^\s"'<>()\\]+/gi;
+/** Temp file of an interrupted download (`<sha256>.tmp-<pid>-<index>`): the only kind of file a new run deletes. */
+const TMP_LEFTOVER = /^[0-9a-f]{64}\.tmp-\d+-\d+$/;
 const LOCAL_TARGET = /^(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d{1,5})?$/i;
 
 export interface SnapshotMeta {
@@ -102,6 +107,8 @@ export interface SnapshotMeta {
   takenAt: string;
   snapshotSha256: string;
   counts: { articles: number; sites: number };
+  /** count(*) of the site's article rows right before and right after the paged read (equal, and equal to counts.articles). */
+  rowCounts: { before: number; after: number };
   columnRoles: Record<string, string>;
   articleColumns: string[];
 }
@@ -120,6 +127,10 @@ export interface ImageManifest {
   entries: ManifestEntry[];
   failures: { url: string; reason: string }[];
   offAllowlistImageUrls: number;
+  /** Distinct root-relative image references (`/x.jpg`): counted, never fetched. */
+  relativeImageRefs: number;
+  /** Distinct protocol-relative references (`//host/x.jpg`): counted, never fetched. */
+  protocolRelativeImageRefs: number;
 }
 
 export interface SnapshotDeps {
@@ -169,13 +180,24 @@ function walkStrings(v: unknown, visit: (s: string) => void, depth = 0): void {
   else if (v && typeof v === "object") for (const x of Object.values(v)) walkStrings(x, visit, depth + 1);
 }
 
-/** Every distinct URL on an allow-listed host found anywhere in the rows (first-seen order), and the count of image-like URLs elsewhere. */
-export function collectImageUrls(rows: readonly Record<string, unknown>[], isAllowedHost: (url: string) => boolean): { urls: string[]; offAllowlistImageUrls: number } {
+/**
+ * Every distinct URL on an allow-listed host found anywhere in the rows (first-seen order), the count of
+ * image-like URLs elsewhere, and the distinct relative / protocol-relative references (counted, never fetched).
+ */
+export function collectImageUrls(
+  rows: readonly Record<string, unknown>[],
+  isAllowedHost: (url: string) => boolean,
+): { urls: string[]; offAllowlistImageUrls: number; relativeImageRefs: number; protocolRelativeImageRefs: number } {
   const urls: string[] = [];
   const seen = new Set<string>();
   const off = new Set<string>();
+  const rel = new Set<string>();
+  const proto = new Set<string>();
   for (const row of rows) {
     walkStrings(row, (s) => {
+      const na = nonAbsoluteRefs(s);
+      for (const r of na.relative) rel.add(r);
+      for (const r of na.protocolRelative) proto.add(r);
       for (const m of s.matchAll(URL_IN_TEXT)) {
         const raw = m[0].replace(/[.,;:!?]+$/, "").replace(/&amp;/g, "&");
         if (!URL.canParse(raw)) continue;
@@ -188,7 +210,7 @@ export function collectImageUrls(rows: readonly Record<string, unknown>[], isAll
       }
     });
   }
-  return { urls, offAllowlistImageUrls: off.size };
+  return { urls, offAllowlistImageUrls: off.size, relativeImageRefs: rel.size, protocolRelativeImageRefs: proto.size };
 }
 
 /* ── Snapshot input verification (used by measure and, in B-β, import) ── */
@@ -293,7 +315,8 @@ export function verifySnapshotInput(dir: string, o: { expectManifestSha256?: str
 async function readStep(cfg: SourceConfig, outArg: string, deps: SnapshotDeps): Promise<number> {
   if (cfg.source.siteFilter === undefined) throw new SnapshotError(SNAPSHOT_MESSAGES.noSiteFilter);
   const { columns, roles } = snapshotColumns(cfg);
-  const out = assertOutsideRepo(resolvePath(outArg));
+  // check only: --out is created after the read succeeded (G22 N3)
+  const out = assertOutsideRepo(resolvePath(outArg), undefined, { create: false });
   if (existsSync(path.join(out, "snapshot.ndjson")) || existsSync(path.join(out, "snapshot-meta.json"))) throw new SnapshotError(SNAPSHOT_MESSAGES.exists);
   const url = deps.env[LEGACY_URL_ENV];
   const b = legacyBanner(url);
@@ -312,6 +335,13 @@ async function readStep(cfg: SourceConfig, outArg: string, deps: SnapshotDeps): 
       throw new SnapshotError(SNAPSHOT_MESSAGES.missingColumn);
     }
     const site = await assertVowasiaSite(reader, cfg.source.expectedSiteSlug);
+    const countNow = async (): Promise<number> => {
+      const rows = await reader.db.query(countRows(reg, "articles", cfg.source.siteFilter as string));
+      const v = Number(rows[0]?.n);
+      if (!Number.isSafeInteger(v) || v < 0) throw new SnapshotError(SNAPSHOT_MESSAGES.countChanged);
+      return v;
+    };
+    const before = await countNow();
     const lines: string[] = [JSON.stringify({ t: "site", row: site })];
     let n = 0;
     for await (const page of reader.pages("articles", columns, 500)) {
@@ -321,10 +351,23 @@ async function readStep(cfg: SourceConfig, outArg: string, deps: SnapshotDeps): 
         n++;
       }
     }
+    const after = await countNow();
+    // a row inserted / deleted while paging would make the snapshot silently incomplete (G22 M8)
+    if (before !== after || n !== before) throw new SnapshotError(SNAPSHOT_MESSAGES.countChanged);
     const body = lines.join("\n") + "\n";
     const digest = sha256Hex(body);
+    assertOutsideRepo(out);
+    if (existsSync(path.join(out, "snapshot.ndjson")) || existsSync(path.join(out, "snapshot-meta.json"))) throw new SnapshotError(SNAPSHOT_MESSAGES.exists);
     writeFileSafe(path.join(out, "snapshot.ndjson"), body);
-    const meta: SnapshotMeta = { format: SNAPSHOT_FORMAT, takenAt: new Date().toISOString(), snapshotSha256: digest, counts: { articles: n, sites: 1 }, columnRoles: roles, articleColumns: columns };
+    const meta: SnapshotMeta = {
+      format: SNAPSHOT_FORMAT,
+      takenAt: new Date().toISOString(),
+      snapshotSha256: digest,
+      counts: { articles: n, sites: 1 },
+      rowCounts: { before, after },
+      columnRoles: roles,
+      articleColumns: columns,
+    };
     writeJsonSafe(path.join(out, "snapshot-meta.json"), meta);
     writeJsonSafe(path.join(out, "query-log.json"), reader.db.log);
     deps.log(`[snapshot] articles=${n}${reader.duplicatesSkipped ? ` (duplicate keys skipped: ${reader.duplicatesSkipped})` : ""}; files: snapshot.ndjson, snapshot-meta.json, query-log.json`);
@@ -356,11 +399,21 @@ async function downloadStep(cfg: SourceConfig, snapArg: string, rehearsal: boole
     throw new SnapshotError(SNAPSHOT_MESSAGES.badAllowlist);
   }
   const rewrite = assertHostRewriteAllowed(cfg.media?.hostRewrite, rehearsal);
-  const dir = assertOutsideRepo(resolvePath(snapArg));
+  // check only: a missing --snapshot directory is never created (G22 N3)
+  const dir = assertOutsideRepo(resolvePath(snapArg), undefined, { create: false });
   if (existsSync(path.join(dir, "manifest.json"))) throw new SnapshotError(SNAPSHOT_MESSAGES.manifestExists);
   const input = verifySnapshotInput(dir);
   const store = assertOutsideRepo(path.join(dir, "images"));
-  const { urls, offAllowlistImageUrls } = collectImageUrls(input.articles, (u) => {
+  // G22 M7: before any download, delete ONLY leftover temp files of a crashed run; anything else unexpected stops the run
+  let leftovers = 0;
+  for (const f of readdirSync(store)) {
+    if (HEX64.test(f)) continue;
+    if (!TMP_LEFTOVER.test(f)) throw new SnapshotError(SNAPSHOT_MESSAGES.storeForeign);
+    unlinkSync(path.join(store, f));
+    leftovers++;
+  }
+  if (leftovers) deps.log(`[snapshot] removed ${leftovers} leftover temp file(s) of an interrupted earlier run`);
+  const { urls, offAllowlistImageUrls, relativeImageRefs, protocolRelativeImageRefs } = collectImageUrls(input.articles, (u) => {
     try {
       return mapping.media.hostAllowlist.includes(new URL(u).host.toLowerCase());
     } catch {
@@ -370,8 +423,10 @@ async function downloadStep(cfg: SourceConfig, snapArg: string, rehearsal: boole
   const entries: ManifestEntry[] = [];
   const failures: { url: string; reason: string }[] = [];
   let next = 0;
+  let fatal: Error | null = null;
   const worker = async () => {
     for (;;) {
+      if (fatal) return;
       const i = next++;
       if (i >= urls.length) return;
       const u = urls[i] as string;
@@ -394,7 +449,13 @@ async function downloadStep(cfg: SourceConfig, snapArg: string, rehearsal: boole
       }
       const h = sha256Hex(r.bytes);
       const file = path.join(store, h);
-      if (!existsSync(file)) {
+      if (existsSync(file)) {
+        // re-hash before reuse: a stored file must still be exactly the content its name claims (G22 M7)
+        if (sha256Hex(readFileSync(file)) !== h) {
+          fatal ??= new SnapshotError(SNAPSHOT_MESSAGES.storeCorrupt);
+          return;
+        }
+      } else {
         const tmp = `${file}.tmp-${process.pid}-${i}`;
         writeFileSync(tmp, r.bytes, { mode: 0o600 });
         chmodSync(tmp, 0o600);
@@ -404,18 +465,19 @@ async function downloadStep(cfg: SourceConfig, snapArg: string, rehearsal: boole
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(deps.concurrency ?? 4, 8)) }, worker));
+  if (fatal) throw fatal;
   // only content-named files may remain in the store
-  for (const f of readdirSync(store)) if (!HEX64.test(f)) throw new SnapshotError(SNAPSHOT_MESSAGES.imageDigest);
+  for (const f of readdirSync(store)) if (!HEX64.test(f)) throw new SnapshotError(SNAPSHOT_MESSAGES.storeForeign);
   const order = new Map(urls.map((u, i) => [u, i]));
   entries.sort((a, b) => (order.get(a.url) ?? 0) - (order.get(b.url) ?? 0));
   failures.sort((a, b) => (order.get(a.url) ?? 0) - (order.get(b.url) ?? 0));
-  const manifest: ImageManifest = { format: MANIFEST_FORMAT, createdAt: new Date().toISOString(), snapshotSha256: input.snapshotSha256, entries, failures, offAllowlistImageUrls };
+  const manifest: ImageManifest = { format: MANIFEST_FORMAT, createdAt: new Date().toISOString(), snapshotSha256: input.snapshotSha256, entries, failures, offAllowlistImageUrls, relativeImageRefs, protocolRelativeImageRefs };
   const text = JSON.stringify(manifest, null, 2) + "\n";
   writeFileSafe(path.join(dir, "manifest.json"), text);
   const byReason: Record<string, number> = {};
   for (const f of failures) byReason[f.reason] = (byReason[f.reason] ?? 0) + 1;
   const pct = urls.length ? ((failures.length / urls.length) * 100).toFixed(1) : "0.0";
-  deps.log(`[snapshot] images: urls=${urls.length} ok=${entries.length} files=${new Set(entries.map((e) => e.sha256)).size} failed=${failures.length} (${pct}%); off-allow-list image URLs (not fetched): ${offAllowlistImageUrls}`);
+  deps.log(`[snapshot] images: urls=${urls.length} ok=${entries.length} files=${new Set(entries.map((e) => e.sha256)).size} failed=${failures.length} (${pct}%); off-allow-list image URLs (not fetched): ${offAllowlistImageUrls}; relative refs (not fetched): ${relativeImageRefs}; protocol-relative refs (not fetched): ${protocolRelativeImageRefs}`);
   if (failures.length) deps.log(`[snapshot] failures by reason: ${Object.entries(byReason).map(([k, v]) => `${k}=${v}`).join(", ")}`);
   deps.log(`[snapshot] manifest.json sha256 (record it; the importer's --expect-sha256): ${sha256Hex(text)}`);
   return 0;

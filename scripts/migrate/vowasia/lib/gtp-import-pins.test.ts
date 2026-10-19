@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { GTP_IMPORT_PINS, pinMismatches } from "./gtp-import-pins";
@@ -85,4 +85,37 @@ test("media-fetch behaviour: magic bytes, SVG and the size cap", async () => {
   const streamedBig: FetchLike = async () => resp(Buffer.concat([JPEG, Buffer.alloc(64)]));
   assert.deepEqual(await fetchImage("https://img.example.invalid/a.jpg", { ...BASE, maxBytes: 32, fetchImpl: streamedBig }), { ok: false, reason: "tooLarge", retryable: false });
   assert.equal(sniffMime(Buffer.from("<svg")), null);
+});
+
+/* ── Fix cycle 1 (G22 review M9) ───────────────────────────────────────── */
+
+function tsFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir)) {
+    const p = path.join(dir, e);
+    if (statSync(p).isDirectory()) out.push(...tsFiles(p));
+    else if (p.endsWith(".ts")) out.push(p);
+  }
+  return out;
+}
+
+test("every import from scripts/migrate/lib/ inside scripts/migrate/vowasia/** is pinned", () => {
+  const root = repoRoot();
+  const vow = path.join(root, "scripts", "migrate", "vowasia");
+  const gtpLib = path.join(root, "scripts", "migrate", "lib") + path.sep;
+  const IMPORT = /(?:import|export)\s[^"';]*?from\s+["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+["']([^"']+)["']/gm;
+  const found = new Set<string>();
+  for (const f of tsFiles(vow)) {
+    const src = readFileSync(f, "utf8");
+    for (const m of src.matchAll(IMPORT)) {
+      const spec = (m[1] ?? m[2] ?? m[3]) as string;
+      if (!spec.startsWith(".")) continue;
+      const abs = path.resolve(path.dirname(f), spec);
+      if (!abs.startsWith(gtpLib)) continue;
+      const rel = path.relative(root, abs.endsWith(".ts") ? abs : `${abs}.ts`).split(path.sep).join("/");
+      found.add(rel);
+      assert.ok(rel in GTP_IMPORT_PINS, `${path.relative(root, f)} imports ${rel}, which is not pinned in gtp-import-pins.ts`);
+    }
+  }
+  assert.ok(found.has("scripts/migrate/lib/media-fetch.ts"), "the scan sees the known media-fetch import");
 });

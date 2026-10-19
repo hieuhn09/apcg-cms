@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  ALLOWED_HOST, ARTICLE_COLUMNS, BODY_MARK, FAKE_SITE_ID, FakeLegacyClient, TITLE_MARK,
+  ALLOWED_HOST, ARTICLE_COLUMNS, BODY_MARK, FAKE_SITE_ID, FakeLegacyClient, TITLE_MARK, fakeArticles,
 } from "../fixtures/vowasia-legacy/fake-legacy";
 import { JPEG, PNG, startImageServer } from "../fixtures/vowasia-legacy/image-server";
 import { OUTSIDE_REPO_MESSAGES } from "./assert-outside-repo";
@@ -278,6 +278,142 @@ test("flag combinations are refused with fixed messages", async () => {
     const snap = await snapshotDir(d);
     await assert.rejects(runSnapshot(["--download-images", "--snapshot", snap, "--mapping-overlay", noAllow], deps(new FakeLegacyClient())), { message: SNAPSHOT_MESSAGES.noAllowlist });
   } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+/* ── Fix cycle 1 (G22 review M6-M8, N3) ────────────────────────────────── */
+
+test("M8: snapshot counts the rows before and after the paged read and records both", async () => {
+  const d = tmp();
+  try {
+    const fake = new FakeLegacyClient();
+    const snap = path.join(d, "snap");
+    assert.equal(await runSnapshot(["--mapping-overlay", overlay(d), "--out", snap], deps(fake)), 0);
+    const meta = JSON.parse(readFileSync(path.join(snap, "snapshot-meta.json"), "utf8"));
+    assert.deepEqual(meta.rowCounts, { before: 8, after: 8 });
+    assert.equal(fake.countCalls, 2);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("M8: a row inserted between pages makes the snapshot refuse with no partial output", async () => {
+  const d = tmp();
+  const out: string[] = [];
+  try {
+    const extra = { ...(fakeArticles()[0] as Record<string, unknown>), id: "00000000-0000-0000-0000-0000000000b9", slug: "fixture-article-late" };
+    const fake = new FakeLegacyClient({ insertAfterFirstPage: [extra] });
+    const snap = path.join(d, "snap");
+    await assert.rejects(runSnapshot(["--mapping-overlay", overlay(d), "--out", snap], deps(fake, out)), { message: SNAPSHOT_MESSAGES.countChanged });
+    assert.equal(existsSync(path.join(snap, "snapshot.ndjson")), false);
+    assert.equal(existsSync(path.join(snap, "snapshot-meta.json")), false);
+    assert.equal(existsSync(path.join(snap, "manifest.json")), false);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("N3: the read step validates the environment before creating --out", async () => {
+  const d = tmp();
+  try {
+    const snap = path.join(d, "snap");
+    const dp = deps(new FakeLegacyClient());
+    dp.env = {};
+    await assert.rejects(runSnapshot(["--mapping-overlay", overlay(d), "--out", snap], dp));
+    assert.equal(existsSync(snap), false);
+    // the download step never creates a missing --snapshot directory
+    const ov = overlay(d, { hostAllowlist: [ALLOWED_HOST] });
+    await assert.rejects(runSnapshot(["--download-images", "--snapshot", path.join(d, "nope"), "--mapping-overlay", ov], deps(new FakeLegacyClient())), { message: SNAPSHOT_MESSAGES.noSnapshot });
+    assert.equal(existsSync(path.join(d, "nope")), false);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("M6: the collector counts relative and protocol-relative references (never fetched) and keeps balanced parentheses", () => {
+  const rows = [
+    { body_sections: `<img src="/media/a.jpg"><img src="//cdn.example.invalid/b.png"> https://${ALLOWED_HOST}/p/photo(1).jpg)` },
+    { featured_image: "/uploads/c.jpg", other: "//cdn.example.invalid/b.png" },
+    { body_sections: JSON.stringify([{ image: "/media/a.jpg" }]) },
+  ];
+  const r = collectImageUrls(rows, (u) => new URL(u).host === ALLOWED_HOST);
+  assert.deepEqual(r.urls, [`https://${ALLOWED_HOST}/p/photo(1).jpg`]);
+  assert.equal(r.relativeImageRefs, 2, "distinct: /media/a.jpg, /uploads/c.jpg");
+  assert.equal(r.protocolRelativeImageRefs, 1, "distinct: //cdn.example.invalid/b.png");
+});
+
+async function downloadArgs(d: string, port: number): Promise<{ snap: string; args: string[] }> {
+  const snap = await snapshotDir(d);
+  const ov = overlay(d, { hostAllowlist: [ALLOWED_HOST], hostRewrite: { [ALLOWED_HOST]: `127.0.0.1:${port}` } });
+  return { snap, args: ["--download-images", "--snapshot", snap, "--mapping-overlay", ov, "--rehearsal"] };
+}
+
+test("M6: the manifest records relative / protocol-relative counts", async () => {
+  const d = tmp();
+  const srv = await startImageServer();
+  try {
+    const { snap, args } = await downloadArgs(d, srv.port);
+    await runSnapshot(args, deps(new FakeLegacyClient()));
+    const m = JSON.parse(readFileSync(path.join(snap, "manifest.json"), "utf8"));
+    assert.equal(typeof m.relativeImageRefs, "number");
+    assert.equal(typeof m.protocolRelativeImageRefs, "number");
+  } finally {
+    await srv.close();
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("M7: a crashed run's leftover temp files are removed and a valid stored image is reused", async () => {
+  const d = tmp();
+  const srv = await startImageServer();
+  try {
+    const { snap, args } = await downloadArgs(d, srv.port);
+    const store = path.join(snap, "images");
+    mkdirSync(store, { mode: 0o700 });
+    const leftover = `${sha(JPEG)}.tmp-4242-3`;
+    writeFileSync(path.join(store, leftover), JPEG.subarray(0, 4));
+    writeFileSync(path.join(store, sha(JPEG)), JPEG, { mode: 0o600 });
+    assert.equal(await runSnapshot(args, deps(new FakeLegacyClient())), 0);
+    assert.equal(existsSync(path.join(store, leftover)), false);
+    for (const f of readdirSync(store)) assert.match(f, /^[0-9a-f]{64}$/);
+  } finally {
+    await srv.close();
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("M7: a corrupt stored image is refused with its own message (never reused)", async () => {
+  const d = tmp();
+  const srv = await startImageServer();
+  try {
+    const { snap, args } = await downloadArgs(d, srv.port);
+    const store = path.join(snap, "images");
+    mkdirSync(store, { mode: 0o700 });
+    writeFileSync(path.join(store, sha(JPEG)), Buffer.from("truncated"), { mode: 0o600 });
+    await assert.rejects(runSnapshot(args, deps(new FakeLegacyClient())), { message: SNAPSHOT_MESSAGES.storeCorrupt });
+    assert.equal(existsSync(path.join(snap, "manifest.json")), false);
+  } finally {
+    await srv.close();
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("M7: a foreign file in the store is refused before any download (only leftover temp files are deleted)", async () => {
+  const d = tmp();
+  const srv = await startImageServer();
+  try {
+    const { snap, args } = await downloadArgs(d, srv.port);
+    const store = path.join(snap, "images");
+    mkdirSync(store, { mode: 0o700 });
+    writeFileSync(path.join(store, "notes.txt"), "mine");
+    writeFileSync(path.join(store, `${sha(JPEG)}.tmp-x`), "not a leftover pattern");
+    await assert.rejects(runSnapshot(args, deps(new FakeLegacyClient())), { message: SNAPSHOT_MESSAGES.storeForeign });
+    assert.equal(srv.hits.length, 0, "refused before fetching");
+    assert.equal(readFileSync(path.join(store, "notes.txt"), "utf8"), "mine");
+    assert.equal(existsSync(path.join(store, `${sha(JPEG)}.tmp-x`)), true, "only ^<sha256>.tmp-<pid>-<n>$ is deleted");
+  } finally {
+    await srv.close();
     rmSync(d, { recursive: true, force: true });
   }
 });

@@ -15,6 +15,7 @@
  * Writes `measure-report.json` + `measure-report.md` into --out (default: the
  * snapshot directory), outside the repo, files 600.
  */
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { CliError, parseArgs, type FlagSpec } from "./args";
 import { assertOutsideRepo } from "./assert-outside-repo";
@@ -22,6 +23,7 @@ import { writeFileSafe, writeJsonSafe } from "./out-dir";
 import { DEFAULT_SOURCE, resolvePath } from "./vowasia-cli";
 import { loadSourceConfig } from "./vowasia-config";
 import { mapTaxonomy, parseVowasiaMapping } from "./vowasia-mapping";
+import { URL_IN_TEXT, nonAbsoluteRefs, refKind } from "./image-refs";
 import { verifySnapshotInput } from "./snapshot-vowasia-main";
 
 export const MEASURE_FLAGS: FlagSpec = { snapshot: "value", "mapping-overlay": "value", out: "value" };
@@ -35,9 +37,14 @@ export interface MeasureDeps {
   log: (line: string) => void;
 }
 
+/** Caps on what the report prints (G22 M5): value length and number of values per block. */
+export const MEASURE_LIMITS = Object.freeze({ valueChars: 60, topN: 50 });
+
 type Counts = Record<string, number>;
+/** Prototype-free map: legacy values such as `__proto__` / `constructor` are plain keys (G22 M4). */
+const dict = <T>(): Record<string, T> => Object.create(null) as Record<string, T>;
 const inc = (c: Counts, k: string, n = 1) => {
-  c[k] = (c[k] ?? 0) + n;
+  c[k] = (Object.prototype.hasOwnProperty.call(c, k) ? (c[k] as number) : 0) + n;
 };
 
 /** Shape of a value: types and object keys only, never content. Depth-limited. */
@@ -68,8 +75,6 @@ export function shapeOf(v: unknown, depth = 0): string {
   return `object{${Object.keys(v).sort().join(",")}}`;
 }
 
-const URL_IN_TEXT = /https?:\/\/[^\s"'<>()\\]+/gi;
-
 /** Visit every string leaf with its normalised path (`[]` for indices, `(json)` when inside a JSON string). */
 function walk(v: unknown, p: string, visit: (path: string, s: string) => void, depth = 0): void {
   if (depth > 40 || v === null || v === undefined) return;
@@ -95,11 +100,11 @@ export interface MeasureReport {
   status: Counts;
   title: Counts;
   excerpt: Counts;
-  body: { container: Counts; elementShapes: Counts; urlPaths: Record<string, { allowlisted: number; other: number }>; articlesWithAllowlistedImage: number };
+  body: { container: Counts; elementShapes: Counts; urlPaths: Record<string, { allowlisted: number; other: number }>; articlesWithAllowlistedImage: number; relativeRefs: number; protocolRelativeRefs: number };
   pairs: Record<string, { n: number; verdict: string }>;
   tags: { shape: Counts; values: Counts };
   dates: { withoutCreatedAt: number; withoutPublishedAt: number };
-  images: { featured: { missing: number; allowlisted: number; other: number } };
+  images: { featured: { missing: number; allowlisted: number; other: number; relative: number; protocolRelative: number } };
 }
 
 const KEY = (v: unknown) => (v === null || v === undefined ? "(null)" : typeof v === "string" ? v : `(${typeof v})`);
@@ -109,14 +114,14 @@ export function measureRows(rows: readonly Record<string, unknown>[], roles: Rec
   const col = (r: Record<string, unknown>, role: string) => (roles[role] ? r[roles[role] as string] : undefined);
   const rep: MeasureReport = {
     articles: rows.length,
-    status: {},
-    title: {},
-    excerpt: {},
-    body: { container: {}, elementShapes: {}, urlPaths: {}, articlesWithAllowlistedImage: 0 },
-    pairs: {},
-    tags: { shape: {}, values: {} },
+    status: dict(),
+    title: dict(),
+    excerpt: dict(),
+    body: { container: dict(), elementShapes: dict(), urlPaths: dict(), articlesWithAllowlistedImage: 0, relativeRefs: 0, protocolRelativeRefs: 0 },
+    pairs: dict(),
+    tags: { shape: dict(), values: dict() },
     dates: { withoutCreatedAt: 0, withoutPublishedAt: 0 },
-    images: { featured: { missing: 0, allowlisted: 0, other: 0 } },
+    images: { featured: { missing: 0, allowlisted: 0, other: 0, relative: 0, protocolRelative: 0 } },
   };
   for (const r of rows) {
     inc(rep.status, KEY(col(r, "status")));
@@ -142,6 +147,9 @@ export function measureRows(rows: readonly Record<string, unknown>[], roles: Rec
           hasImage = true;
         } else slot.other++;
       }
+      const na = nonAbsoluteRefs(s);
+      rep.body.relativeRefs += na.relative.length;
+      rep.body.protocolRelativeRefs += na.protocolRelative.length;
     });
     if (hasImage) rep.body.articlesWithAllowlistedImage++;
     const sec = col(r, "section");
@@ -167,8 +175,13 @@ export function measureRows(rows: readonly Record<string, unknown>[], roles: Rec
     if (p === null || p === undefined || p === "") rep.dates.withoutPublishedAt++;
     const img = col(r, "image");
     if (typeof img !== "string" || img.trim() === "") rep.images.featured.missing++;
-    else if (isAllowed(img.trim())) rep.images.featured.allowlisted++;
-    else rep.images.featured.other++;
+    else {
+      const k = refKind(img);
+      if (k === "relative") rep.images.featured.relative++;
+      else if (k === "protocolRelative") rep.images.featured.protocolRelative++;
+      else if (k === "absolute" && isAllowed(img.trim())) rep.images.featured.allowlisted++;
+      else rep.images.featured.other++;
+    }
   }
   return rep;
 }
@@ -177,9 +190,91 @@ function sortedEntries(c: Counts): [string, number][] {
   return Object.entries(c).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
+/** The report as written / printed: capped values, hashed unmapped pairs, tags values only when safe (G22 M5). */
+export interface PublishableReport extends Omit<MeasureReport, "tags"> {
+  tags: { shape: Counts; values: Counts; valuesWithheld: boolean };
+  /** Blocks whose values were shortened or cut to the top N. */
+  truncated: string[];
+}
+
+const shortHash = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 10);
+
+function capKey(k: string): string {
+  return k.length > MEASURE_LIMITS.valueChars ? `${k.slice(0, MEASURE_LIMITS.valueChars)}…` : k;
+}
+
+function capCounts(name: string, c: Counts, truncated: string[]): Counts {
+  const merged = dict<number>();
+  let cut = false;
+  for (const [k, n] of Object.entries(c)) {
+    const ck = capKey(k);
+    if (ck !== k) cut = true;
+    inc(merged, ck, n);
+  }
+  const all = sortedEntries(merged);
+  if (all.length > MEASURE_LIMITS.topN) cut = true;
+  if (cut) truncated.push(name);
+  const out = dict<number>();
+  for (const [k, n] of all.slice(0, MEASURE_LIMITS.topN)) out[k] = n;
+  return out;
+}
+
+function capRecord<T>(name: string, r: Record<string, T>, weight: (v: T) => number, truncated: string[]): Record<string, T> {
+  let cut = false;
+  const merged = dict<T>();
+  for (const [k, v] of Object.entries(r)) {
+    const ck = capKey(k);
+    if (ck !== k || Object.prototype.hasOwnProperty.call(merged, ck)) cut = true;
+    if (!Object.prototype.hasOwnProperty.call(merged, ck)) merged[ck] = v;
+  }
+  const all = Object.entries(merged).sort((a, b) => weight(b[1]) - weight(a[1]) || a[0].localeCompare(b[0]));
+  if (all.length > MEASURE_LIMITS.topN) cut = true;
+  if (cut) truncated.push(name);
+  const out = dict<T>();
+  for (const [k, v] of all.slice(0, MEASURE_LIMITS.topN)) out[k] = v;
+  return out;
+}
+
+const SAFE_TAG_SHAPES = new Set(["array<string>", "array<>", "null"]);
+
+export function publishableReport(rep: MeasureReport): PublishableReport {
+  const truncated: string[] = [];
+  const pairs = dict<{ n: number; verdict: string }>();
+  for (const [k, v] of Object.entries(rep.pairs)) {
+    const key = v.verdict.startsWith("REJECT") ? `unmapped:${shortHash(k)}` : k;
+    const prev = pairs[key];
+    pairs[key] = prev ? { n: prev.n + v.n, verdict: prev.verdict } : { n: v.n, verdict: v.verdict };
+  }
+  const valuesWithheld =
+    !Object.keys(rep.tags.shape).every((s) => SAFE_TAG_SHAPES.has(s)) || !Object.keys(rep.tags.values).every((v) => v.length <= MEASURE_LIMITS.valueChars);
+  return {
+    articles: rep.articles,
+    status: capCounts("status", rep.status, truncated),
+    title: capCounts("title", rep.title, truncated),
+    excerpt: capCounts("excerpt", rep.excerpt, truncated),
+    body: {
+      container: capCounts("body.container", rep.body.container, truncated),
+      elementShapes: capCounts("body.elementShapes", rep.body.elementShapes, truncated),
+      urlPaths: capRecord("body.urlPaths", rep.body.urlPaths, (v) => v.allowlisted + v.other, truncated),
+      articlesWithAllowlistedImage: rep.body.articlesWithAllowlistedImage,
+      relativeRefs: rep.body.relativeRefs,
+      protocolRelativeRefs: rep.body.protocolRelativeRefs,
+    },
+    pairs: capRecord("pairs", pairs, (v) => v.n, truncated),
+    tags: {
+      shape: capCounts("tags.shape", rep.tags.shape, truncated),
+      values: valuesWithheld ? dict<number>() : capCounts("tags.values", rep.tags.values, truncated),
+      valuesWithheld,
+    },
+    dates: { ...rep.dates },
+    images: { featured: { ...rep.images.featured } },
+    truncated,
+  };
+}
+
 const cell = (s: string) => s.replace(/[|\n\r`]/g, " ");
 
-export function renderMeasure(rep: MeasureReport, snapshotSha256: string, hasAllowlist: boolean): string {
+export function renderMeasure(rep: PublishableReport, snapshotSha256: string, hasAllowlist: boolean): string {
   const L: string[] = [];
   const P = (s = "") => L.push(s);
   P("# VowAsia snapshot measure (B-0b)");
@@ -188,38 +283,46 @@ export function renderMeasure(rep: MeasureReport, snapshotSha256: string, hasAll
   P(`- articles: ${rep.articles}`);
   P(`- allow-list for URL classification: ${hasAllowlist ? "from overlay" : "none given (every URL counted as other)"}`);
   P("- Counts and shapes only: no title, body, URL, host or site id.");
-  const block = (title: string, c: Counts) => {
+  P(`- Values are cut to ${MEASURE_LIMITS.valueChars} characters and the top ${MEASURE_LIMITS.topN} per block; unmapped section/subsection pairs are shown as a short hash.`);
+  const note = (id: string) => (rep.truncated.includes(id) ? ` (truncated: top ${MEASURE_LIMITS.topN}, values cut to ${MEASURE_LIMITS.valueChars} chars)` : "");
+  const block = (title: string, c: Counts, id: string) => {
     P();
-    P(`## ${title}`);
+    P(`## ${title}${note(id)}`);
     P();
     for (const [k, n] of sortedEntries(c)) P(`- \`${cell(k)}\`: ${n}`);
   };
-  block("status", rep.status);
-  block("Q2 title shape", rep.title);
-  block("Q2 excerpt shape", rep.excerpt);
-  block("Q3 body_sections container shape", rep.body.container);
-  block("Q3 body_sections element shapes", rep.body.elementShapes);
+  block("status", rep.status, "status");
+  block("Q2 title shape", rep.title, "title");
+  block("Q2 excerpt shape", rep.excerpt, "excerpt");
+  block("Q3 body_sections container shape", rep.body.container, "body.container");
+  block("Q3 body_sections element shapes", rep.body.elementShapes, "body.elementShapes");
   P();
-  P("## Q3 URL positions inside body_sections (normalised path)");
+  P(`## Q3 URL positions inside body_sections (normalised path)${note("body.urlPaths")}`);
   P();
   P("| path | allow-listed | other |");
   P("|---|---|---|");
   for (const [p, v] of Object.entries(rep.body.urlPaths).sort()) P(`| ${cell(p)} | ${v.allowlisted} | ${v.other} |`);
   P();
   P(`- articles with at least one allow-listed URL in the body: ${rep.body.articlesWithAllowlistedImage}`);
+  P(`- relative references in the body (counted, never fetched): ${rep.body.relativeRefs}; protocol-relative (//host/...): ${rep.body.protocolRelativeRefs}`);
   P();
-  P("## KB-2 (section | subsection) with the C8 verdict");
+  P(`## KB-2 (section | subsection) with the C8 verdict${note("pairs")}`);
   P();
   P("| section/subsection | n | C8 |");
   P("|---|---|---|");
   for (const [k, v] of Object.entries(rep.pairs).sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]))) P(`| ${cell(k)} | ${v.n} | ${cell(v.verdict)} |`);
-  block("tags column shape (recorded only; Q10 does not use it)", rep.tags.shape);
-  block("tags column values", rep.tags.values);
+  block("tags column shape (recorded only; Q10 does not use it)", rep.tags.shape, "tags.shape");
+  if (rep.tags.valuesWithheld) {
+    P();
+    P("## tags column values");
+    P();
+    P("- withheld: the column is not an array of short strings in every row (see the shape block).");
+  } else block("tags column values", rep.tags.values, "tags.values");
   P();
   P("## Dates and cover images");
   P();
   P(`- without created-at: ${rep.dates.withoutCreatedAt}; without published-at: ${rep.dates.withoutPublishedAt}`);
-  P(`- cover image: missing ${rep.images.featured.missing}, allow-listed ${rep.images.featured.allowlisted}, other ${rep.images.featured.other}`);
+  P(`- cover image: missing ${rep.images.featured.missing}, allow-listed ${rep.images.featured.allowlisted}, other ${rep.images.featured.other}, relative ${rep.images.featured.relative}, protocol-relative ${rep.images.featured.protocolRelative}`);
   return L.join("\n") + "\n";
 }
 
@@ -228,7 +331,9 @@ export async function runMeasure(argv: readonly string[], deps: MeasureDeps): Pr
   const snapArg = a.get("snapshot");
   if (!snapArg) throw new CliError(MEASURE_MESSAGES.needSnapshot);
   const snap = resolvePath(snapArg);
-  const out = assertOutsideRepo(resolvePath(a.get("out") ?? snap));
+  const outPath = resolvePath(a.get("out") ?? snap);
+  // validate every input before creating anything (G22 N3)
+  assertOutsideRepo(outPath, undefined, { create: false });
   const input = verifySnapshotInput(snap);
   const overlay = a.get("mapping-overlay");
   const allow = overlay ? (loadSourceConfig(DEFAULT_SOURCE, resolvePath(overlay)).media?.hostAllowlist ?? []) : [];
@@ -240,9 +345,11 @@ export async function runMeasure(argv: readonly string[], deps: MeasureDeps): Pr
       return false;
     }
   };
-  const rep = measureRows(input.articles, input.meta.columnRoles, isAllowed);
+  const raw = measureRows(input.articles, input.meta.columnRoles, isAllowed);
+  const rep = publishableReport(raw);
+  const out = assertOutsideRepo(outPath);
   writeJsonSafe(path.join(out, "measure-report.json"), { snapshotSha256: input.snapshotSha256, ...rep });
   writeFileSafe(path.join(out, "measure-report.md"), renderMeasure(rep, input.snapshotSha256, allow.length > 0));
-  deps.log(`[measure] articles=${rep.articles}; pairs=${Object.keys(rep.pairs).length} (C8 rejects: ${Object.values(rep.pairs).filter((p) => p.verdict.startsWith("REJECT")).reduce((s, p) => s + p.n, 0)}); report: ${path.join(out, "measure-report.md")}`);
+  deps.log(`[measure] articles=${rep.articles}; pairs=${Object.keys(raw.pairs).length} (C8 rejects: ${Object.values(raw.pairs).filter((p) => p.verdict.startsWith("REJECT")).reduce((s, p) => s + p.n, 0)}); report: ${path.join(out, "measure-report.md")}`);
   return 0;
 }

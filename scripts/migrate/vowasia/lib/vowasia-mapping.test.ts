@@ -2,11 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { VOWASIA_PILLARS, VOWASIA_SUBSECTIONS } from "../../../lib/vowasia-taxonomy";
 import {
-  C8_PILLARS, C8_SUBSECTION_RENAMES, MAPPING_MESSAGES, MappingError, defaultVowasiaMapping, isAllowedMediaUrl, mapTaxonomy, newArticlePath,
+  C8_LEGACY_PAIRS, C8_PILLARS, C8_SUBSECTION_RENAMES, MAPPING_MESSAGES, MappingError, defaultVowasiaMapping, isAllowedMediaUrl, mapTaxonomy, newArticlePath,
   oldArticleUrl, parseVowasiaMapping,
 } from "./vowasia-mapping";
 
-// Every (section, subsection) pair seen by discover (Amendment 3, 3.2 / KB-2), with the expected target.
+// The approved C8 table of LEGACY (section, subsection) pairs with the expected target. It is inferred from the
+// per-column totals of discover (Amendment 3, 3.2 / 3.3); the (section, subsection) cross table itself is NOT
+// measured yet (KB-2, measured by B-0b on the owner's snapshot).
 const OBSERVED: [string, string, string, string | null][] = [
   ["wedding-business", "industry-news", "wedding-business", "industry-news"],
   ["wedding-business", "people", "wedding-business", "people-planners"],
@@ -47,7 +49,17 @@ test("should map the 6 renamed sub-sections and reject an unknown (section, subs
   assert.equal(mapTaxonomy("news", "").ok, false);
   // unknown sub-section, and the renamed SOURCE name is not accepted as a target name in reverse
   assert.equal(mapTaxonomy("style", "rings-jewellery-x").ok, false);
-  assert.equal(mapTaxonomy("wedding-business", "people-planners").ok, true, "the new name is the taxonomy slug itself");
+  // N1: only LEGACY names are accepted as input; a new (renamed) taxonomy slug is not a legacy subsection
+  for (const target of Object.values(C8_SUBSECTION_RENAMES)) {
+    const owner = OBSERVED.find(([, , , t]) => t === target)?.[0] as string;
+    assert.equal(mapTaxonomy(owner, target).ok, false, `${owner}/${target} (new name as legacy input)`);
+  }
+  // a taxonomy sub-section that exists under the pillar but is not in the approved legacy table
+  const extra = VOWASIA_SUBSECTIONS.find((x) => (C8_PILLARS as readonly string[]).includes(x.pillarSlug) && !OBSERVED.some(([s, , , t]) => s === x.pillarSlug && t === x.slug));
+  if (extra) assert.equal(mapTaxonomy(extra.pillarSlug, extra.slug).ok, false, `${extra.pillarSlug}/${extra.slug} is not an approved legacy pair`);
+  // the approved table is exactly the 18 pairs above (17 with a sub-section + venues with an empty one)
+  const table = Object.entries(C8_LEGACY_PAIRS).flatMap(([p, subs]) => subs.map((x) => `${p}|${x}`)).sort();
+  assert.deepEqual(table, OBSERVED.map(([s, ss]) => `${s}|${ss}`).filter((k) => !k.endsWith("|")).sort());
   // never guess: case / spaces / null section
   assert.equal(mapTaxonomy("Style", "beauty").ok, false);
   assert.equal(mapTaxonomy(" style", "beauty").ok, false);

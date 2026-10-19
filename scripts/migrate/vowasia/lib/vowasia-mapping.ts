@@ -41,6 +41,20 @@ export const C8_SUBSECTION_RENAMES: Readonly<Record<string, string>> = Object.fr
   checklists: "checklists-timelines",
 });
 
+/**
+ * C8: the approved LEGACY sub-sections under each legacy section (owner table, Amendment 3, 3.3; inferred from
+ * the per-column totals of discover, the cross table is measured by B-0b, KB-2). Only these legacy names are
+ * accepted as input: a new taxonomy slug (for example `people-planners`) is NOT a legacy sub-section and is
+ * rejected. An empty sub-section is accepted under every pillar (pillar only).
+ */
+export const C8_LEGACY_PAIRS: Readonly<Record<(typeof C8_PILLARS)[number], readonly string[]>> = Object.freeze({
+  "wedding-business": Object.freeze(["industry-news", "people", "data-insights"]),
+  venues: Object.freeze(["hotels-resorts", "by-destination"]),
+  style: Object.freeze(["rings-jewelry", "flowers-decor", "trends", "beauty", "gowns-attire"]),
+  "destination-weddings": Object.freeze(["honeymoons", "guides", "pre-wedding-shoots"]),
+  planning: Object.freeze(["budgets-costs", "expert-advice", "checklists", "etiquette-traditions"]),
+});
+
 export const PROVISIONAL_KEYS = ["urls.oldOrigin", "urls.articlePathTemplate", "urls.targetPathTemplate"] as const;
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -96,6 +110,9 @@ export function mapTaxonomy(section: unknown, subsection: unknown): TaxonomyResu
   }
   if (subsection === null || subsection === undefined || subsection === "") return { ok: true, pillar: section, subSection: null };
   if (typeof subsection !== "string") return { ok: false, reason: "C8: legacy subsection is not a string" };
+  if (!(C8_LEGACY_PAIRS[section as (typeof C8_PILLARS)[number]] ?? []).includes(subsection)) {
+    return { ok: false, reason: "C8: (section, subsection) pair is not in the mapping table" };
+  }
   const target = Object.prototype.hasOwnProperty.call(C8_SUBSECTION_RENAMES, subsection) ? (C8_SUBSECTION_RENAMES[subsection] as string) : subsection;
   if (!VOWASIA_SUBSECTIONS.some((s) => s.pillarSlug === section && s.slug === target)) {
     return { ok: false, reason: "C8: (section, subsection) pair is not in the mapping table" };

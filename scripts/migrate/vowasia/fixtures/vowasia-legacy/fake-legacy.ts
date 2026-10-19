@@ -74,12 +74,18 @@ export interface FakeOptions {
   articleColumns?: readonly string[];
   articles?: Record<string, unknown>[];
   sites?: Record<string, unknown>[];
+  /** Rows "inserted" by someone else right after the first keyset page (G22 M8: count changes during the read). */
+  insertAfterFirstPage?: Record<string, unknown>[];
 }
 
 export class FakeLegacyClient implements MinimalPgClient {
   readonly statements: string[] = [];
   keysetCalls = 0;
-  constructor(private readonly o: FakeOptions = {}) {}
+  countCalls = 0;
+  private readonly rows: Record<string, unknown>[];
+  constructor(private readonly o: FakeOptions = {}) {
+    this.rows = [...(o.articles ?? fakeArticles())];
+  }
   async connect(): Promise<void> {}
   async end(): Promise<void> {}
   async query(text: string): Promise<{ rows: Record<string, unknown>[] }> {
@@ -95,11 +101,17 @@ export class FakeLegacyClient implements MinimalPgClient {
         ],
       };
     }
+    if (text.startsWith("SELECT count(*) AS n FROM ")) {
+      this.countCalls++;
+      return { rows: [{ n: String(this.rows.length) }] }; // pg returns bigint count as text
+    }
     const selected = [...text.slice(7, text.indexOf(" FROM ")).matchAll(/"([a-z_0-9]+)"/g)].map((m) => m[1] as string);
     const project = (r: Record<string, unknown>) => Object.fromEntries(selected.map((c) => [c, c === "__cursor_ts" ? String(r.created_at) : r[c] ?? null]));
     if (text.includes('."sites"')) return { rows: (this.o.sites ?? [{ id: FAKE_SITE_ID, slug: "vowasia", name: "VowAsia" }]).map(project) };
     this.keysetCalls++;
     if (text.includes(") > (")) return { rows: [] };
-    return { rows: (this.o.articles ?? fakeArticles()).map(project) };
+    const page = this.rows.map(project);
+    if (this.keysetCalls === 1 && this.o.insertAfterFirstPage) this.rows.push(...this.o.insertAfterFirstPage);
+    return { rows: page };
   }
 }
