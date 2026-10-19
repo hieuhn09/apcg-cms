@@ -50,11 +50,19 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // also engine-blocked (editor-only) but NOT single-home (like gtp
 // `events-awards`). VowAsia has no `events-awards` pillar; its five other
 // pillars stay engine-writable.
+//
+// Asia Economic Review (tenant `aer`, aer launch W2, owner
+// decision 19-10-26): `long-view`, `interviews` and `in-focus` are editor-only.
+// AER has NO single-home pillar (it publishes no press releases), so it has no
+// SINGLE_HOME_PILLARS entry; the blocked pillars keep sub-sections, secondary
+// sections and a REQUIRED author. `asia-watch`, `briefings` and
+// `corporate-asia` stay engine-writable.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   gcv: ["exclusive", "pressroom"],
   "brief-asia": ["pressroom"],
   gtp: ["press-room", "events-awards"],
   vowasia: ["press-room", "real-weddings", "directory"],
+  aer: ["long-view", "interviews", "in-focus"],
 };
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */
