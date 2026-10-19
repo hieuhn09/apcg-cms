@@ -627,15 +627,16 @@ async function main(): Promise<number> {
           const sw = statusWrite(sd.status);
           bump(report.perPillar, tx.t.pillar);
           bump(report.perSub, `${tx.t.pillar}/${tx.t.subSection ?? ""}`);
-          report.planned++;
-          if (!a.apply) continue;
-
           let heroUrl = str(row.featured_image);
           if (!heroUrl && m.media.bodyImages === "hero-if-missing" && bodyImgs.length) {
             heroUrl = bodyImgs[0] as string;
             report.bodyImageUsedAsHero++;
             report.bodyImagesDropped += bodyImgs.length - 1;
           } else report.bodyImagesDropped += bodyImgs.length;
+          report.planned++;
+          if (!a.apply) continue;
+
+
           let heroId: number | string | undefined;
           if (heroUrl) heroId = await ensureHero(legacyId, heroUrl, title, stripPhotoLabel(row.featured_image_credit));
           if (heroId === undefined) report.heroMissing++;
@@ -865,7 +866,7 @@ ${kv(r.authors.assignedThisRun)}
 - pillars with fewer than 2 distinct authors: ${r.authors.pillarsUnderTwoAuthors.join(", ") || "none"}
 - readMinComputed: ${r.readMinComputed}; publishedAtFellBack: ${r.publishedAtFellBack}
 - seoDropped: ${r.seoDropped}; featured flag: ${r.featuredFlag}; is_hero flag: ${r.isHeroFlag} (not mapped to pinnedToLatest)
-- body images (body_sections[].image): dropped ${r.bodyImagesDropped}, used as hero ${r.bodyImageUsedAsHero}; author section fallbacks (slug hash): ${r.authorSectionFallbacks}
+- body images (body_sections[].image): dropped ${r.bodyImagesDropped}, used as hero ${r.bodyImageUsedAsHero}; author section fallbacks to slug hash (counted when the author plan is first built): ${r.authorSectionFallbacks}
 - droppedSections: ${r.droppedSections}; rows with tag-like text (kept as text): ${r.tagLikeTextRows}
 - sourceUrlCollisions: ${r.sourceUrlCollisions.length}
 - internalLinkRewritable: ${r.internalLinkRewritable}

@@ -37,7 +37,7 @@ r_status AS (
 r_sec AS (
   SELECT 30 AS ord, 0 AS sub, '3 section/subsection x status' AS section,
          coalesce(section::text, '(null)') || '/' || coalesce(subsection::text, '') AS item,
-         string_agg(st || '=' || n, ' ', ORDER BY st) AS detail
+         string_agg(st || '=' || n, ' ' ORDER BY st) AS detail
   FROM (SELECT section, subsection, coalesce(status::text, '(null)') AS st, count(*)::text AS n FROM a GROUP BY 1, 2, 3) q
   GROUP BY 1, 2, 3, 4
 ),

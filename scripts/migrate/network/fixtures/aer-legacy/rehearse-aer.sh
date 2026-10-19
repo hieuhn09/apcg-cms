@@ -53,7 +53,7 @@ grep '^1 site match|' "$DIR/01.out"; grep '^2 articles by status|TOTAL' "$DIR/01
 step "4 owner SQL 02 (role + views) and 02p (password)"
 [ "$("${LPSQL[@]}" -f $SQL/02-create-readonly-role-views.sql | tail -1)" = "SELF-CHECK OK|72" ] || fail "02 self-check"
 "${LPSQL[@]}" -f $SQL/02-create-readonly-role-views.sql >/dev/null 2>&1 && fail "02 must refuse a second run"
-PW=$("${LPSQL[@]}" -f $SQL/02p-set-password.sql | tail -1 | cut -d'|' -f1)
+PW=$("${LPSQL[@]}" -1 -f $SQL/02p-set-password.sql | tail -1 | cut -d'|' -f1)
 [[ "$PW" =~ ^[0-9a-f]{48}$ ]] || fail "02p password shape"
 export LEGACY_DB_URL="postgres://aer_migrator:$PW@127.0.0.1:55427/postgres" LEGACY_DB_SSL=disable
 psql "$LEGACY_DB_URL" -X -q -t -A -c "SELECT count(*) FROM public.articles" >/dev/null 2>&1 && fail "aer_migrator must not read public.articles"
