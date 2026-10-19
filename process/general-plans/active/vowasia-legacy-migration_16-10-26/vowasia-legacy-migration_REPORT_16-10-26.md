@@ -364,3 +364,25 @@ TL;DR: `02` nay cho qua ĐÚNG hai bảng pg_net của Supabase (`net._http_resp
 **Known-Gap (giữ nguyên tên):** K1 chưa thử trong SQL Editor thật của Supabase; K2 `default_transaction_read_only` tắt được bằng `SET` (role đọc/ghi được 2 bảng `net` nếu tự tắt); K3 bảng tiện ích khác ở project khác vẫn DỪNG, cần amendment mới. Thêm: unit test không bắt đột biến M4 (chỉ probe bắt).
 
 **Còn lại:** G9 review độc lập (`vc-code-reviewer`) trên SQL `02` + EVL độc lập (`vc-tester`); chủ chạy lại `01e` trong Editor để thấy nhãn mới trước khi chạy B3.
+
+## Amendment 2: vòng sửa sau G9 + EVL 013 (19-10-26)
+
+**Kết quả:** sửa chữ G9 MAJOR-1 + MINOR-2, thêm K4-K6 vào plan, thêm 3 ca probe (G15a-c). Mọi cổng xanh. KHÔNG đổi dòng SQL thực thi nào (02 chỉ đổi comment; 01e, 01, 02p, 03, 03e không đổi).
+
+**Đã làm:**
+- 02 (chỉ comment, header Amendment 2): đọc 2 bảng `net` là VÔ ĐIỀU KIỆN; ghi `net.http_request_queue` (khi tắt chỉ-đọc) theo thiết kế pg_net có thể gửi HTTP ra ngoài từ máy chủ DB (chưa kiểm trên pg_net thật); sửa giả/xoá `net._http_response`; lộ mật khẩu = lộ hơn dữ liệu VowAsia; giảm thiểu B3-B6 một lần ngồi, khuyến nghị rút `VALID UNTIL` (không đổi giá trị SQL), mật khẩu chỉ clipboard/Notes rồi dọn Recently Deleted. Bằng chứng: `git diff -U0 ... 02-*.template | grep -E '^[+-][^+-]' | grep -vE '^[+-]--'` rỗng.
+- `VOWASIA-LEGACY.md` B2 (đoạn `5f`/`net`): cùng nội dung. B3: sau BẤT KỲ lỗi nào chạy `ROLLBACK;` trong cùng tab rồi đóng tab.
+- Plan: K2 viết lại; chủ xác nhận lại "A" theo chữ mới = **PENDING**; thêm K4 (PG16 vs PG17/MAINTAIN), K5 (allow-list chỉ tên + relkind: không kiểm thành viên `pg_net`, bảng con, trigger/rule), K6 (SELECT trạng thái cuối không kiểm lại setting/`VALID UNTIL`, chỉ liên quan psql không ON_ERROR_STOP). K1-K3 giữ.
+- Probe: G15a `public.other` PUBLIC-đọc -> STOP; G15b `GRANT SELECT (a) ON public.probe_colonly TO PUBLIC` -> STOP; G15c sau khi 02 áp xong, `ALTER ROLE vowasia_migrator SET default_transaction_read_only = off`, chạy lại khối DO tự kiểm trích nguyên văn từ template đã điền -> `SELF-CHECK STOP ... not set to on` (kiểm sanity: khối qua khi setting = on), rồi đặt lại on.
+
+**Đỏ trước (đột biến tạm trong repo, khôi phục bằng bản sao, `cmp` xác nhận):**
+
+| Đột biến 02 | Probe |
+|---|---|
+| thêm `'public.other'` vào allow-list | ĐỎ `FAILED: G15a public.other: 02 must stop` |
+| bỏ nhánh `has_any_column_privilege` | ĐỎ `FAILED: G15b column-only grant: 02 must stop` |
+| tự kiểm chấp nhận mọi giá trị (`LIKE '%default_transaction_read_only=%'`) | ĐỎ `FAILED: G15c self-check with setting = off: expected SQLSTATE P0001, got success` |
+
+**Cổng (đầu ra thật):** G1 59/59; G2 0 lỗi, 1 cảnh báo có sẵn; G3 exit 0; G4 69/69; G5 267/267; G6 (chạy MỘT MÌNH, kiểm `/proc/net/tcp` không LISTEN 54336 trước/sau) exit 0, `ALL PROBE CHECKS PASSED`, `cleanup done`, có dòng G14a-d và G15a-c, không còn `/tmp/vowasia-probe-*`; G7 chỉ `package.json`; G7b 0 dòng thêm không chứa `vowasia`; G7c rỗng; G8 exit 0; G10 (01) rỗng; G10a rỗng, 1 `;` (ngoài comment), 0 dòng `\`; cổng mật khẩu: nguyên trạng XANH, 6 đột biến (bản sao ngoài repo) đều ĐỎ; G10c rỗng; G13 exit 0.
+
+**Còn lại:** chủ xác nhận lại "A" theo K2 mới (PENDING); K1, K4-K6 mở.

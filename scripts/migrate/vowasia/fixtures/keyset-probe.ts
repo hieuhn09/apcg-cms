@@ -32,6 +32,9 @@
  *      or a NOLOGIN role can use the shared tables; then the filled 02b applies
  *      (RLS SETUP OK, NOINHERIT, VALID UNTIL); manual removal then 03 restores
  *      RLS off; 03 directly after 02b is recorded (policies dropped, RLS on).
+ *   G15 (EVL 013 gaps): PUBLIC-readable public.other -> STOP; a column-only PUBLIC
+ *      grant on a non-allowed table -> STOP; after 02, setting the role default to
+ *      read_only = off makes the extracted self-check DO block STOP.
  *   G14 (Amendment 2): with net._http_response + net.http_request_queue granted ALL
  *      to PUBLIC, 02 applies (NOTICE lists both, role session read-only by default);
  *      a third PUBLIC table in net, net2._http_response, an allow-listed name that is
@@ -314,6 +317,15 @@ async function main(): Promise<void> {
   const noSetting = fill(tpl02, u.siteV, "probe_uuid").replace("ALTER ROLE vowasia_migrator SET default_transaction_read_only = on;\n", "");
   assert.notEqual(noSetting, fill(tpl02, u.siteV, "probe_uuid"), "G14d mutation removed the setting line");
   await stop14(noSetting, /SELF-CHECK STOP: vowasia_migrator default_transaction_read_only is not set to on/, "G14d setting missing");
+  // G15a (EVL 013 gap): a PUBLIC-readable table outside net (public.other) -> STOP.
+  await withClient("probe_uuid", (c) => c.query("CREATE TABLE public.other (i int); GRANT SELECT ON public.other TO PUBLIC"));
+  await stop14(fill(tpl02, u.siteV, "probe_uuid"), /SELF-CHECK STOP: vowasia_migrator has a privilege on a table outside vowasia_ro/, "G15a public.other");
+  await withClient("probe_uuid", (c) => c.query("DROP TABLE public.other"));
+  // G15b (EVL 013 gap): a column-only PUBLIC grant on a non-allowed table -> STOP.
+  await withClient("probe_uuid", (c) => c.query("CREATE TABLE public.probe_colonly (a int, b int); GRANT SELECT (a) ON public.probe_colonly TO PUBLIC"));
+  await stop14(fill(tpl02, u.siteV, "probe_uuid"), /SELF-CHECK STOP: vowasia_migrator has a privilege on a table outside vowasia_ro/, "G15b column-only grant");
+  await withClient("probe_uuid", (c) => c.query("DROP TABLE public.probe_colonly"));
+  log("G15 a/b: PUBLIC-readable public.other and a column-only PUBLIC grant -> STOP, nothing created");
   log("G14 b/c/d: a third PUBLIC table in net, net2._http_response, an allow-listed name as a view, and a missing default_transaction_read_only setting -> STOP inside the transaction, nothing created");
   assert.equal(await baseState("probe_uuid"), before, "base tables unchanged by a rolled-back 02");
   log("C 02: wrong site id / wrong slug / wrong db name / neondb / PUBLIC SECURITY DEFINER in public and outside public -> STOP inside the transaction, nothing created");
@@ -325,6 +337,21 @@ async function main(): Promise<void> {
   assert.match(applied.out, /^probe_uuid\|postgres$/m, "02 prints database and user first");
   assert.match(applied.err, /allow-listed relations reachable by the role \(Amendment 2\): net\._http_response, net\.http_request_queue/, "G14a NOTICE lists both allowed relations");
   assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT (rolvaliduntil > now() AND rolvaliduntil < now() + interval '15 days') AS ok FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].ok), true, "role has VALID UNTIL ~14 days");
+  // G15c (EVL 013 gap): setting present but NOT on -> the self-check DO block (extracted
+  // verbatim from the filled template) must STOP. Sanity first: it passes while the setting is on.
+  const filledText = fill(tpl02, u.siteV, "probe_uuid");
+  const ckStart = filledText.indexOf("DO $$\nDECLARE\n  bad text;");
+  const ckEnd = filledText.indexOf("END $$;", ckStart);
+  assert.ok(ckStart > 0 && ckEnd > ckStart, "G15c: self-check DO block found in the template");
+  const selfCheck = filledText.slice(ckStart, ckEnd + "END $$;".length);
+  await withClient("probe_uuid", (c) => c.query(selfCheck));
+  await withClient("postgres", (c) => c.query("ALTER ROLE vowasia_migrator SET default_transaction_read_only = off"));
+  await expectPgError("P0001", () => withClient("probe_uuid", (c) => c.query(selfCheck)), "G15c self-check with setting = off");
+  await withClient("probe_uuid", async (c) => {
+    await assert.rejects(c.query(selfCheck), /SELF-CHECK STOP: vowasia_migrator default_transaction_read_only is not set to on/);
+  });
+  await withClient("postgres", (c) => c.query("ALTER ROLE vowasia_migrator SET default_transaction_read_only = on"));
+  log("G15c: after 02, ALTER ROLE ... default_transaction_read_only = off makes the extracted self-check STOP; restored to on");
   await withClient("postgres", (c) => c.query(`ALTER ROLE vowasia_migrator PASSWORD ${c.escapeLiteral(PASSWORD)}`));
   assert.equal(await baseState("probe_uuid"), before, "base tables RLS/policies/grants unchanged by 02");
   await withClient("probe_uuid", async (c) => {

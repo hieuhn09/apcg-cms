@@ -55,10 +55,18 @@
 --     PUBLIC trên hai bảng này (mọi role, kể cả anon/authenticated, đều có), nên role
 --     mới thừa hưởng; file này KHÔNG REVOKE/GRANT gì trong schema net. Mọi quan hệ
 --     khác mà PUBLIC với tới (kể cả bảng khác trong net, hay cùng tên ở schema khác)
---     vẫn DỪNG. Giới hạn: role về lý thuyết đọc/ghi được hai bảng đó nếu tự tắt
---     default_transaction_read_only; chặn bằng hạn 14 ngày, mật khẩu chỉ chủ giữ,
---     xoá role khi xong (03 / 03e). Project khác có bảng tiện ích khác: vẫn DỪNG,
---     cần amendment mới.
+--     vẫn DỪNG. Giới hạn (nói thẳng): role ĐỌC được hai bảng này VÔ ĐIỀU KIỆN
+--     (chỉ-đọc không chặn SELECT): net._http_response chứa nội dung phản hồi HTTP
+--     của các tích hợp khác của site cũ (khoảng 28 dòng), cùng net.http_request_queue.
+--     Nếu role tự tắt default_transaction_read_only (đó chỉ là MẶC ĐỊNH), nó GHI được:
+--     ghi vào net.http_request_queue, theo thiết kế pg_net, có thể khiến máy chủ DB
+--     gửi yêu cầu HTTP ra ngoài (chưa kiểm trên pg_net thật); và sửa giả/xoá dòng
+--     net._http_response. Vậy lộ mật khẩu migrator làm lộ NHIỀU HƠN dữ liệu VowAsia.
+--     Giảm thiểu: làm B3 tới B6 trong MỘT lần ngồi (tạo role, chạy discover, xoá role);
+--     nên rút hạn VALID UNTIL ngắn hơn 14 ngày nếu được (khuyến nghị, file này không
+--     đổi giá trị); mật khẩu chỉ chủ giữ, chỉ ở clipboard/Notes rồi xoá cả Recently
+--     Deleted; xoá role khi xong (03 / 03e). Project khác có bảng tiện ích khác: vẫn
+--     DỪNG, cần amendment mới.
 --   - Role có hạn dùng (VALID UNTIL, 14 ngày). Đổi mật khẩu KHÔNG gia hạn. Nếu
 --     Giai đoạn B bị hoãn lâu hơn: chạy 03 rồi chạy lại file này, HOẶC
 --     ALTER ROLE vowasia_migrator VALID UNTIL với mốc mới (xem VOWASIA-LEGACY.md).
