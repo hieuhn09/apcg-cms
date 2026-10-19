@@ -1,16 +1,16 @@
 ---
 name: context:all-integrations
 description: "API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint"
-keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub, pillar, single-home, pressroom, 422, hubAuthor, hub author, draft, composer, P5.1, bodyMarkdown, view=edit
+keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub, pillar, single-home, pressroom, 422, hubAuthor, hub author, draft, composer, P5.1, bodyMarkdown, view=edit, publish, schedule, media upload, live edit, preview, authors, tags, hubWrite, HUB_LIVE_EDIT_TENANTS, P5.2, P5.3, P5.4, P5.6
 related: [context:all-database]
-date: 06-10-26
+date: 15-10-26
 metadata:
   read_when: "API contract questions, auth/authorization design, engine intake, cross-tenant read design, or anything bridging into this CMS from outside"
 ---
 
 # Integrations Context
 
-Last updated: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+Last updated: 2026-10-15 (APCGHub P5.1b–P5.6 reconciled: P5.1b + P5.2 publish/schedule routes are on `main`; P5.3 `POST /api/hub/media`, P5.4 `PATCH /api/hub/articles/{id}/live` (env switch `HUB_LIVE_EDIT_TENANTS`), P5.6 `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` exist ONLY on the unmerged draft PR apcg-cms#36 (head `5d5b28c`); none is VERIFIED; see §Cross-tenant reads → HUB AUTHORING P5.1b–P5.6) Previously: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
 hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
 Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
 new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
@@ -125,6 +125,9 @@ Update this group when:
 | `GET /api/hub/articles` | Hub engine bearer token (`authenticateHubEngine`, requires `ContentEngines.hubRead`) | **Internal** — consumed by APCGHub in the separate `content-engine` repo | The ONLY multi-tenant machine read in this repo (APCGHub P4 / CMS-1, 2026-09-24). Read-only. Filters `workflowStatus`, never `_status`. A tenant outside the engine's grant is a 403, never a silent drop. No rate limit (see §Cross-tenant reads). |
 | `GET /api/hub/articles/{id}?tenant=<slug>` | Hub engine bearer token (`authenticateHubEngine`, `hubRead` only — no `hubWrite`) | **Internal** — consumed by APCGHub's article view page (content-engine Hub-3) | APCGHub P4 / CMS-4. ONE article, ONE tenant, every `workflowStatus` (hidden/archived included), full fields + body as Markdown (`bodyMarkdown` + `bodyState`). Never a 500 for a body problem. See §Cross-tenant reads → READ ONE ARTICLE. |
 | `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET /api/hub/articles/{id}?view=edit` | Hub AUTHOR engine bearer token (`authenticateHubAuthorEngine`: `hubRead` + `hubAuthor`) | **Internal** — consumed by the APCGHub composer (content-engine P5.1) | Create / edit a TEXT draft (Markdown body in, Lexical out); never publishes. APCGHub P5.1, apcg-cms#25. See §Cross-tenant reads → AUTHOR DRAFTS. |
+| `POST /api/hub/articles/{id}/publish`, `POST /api/hub/articles/{id}/schedule` | Hub WRITE engine bearer token (`authenticateHubWriteEngine`: `hubRead` + `hubWrite`) | **Internal** — APCGHub composer (content-engine P5.2) | Publish / schedule / unschedule ONE hub-authored draft; merged (`#33`, `#34`). See §HUB AUTHORING P5.1b–P5.6. |
+| `POST /api/hub/media`, `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` | Hub AUTHOR engine bearer token (`hubRead` + `hubAuthor`) | **Internal** — APCGHub composer (content-engine P5.3 / P5.6) | Image upload; signed 10-minute preview link; create a pen name / a tag. **Only on unmerged draft PR apcg-cms#36**, not deployed. See §HUB AUTHORING P5.1b–P5.6. |
+| `PATCH /api/hub/articles/{id}/live` | Hub WRITE engine bearer token (`hubRead` + `hubWrite`; a key that also has `hubAuthor` is refused) | **Internal** — APCGHub composer (content-engine P5.4) | Edit a PUBLISHED hub-authored article in place; OFF unless env `HUB_LIVE_EDIT_TENANTS` lists the tenant. **Only on unmerged draft PR apcg-cms#36.** |
 | `/(payload)` route group | Payload's own admin session | **Framework-managed** | Payload-generated `/admin` UI + its own REST/GraphQL under `/api` — not a hand-written contract, changes with the Payload version. |
 | `/(console)/console/*` | Payload human session (reused, `src/console/auth.ts`) | **Internal** — staff-only alternate admin UI | See §Cross-tenant reads — this is the one surface with an existing "see multiple tenants at once" shape, and it is human-session-only. |
 
@@ -491,7 +494,7 @@ credential** (a second `ContentEngines` record with `hubRead` + `hubAuthor`); no
   drops the column); no data to restore.
 - **What a draft is:** created with `data._status: "draft"`, `workflowStatus: "draft"`,
   `origin: "manual"`, `editedByHuman: true`, `contentType: "article"`, `lastEngine` = the hub engine
-  (`hub-author-handlers.ts:280-294`). The create call does NOT pass Payload's `draft: true` option
+  (`hub-author-handlers.ts:280-294`). [STALE since 2026-10-06 (P5.1b, `#32`): create now passes `draft: true`, see §HUB AUTHORING P5.1b–P5.6] The create call did NOT pass Payload's `draft: true` option
   (`:312-318`), so Payload validates required fields on create today (`pillar`, `author`). PATCH
   DOES save with `draft: true` (`:582`), which skips field-level required validation: the main table
   row stays frozen until a human publishes (plan D20 branch B), so a
@@ -523,7 +526,7 @@ credential** (a second `ContentEngines` record with `hubRead` + `hubAuthor`); no
 - **Pillar rules interplay:** `ENGINE_BLOCKED_PILLARS` (`src/lib/hub-author-refs.ts:48`) is applied to
   the hub author too ⇒ `fields.pillarSlug = blocked_pillar` (e.g. brief-asia/gcv `pressroom`); the
   single-home rule (previous section) still runs in the Articles hooks. Create currently REQUIRES
-  `pillarSlug` and `authorId`; **P5.1b (planned, not built)** will make them optional on create
+  `pillarSlug` and `authorId` [STALE since 2026-10-06: P5.1b is built and merged, see §HUB AUTHORING P5.1b–P5.6]; **P5.1b (planned, not built)** will make them optional on create
   (title-only draft) by adding `draft: true` to the create call. Payload already accepts such drafts
   with that flag (probe P-5 in the content-engine stage-0 report) and refuses them without it
   (ValidationError "Pillar, Author"); PATCH cannot clear a pillar/author (set/change
@@ -574,6 +577,113 @@ credential** (a second `ContentEngines` record with `hubRead` + `hubAuthor`); no
   note when Hub Author is merely switched off); `POST /api/engine/translation` can still write
   translated text onto a Pressroom article (owner: keep); `isHubAuthoredDoc` checks the flag NOW,
   not at creation time.
+
+### HUB AUTHORING P5.1b–P5.6 (reconciled 2026-10-15) — publish, images, live edit, preview, pen names, tags
+
+Answer first: on top of the P5.1 draft routes above, the hub family now has routes to publish/schedule
+(P5.2), upload an image (P5.3), edit a PUBLISHED article (P5.4), mint a preview link and create a pen
+name or a tag (P5.6). **Merged on `main`:** P5.1b (`apcg-cms#32`, `44391e1`, 2026-10-06T08:36:34Z) and the
+two P5.2 routes (`#33` CMS-A advisory lock, `#34` CMS-B, merge `f8505b8`). **NOT merged:** P5.3–P5.6 exist
+only on branch `claude/awesome-wright-x5iwsf` (head `5d5b28c`), draft PR `apcg-cms#36`; nothing of them
+is deployed. Nothing here is `VERIFIED`: no phase of P5.2–P5.6 has had a live acceptance and there is no CI
+here. The planning/evidence source is the content-engine repo
+(`process/features/apcg-hub/{active,reports,backlog}/`, plans `apcg-hub-p5-{2..6}-*_PLAN_30-09-26.md`).
+**Correction to the AUTHOR DRAFTS section above:** P5.1b is BUILT and merged — `POST /api/hub/articles`
+now saves in Payload draft mode (`hub-author-handlers.ts:345-349`, "D6 (P5.1b)"), so a draft needs only a
+title; pillar and author are validated again at publish. The "planned, not built" notes there are stale.
+
+| Route | Phase | Credential (flags on the `ContentEngines` record) | Code | State |
+|---|---|---|---|---|
+| `POST /api/hub/articles/{id}/publish` | P5.2 | `hubRead` + `hubWrite` (`authenticateHubWriteEngine`) | `src/lib/hub-author-publish-core.ts` | merged (#34) |
+| `POST /api/hub/articles/{id}/schedule` (also unschedule: `scheduledFor: null`) | P5.2 | `hubRead` + `hubWrite` | same file | merged (#34) |
+| `POST /api/hub/media?tenant=<slug>` (multipart) | P5.3 | `hubRead` + `hubAuthor` | `src/app/api/hub/media/route.ts`, `hub-media-validate.ts`, `media-create.ts`, `hub-author-media-token.ts` | branch only |
+| `PATCH /api/hub/articles/{id}/live` | P5.4 | `hubRead` + `hubWrite`; a key that ALSO has `hubAuthor` is refused (403, D14) | `src/lib/hub-author-live-core.ts`, `hub-author-live-pure.ts` | branch only; OFF unless env `HUB_LIVE_EDIT_TENANTS` lists the tenant |
+| `POST /api/hub/articles/{id}/preview` | P5.6 | `hubRead` + `hubAuthor` | `hub-author-preview-core.ts`, `hub-author-preview-pure.ts` | branch only |
+| `POST /api/hub/authors` | P5.6 | `hubRead` + `hubAuthor` | `hub-taxonomy-create-core.ts`, `hub-taxonomy-create-pure.ts` | branch only |
+| `POST /api/hub/tags` | P5.6 | `hubRead` + `hubAuthor` | same files | branch only |
+
+All are internal (no CORS), all return `{ok:false,status,…}` JSON with frozen bodies, and none logs a
+token, a title, a name or an e-mail (error NAME/CODE only; one known leak class remains, see limits).
+
+**P5.2 publish / schedule** (`hub-author-publish-core.ts` header). Body exactly `{tenant, expectedVersion,
+actor}` (+ `scheduledFor` UTC, > now + 60 s, ≤ 365 days; unschedule adds `expectedScheduledFor`). Works
+only on hub-authored manual drafts, on the SAVED latest version (the hub sends no content). One
+transaction under `withHubArticleLock` (advisory lock; busy ⇒ 503 `busy` + Retry-After). Publish = a
+non-draft update of `_status`, `workflowStatus`, `publishedAt = now` (the revalidate webhook fires);
+schedule/unschedule write with `disableRevalidate` (no public cache change); the existing cron
+`publish-scheduled` publishes when due. 422 `invalid` lists every K4/K13 field; 409 `slug_conflict`,
+`version_conflict`, `schedule_conflict` (unschedule only: `due` / `changed`).
+
+**P5.3 media upload.** multipart with a closed field set: `file`, `alt` (1–300), optional `credit` (≤ 300),
+`articleId` (a hub-authored manual draft of THIS tenant), `actorRole`, optional `actorId` (never an
+e-mail). Body cap 4,065,536 bytes by `Content-Length` (411 if missing, 413 before reading), file ≤
+4,000,000 B, edge ≤ 4096 px and ≤ 16.8 MP, mime allowlist + magic bytes (415), JPEG SOS ≤ 64. The server
+re-encodes with `sharp` (drops EXIF/GPS, keeps alpha) and stores `hub-<uuid>.<ext>`; Activity Log
+`media_uploaded` without e-mail. `heroImageId` / `leadImageCaption` ride on POST/PATCH `/api/hub/articles`;
+`?view=edit` gains `edit.hero`, `edit.leadImageCaption`, `edit.bodyMedia`. Body images are Markdown tokens
+`![](cms-media:<id>)` alone on a root-level paragraph (strict-empty neighbouring lines). **Known limit
+(R12/OQ14, undecided):** `Media.ts:43` `read: () => true`, so `GET /api/media` (and GraphQL) lists media
+of every tenant to anonymous callers, including a draft's image and alt text; `Media.ts` was NOT changed.
+
+**P5.4 live edit.** Body `{tenant, expectedVersion, actor, fields}` (15 live keys; `slug`, `heroImageId`,
+`leadImageCaption` and the flags breaking/aiAssisted/sponsored/affiliate are locked ⇒ 422
+`not_live_editable`). Gate: the article is published, not scheduled, hub-authored, origin `manual`, no
+`engineDraftId`, and its latest draft equals the main row (else 409 `draft_diverged`). The write is a
+NON-draft update with only the changed fields inside one transaction plus `FOR NO KEY UPDATE` on the row,
+then a post-write comparison (D12: roll back + 409 on divergence). The revalidate webhook fires **before**
+the commit (measured: a public GET during the webhook still saw the old title; accepted gap
+`hub-p5-4-revalidate-before-commit`). On a translation-enabled tenant (e.g. `dtw`) one live edit bumped
+the version 1 → 3 and queued 19 jobs (gap `hub-p5-4-translation-tenant-double-write`).
+**Switch:** env `HUB_LIVE_EDIT_TENANTS` (CSV of CMS tenant slugs, default OFF, read on EVERY call, exact
+slug match; `liveEditTenants` in `hub-author-live-pure.ts`) — set only by the owner on this repo's Vercel
+project; a tenant not listed gets 403 `feature_disabled` before any article read.
+
+**P5.6 preview mint** (`POST /api/hub/articles/{id}/preview`). Body EXACTLY `{tenant, actor}` (≤ 4,096
+bytes, 413 before JSON; `actor` = `{email, role, id?}`, only RECORDED). Order: auth (401 / 403 `hubRead` /
+403 `hubAuthor`) → size → JSON/shape/unknown keys (400) and `actor` (422 `fields.actor.*`) → tenant ∈ grant
+(403 + `engine_tenant_denied`) → `features.articles` (403) → id shape + int4 (404) → the LATEST version
+(`draft: true`) of that article in THAT tenant, any status/origin/engine (404 with the same body as an
+unknown id) → tenant `frontendUrl` (409 `preview_unavailable` reason `no_frontend_url` | `bad_frontend_url`:
+must be a clean https URL, or http only on localhost / 127.0.0.1 / [::1], no query/fragment/credentials)
+→ slug of the latest version (409 `preview_unavailable` reason `no_slug`) → sign → 200
+`{ok, id, tenant, url, expiresAt}` with `Cache-Control: no-store`. The token carries exactly `{tenant,
+slug, draft: true, exp}` with TTL 600 s (a constant, never from env or request), signed by `signPayload`
+with `CENTRAL_SIGNING_SECRET`; the URL is `<origin><path>/preview?token=…&slug=…` and is read by the
+EXISTING verifier `/api/public/preview`. **Writes nothing** (no article change, no ActivityLog row on
+success). Limits: the token is not single-use (reusable ≤ 600 s) and appears in the verifier's request
+path in platform logs; an article imported without a version row mints 200 but the verifier answers 404;
+whether each of the five frontends actually has a `/preview` page is UNVERIFIED.
+
+**P5.6 pen name / tag create** (`POST /api/hub/authors`, `POST /api/hub/tags`). Same auth and the same
+≤ 4,096-byte reader. Author body `{tenant, name, role?, actor}`: name NFC-normalised, 2–120 chars, closed
+character class; `role` from a closed list of 9 (`Desk`, `Staff writer` (default), `Senior writer`,
+`Correspondent`, `Contributing writer`, `Columnist`, `Analyst`, `Guest contributor`, `Freelance /
+stringer`). Tag body `{tenant, title, actor}`: title 2–60 chars, slug derived (`tagSlugFrom`). Order after
+auth/body/tenant/feature checks: LOOKUP first (author by exact name, tag by slug, in THAT tenant) ⇒ 200
+`{ok:true, created:false, author|tag}` even when the tenant is full → soft cap (authors 950, tags 2,900;
+409 `taxonomy_full`) → create through `scopedCreate` (tenant id always from the grant) → one `human_edit`
+ActivityLog row (`detail {via:"hub", action:"author_create"|"tag_create", actor:{role,id?}, created:true}`,
+no name/title/e-mail) → 201 `{ok:true, created:true, …}`. A tag create that loses a race re-reads once
+(found ⇒ 200 `created:false`; else 500). Authors have no lock around find + create, so two concurrent
+creates of the same name can both succeed (known gap). **Do not rely on creating pen names/tags live
+until the owner measures real per-tenant totals (O9): the 950/2,900 soft caps are untested at scale and
+a tenant already above them would answer `taxonomy_full` from day one.**
+
+**Credentials and flags (summary).** `hubRead` = reads; `hubWrite` = status change (CMS-3), publish /
+schedule (P5.2), live edit (P5.4); `hubAuthor` (+ `hubRead`) = drafts (P5.1/P5.1b), image upload (P5.3),
+preview, pen name, tag. Keep the author key WITHOUT `hubWrite`/`create_article`/`update_article` and the
+write key WITHOUT `hubAuthor` (the live route refuses a key that has both). Kill-switches: untick the
+flag on the record; for live edit also unset `HUB_LIVE_EDIT_TENANTS`. Nothing here needs a migration:
+P5.3–P5.6 add NO migration. The SEO title/meta fields are NOT in this repo (see §Open Questions in
+`all-context.md`).
+
+**Verification (disposable local Postgres only; see `tests/all-tests.md`).** `npm run test:hub-media`
+(100), `test:hub-live` (27), `test:hub-p56` (127) — all re-run green on `5d5b28c` by the 2026-10-15
+context pass; probes `hub-probe.ts --setup7/--check7` (P5.2), `--setup8/--check8` (P5.3, 99 by EVL),
+`--setup9/--check9` (P5.4, 48 by EVL), `--setup10/--check10` (13/13 by EVL) and `--check11` (14/14 by EVL)
+were NOT re-run by the context pass (they need a disposable DB + dev server; counts come from the
+independent EVL reports in the content-engine repo). `--check10` has a hidden precondition:
+`HUB_LIVE_EDIT_TENANTS=dtw,gcv,world-travel-brief,p54-hook` must be in the server's environment.
 
 ---
 

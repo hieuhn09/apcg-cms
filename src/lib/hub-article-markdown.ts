@@ -32,6 +32,8 @@
 
 import type { SanitizedConfig } from "payload";
 import { convertLexicalToMarkdown, editorConfigFactory } from "@payloadcms/richtext-lexical";
+import { lexicalConverters } from "@/lib/hub-author-convert-core";
+import { mediaTokenConverters } from "@/lib/hub-author-media-token";
 
 export type HubBodyState = "ok" | "empty" | "error";
 
@@ -40,6 +42,19 @@ export interface HubBodyResult {
   bodyState: HubBodyState;
   /** Present only when bodyState === "error". Safe to log (no content). */
   error?: { kind: "conversion_failed" | "dangerous_link"; name: string; matches?: number };
+  /**
+   * P5.3 review M2: true when `mediaTokens` was asked for but the token export threw
+   * (or returned nothing) and the DEFAULT export was used instead. The caller must
+   * then treat the body as not editable (`applyBodyTokenFallback`). Never set when
+   * `mediaTokens` is off, so the default response is unchanged.
+   */
+  tokenFallback?: true;
+  /**
+   * Review-3 N3: the error NAME of the failed token export (never its message), set
+   * only together with `tokenFallback`, for the route's warning log. A token export
+   * that returned a non-string / blank output is reported as "EmptyTokenOutput".
+   */
+  tokenFallbackName?: string;
 }
 
 type EditorConfig = Awaited<ReturnType<typeof editorConfigFactory.default>>;
@@ -104,15 +119,40 @@ export async function hubArticleBodyToMarkdown(
     loadEditorConfig: () => Promise<EditorConfig>;
     /** Injectable for tests (forced throw / forced dangerous output). */
     convert?: Convert;
+    /**
+     * P5.3 T9 (`view=edit`, editable branch only): export through the ONE token
+     * wrapper (`mediaTokenConverters(lexicalConverters(cfg)).toMarkdown`, the path
+     * the round-trip checks). If that export throws (an upload node that is not
+     * a media with an id, or a nested one), fall back to the default export and
+     * report it as `tokenFallback: true` (review M2) — the route then forces
+     * bodyEditable:false and logs a warning; no integration_error comes from this
+     * branch.
+     */
+    mediaTokens?: boolean;
   },
 ): Promise<HubBodyResult> {
   if (isEmptyBody(data)) return { bodyMarkdown: "", bodyState: "empty" };
 
   const convert: Convert = opts.convert ?? (convertLexicalToMarkdown as unknown as Convert);
   let markdown: string;
+  let fellBack: string | null = null;
+  const withFallback = (r: HubBodyResult): HubBodyResult => (fellBack !== null ? { ...r, tokenFallback: true, tokenFallbackName: fellBack } : r);
   try {
     const editorConfig = await opts.loadEditorConfig();
-    markdown = convert({ data: data as never, editorConfig });
+    let tokened: string | null = null;
+    if (opts.mediaTokens) {
+      try {
+        tokened = mediaTokenConverters(lexicalConverters(editorConfig as never)).toMarkdown(data);
+        if (typeof tokened !== "string" || tokened.trim() === "") {
+          tokened = null;
+          fellBack = "EmptyTokenOutput";
+        }
+      } catch (err) {
+        tokened = null;
+        fellBack = errorName(err);
+      }
+    }
+    markdown = tokened ?? convert({ data: data as never, editorConfig });
     if (typeof markdown !== "string") throw new TypeError("converter returned a non-string");
     // `convertLexicalToMarkdown` does not always throw: an editor state Lexical
     // cannot parse (e.g. an unregistered node type) is reported through the
@@ -121,12 +161,12 @@ export async function hubArticleBodyToMarkdown(
     // conversion failure, not a successful empty article.
     if (markdown.trim() === "") throw new EmptyConversionOutput();
   } catch (err) {
-    return { bodyMarkdown: "", bodyState: "error", error: { kind: "conversion_failed", name: errorName(err) } };
+    return withFallback({ bodyMarkdown: "", bodyState: "error", error: { kind: "conversion_failed", name: errorName(err) } });
   }
 
   const matches = countDangerousLinkTargets(markdown);
   if (matches > 0) {
-    return { bodyMarkdown: "", bodyState: "error", error: { kind: "dangerous_link", name: "DangerousLinkTarget", matches } };
+    return withFallback({ bodyMarkdown: "", bodyState: "error", error: { kind: "dangerous_link", name: "DangerousLinkTarget", matches } });
   }
-  return { bodyMarkdown: markdown, bodyState: "ok" };
+  return withFallback({ bodyMarkdown: markdown, bodyState: "ok" });
 }
