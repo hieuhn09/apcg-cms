@@ -41,7 +41,7 @@ export const CLI_SPEC: Readonly<Record<Command, FlagSpec>> = {
   },
   verify: {
     "run-id": "value", mapping: "value", "mapping-overlay": "value", "public-base": "value", base: "value", "confirm-host": "value",
-    "require-final": "bool", rehearsal: "bool", "read-token": "value", out: "value", "from-snapshot": "value",
+    "require-final": "bool", rehearsal: "bool", "read-token": "value", out: "value", "from-snapshot": "value", batch: "value",
   },
 };
 

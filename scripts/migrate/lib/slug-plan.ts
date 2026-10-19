@@ -125,3 +125,29 @@ export function planEventSlugs(events: readonly EventPlanInput[], taken: Iterabl
   }
   return out;
 }
+
+/**
+ * Second run (Amendment 5): items an EARLIER run already created keep the slug
+ * they really have in Central (`prior`: legacyId -> Central slug), so they are
+ * recognised as existing and skipped instead of being re-planned (events would
+ * otherwise collide with their own earlier copy, get a -<yyyy> suffix and be
+ * created twice). A NEW item whose planned slug is held by such an existing item
+ * is moved to -2, -3... (reported as slugChanged). Empty `prior` = identity, so
+ * a first run is unchanged. Foreign (non-import) slugs are not handled here: they
+ * stay a reported conflict as before.
+ */
+export function pinPriorSlugs(plan: readonly SlugPlanEntry[], prior: ReadonlyMap<string, string>): SlugPlanEntry[] {
+  if (!prior.size) return [...plan];
+  const pinned = new Set(prior.values());
+  const used = new Set([...pinned, ...plan.filter((e) => !prior.has(e.legacyId) && !pinned.has(e.slug)).map((e) => e.slug)]);
+  return plan.map((e) => {
+    const p = prior.get(e.legacyId);
+    if (p !== undefined) return p === e.slug ? e : { ...e, slug: p };
+    if (!pinned.has(e.slug)) return e;
+    let n = 2;
+    while (used.has(`${e.slug}-${n}`)) n++;
+    const to = `${e.slug}-${n}`;
+    used.add(to);
+    return { ...e, slug: to, slugChanged: { from: e.slug, to, reason: "taken-by-earlier-run" } };
+  });
+}

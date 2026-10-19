@@ -183,3 +183,13 @@ article and industry-calendar listing is credited to one of the 5 web authors
 (counts differ by at most 1), grouped by country + quarter, never by pillar.
 Nothing is credited to "GTP Newsroom"; that Central author row stays unused and
 can be deleted by the owner later. Details: `scripts/migrate/GTP-LEGACY.md`.
+
+Second run (Amendment 5, 16-10-26): when the old site gets new articles after
+the first import, run the importer again with a NEW run id (never `--resume`
+the old one) and the SAME `--out` directory. It is create-only: items already
+in Central are skipped and never changed, edits or deletions on the old site
+are not carried over, existing articles keep their Central author and only the
+new ones are balanced. Rolling back the second run id removes only its
+articles. The legacy reader no longer reads rows twice at page edges (its
+cursor keeps microseconds), so import and verify reports now show the true row
+counts. Details: `scripts/migrate/GTP-LEGACY.md` "Second run".
