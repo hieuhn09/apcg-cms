@@ -654,64 +654,80 @@ Ghi chú nghiên cứu:
 | Mã | Quyết định |
 |---|---|
 | C8 | pillar = slug section cũ (`wedding-business`, `venues`, `style`, `destination-weddings`, `planning`). Sub-section = cùng slug, TRỪ: `people`->`people-planners`, `rings-jewelry`->`rings-jewellery`, `trends`->`trend-reports`, `guides`->`destination-guides`, `budgets-costs`->`budgets-real-costs`, `checklists`->`checklists-timelines`. Subsection rỗng -> chỉ pillar. Dòng nào có cặp (section, subsection) không khớp bảng này -> REJECT có báo cáo, KHÔNG đoán. (Bảng chéo theo cặp CHƯA đo; đây là suy luận từ tổng; xem KB-2.) |
-| C3 | URL cũ: `vowasia.com/article/[slug]`. 301 từ URL cũ về URL bài mới, GIỮ slug. Phải kiểm route bài của `vowasia-web` mới; nếu cùng đường dẫn thì chỉ cần redirect ở mức host. Bài bị bỏ (rejected): 410 hay 301 là câu hỏi mở (Q1). |
+| C3 | URL cũ: `vowasia.com/article/[slug]`. 301 về `/<pillar>/<slug>` (GIỮ slug; route mới `/[pillar]/[article]`, Q4). Bài rejected: 410 (Q1). Nháp: không vào map. |
 | C10 | Chưa có ngày cutover. VowAsia GIỮ TỐI (dark). |
 | Ảnh | Tải qua HTTPS CHỈ từ host `mbolvnwkmkeroqmvbvmt.supabase.co` (overlay `media.hostAllowlist`); cả ảnh bìa VÀ ảnh thân bài; lưu vào bucket R2 dùng chung của Central dưới tiền tố tenant `vowasia/`; tạo bản ghi Media MỚI trong Central; credit lấy từ `featured_image_credit`. Node ảnh trong thân bài phải trỏ id Media MỚI của Central ngay lúc import (bài học sự cố brief-asia `fix-body-upload-refs`). `copy-media.ts` (R2 -> R2) KHÔNG áp dụng. 9 bài không ảnh bìa -> nhập thành nháp. |
 | Giữ nguyên | C1 (6 tác giả chia đều, không tạo tác giả), C2 (published/archived giữ; draft và scheduled -> nháp; rejected bỏ), C4 (chỉ 6 tag đã chốt), C5 (bỏ SEO cũ), C6 (ảnh tối đa 20 MB, dừng nếu ảnh hỏng > 2%, ảnh lỗi -> nháp), C7 (thiếu ngày đăng -> ngày tạo), C9 (chỉ bài viết). |
+
+**Trả lời bổ sung 19-10-26 (đóng Q1, Q4-Q8):**
+
+| Mã | Trả lời |
+|---|---|
+| Q5 + Q5b (chủ) | DUYỆT cách snapshot, KÈM tải ảnh trong CÙNG một lần ngồi. CLI mới ghi NGOÀI repo: snapshot đã lọc site của bài VowAsia + dòng `sites`, kèm sha256; VÀ tải mọi ảnh bìa + ảnh thân bài (cùng luật media-fetch đã cứng hoá: chỉ host `mbolvnwkmkeroqmvbvmt.supabase.co`, tối đa 20 MB, kiểm magic bytes, cấm SVG) vào kho ảnh cục bộ có manifest (url -> sha256, bytes, mime). Mọi bước đo, rehearsal và import thật CHỈ đọc snapshot + kho ảnh cục bộ; import thật upload từ kho lên R2 của Central, KHÔNG đọc project cũ thêm lần nào. Lý do: banner vượt hạn mức của project cũ. Lần ngồi snapshot = một lần B3-B6 (tạo role, chạy snapshot, xoá role). |
+| Q2, Q3 | Trả lời bằng bước ĐO chạy trên snapshot (không cần DB). Vẫn CHẶN B-2/B-3 tới khi đo xong. |
+| Q1 (chủ) | 12 bài rejected: URL cũ trả 410. Bài nháp KHÔNG vào redirect map (như plan). |
+| Q8 (chủ) | C1 phân tác giả = round-robin TRONG từng pillar qua 6 tác giả, thứ tự tất định: sắp theo `created_at` tăng dần, hoà thì `id` tăng dần; tác giả theo thứ tự cố định trong `scripts/lib/vowasia-taxonomy.ts`. Thay mô hình "quốc gia + quý". |
+| Q4 (orchestrator đã kiểm) | Route bài của `vowasia-web` là `/[pillar]/[article]` (`src/app/[slug]/[article]/page.tsx`). Cũ `vowasia.com/article/[slug]` -> 301 `/<pillar>/<slug>`. `vowasia-web` đã có `src/lib/redirect-config.ts` và middleware chuẩn hoá một bước. Kiểm reserved slug: làm ở VALIDATE. |
+| Q6 (orchestrator) | G15a-c là các ca probe NẰM TRONG G6 (keyset-probe), không phải cổng riêng. Cổng mới bắt đầu từ G16 là đúng. |
+| Q7 (orchestrator, mặc định kỹ thuật) | Import chỉ-đọc các hàm thuần GTP + test chặn (đỏ nếu chúng đổi); chép mọi thứ mang tên/hằng GTP. D-B1 CHỐT. |
 
 Hệ quả số (ước tính, kiểm lại ở dry-run): nhập 356 bài (368 - 12 rejected); khoảng 249 bài trạng thái giữ published/archived trừ bài thiếu ảnh bìa; 20 draft -> nháp; 9 bài không ảnh bìa -> nháp.
 
 ### 3.4 Thiết kế B (tái dùng tooling GTP ở mức nào)
 
 Nguyên tắc giữ B3: KHÔNG sửa file GTP nào. Hai cách dùng lại:
-- **Import chỉ-đọc (cho phép)** các hàm THUẦN, không mang tên tenant, đã có test: `lib/media-fetch.ts` (`fetchImageWithRetry`, chống SSRF, sniff MIME, giới hạn kích thước), `lib/lexical-body.ts` (`htmlToLexical`, `nodeTypes`, `plainText`), từ `lib/gtp-transform.ts` các hàm trung tính (`sectionsToHtml`, `sanitizeLegacyHtml`, `escapeHtml`, `publishedAtFor`, `isoOrNull`, `stableFilename`, `storedFilenameMatches`, `hostAllowed`, `stripPhotoLabel`, `wordCount`), `lib/run-dir.ts` (`RunDir`, `checkRunId`, journal ndjson), `lib/failure-controls.ts`, `lib/rollback-rules.ts` (`untouched`), `lib/load-guard.ts` (`runGuarded`). Đề xuất mặc định **D-B1 = import** (khác O-Q1 của A) vì các file này lớn, có test, và chép sẽ tạo drift; kèm test chống drift: một test `vowasia` khẳng định các symbol trên tồn tại và có đúng kiểu dùng (đỏ nếu GTP đổi). Chủ có thể đổi sang chép.
+- **Import chỉ-đọc (cho phép)** các hàm THUẦN, không mang tên tenant, đã có test: `lib/media-fetch.ts` (`fetchImageWithRetry`, chống SSRF, sniff MIME, giới hạn kích thước), `lib/lexical-body.ts` (`htmlToLexical`, `nodeTypes`, `plainText`), từ `lib/gtp-transform.ts` các hàm trung tính (`sectionsToHtml`, `sanitizeLegacyHtml`, `escapeHtml`, `publishedAtFor`, `isoOrNull`, `stableFilename`, `storedFilenameMatches`, `hostAllowed`, `stripPhotoLabel`, `wordCount`), `lib/run-dir.ts` (`RunDir`, `checkRunId`, journal ndjson), `lib/failure-controls.ts`, `lib/rollback-rules.ts` (`untouched`), `lib/load-guard.ts` (`runGuarded`). **D-B1 = import (CHỐT, Q7)** (khác O-Q1 của A) vì các file này lớn, có test, và chép sẽ tạo drift; kèm test chống drift: một test `vowasia` khẳng định các symbol trên tồn tại và có đúng kiểu dùng (đỏ nếu GTP đổi). 
 - **Chép riêng vào `scripts/migrate/vowasia/lib/`** mọi thứ mang tên/hằng GTP: marker, `IMPORT_TENANT`, mapping zod, `import-gtp-main.ts`, `rollback-main.ts`, `verify-main.ts`, `gtp-redirects.ts`, `gtp-author-distribution.ts`, `slug-plan.ts` (reserved slugs GTP), `gtp-timestamps.ts`.
 
 Đường dữ liệu (theo thứ tự):
-1. Nguồn: đọc DB cũ qua `LiveVowasiaReader` (đã có ở A) HOẶC snapshot (3.6). Chỉ `articles` + `sites`, lọc site id.
-2. Kế hoạch toàn tập (tất định, tính lại mỗi run, không lưu trạng thái giữa run): status (C2), taxonomy (C8 bảng cứng 3.3), slug (giữ slug cũ; va reserved của `vowasia-web` -> reject có báo cáo, không đổi slug ngầm, vì C3 giữ slug), tác giả (chép `gtp-author-distribution` -> `vowasia-author-distribution.ts`, pool 6 từ `scripts/lib/vowasia-taxonomy.ts`, nhóm quốc gia + quý; nếu bài không có quốc gia thì nhóm theo quý; độ lệch ≤ 1), thứ tự `--limit` theo (`created_at`, `id`).
-3. Ảnh (từng bài, trước khi tạo bài): thu mọi URL ảnh (bìa + thân bài) -> `hostAllowed` (chỉ host trên) -> `fetchImageWithRetry` (≤ 20 MB, HTTPS, không redirect sang host khác) -> tạo Media trong Central, tenant `vowasia`, tên tệp `stableFilename`, R2 tiền tố `vowasia/` (cùng cơ chế upload Payload như GTP; KHÔNG dùng `copy-media.ts`) -> ghi `media-map.ndjson` của run. Ảnh đã có (khớp `storedFilenameMatches` trong tenant vowasia) thì DÙNG LẠI, không tải lại (tạo-mới-only cho bài, dùng-lại cho media). Ảnh lỗi -> bài thành nháp + dòng báo cáo; > 2% ảnh lỗi trên run -> DỪNG run (C6).
-4. Thân bài: `body_sections` JSON -> HTML (`sectionsToHtml` + `sanitizeLegacyHtml`, cấm `script`/`iframe`/`on*`/`javascript:`) -> thay `src` ảnh bằng id Media Central mới -> `htmlToLexical` -> hậu kiểm: mọi node `upload` có `value` là id Media tồn tại trong tenant vowasia; còn URL host cũ trong thân bài -> reject. Hình dạng chính xác của phần tử ảnh trong `body_sections` CHƯA biết (Q3).
-5. `title`/`excerpt` là jsonb: hình dạng CHƯA biết (Q2; có thể `{en: ...}` như GTP `enText`). Importer từ chối (reject có báo cáo) mọi giá trị không đúng hình dạng đã chốt, không đoán.
+1. Nguồn: CHỈ snapshot + kho ảnh cục bộ (3.6, Q5). `LiveVowasiaReader` chỉ dùng bởi CLI snapshot. Importer không có đường đọc DB cũ.
+2. Kế hoạch toàn tập (tất định, tính lại mỗi run, không lưu trạng thái giữa run): status (C2), taxonomy (C8 bảng cứng 3.3), slug (giữ slug cũ; va reserved của `vowasia-web` -> reject có báo cáo, không đổi slug ngầm, vì C3 giữ slug), tác giả (Q8: round-robin trong từng pillar qua 6 tác giả theo thứ tự cố định của `scripts/lib/vowasia-taxonomy.ts`; bài trong pillar sắp `created_at` rồi `id`; độ lệch ≤ 1 trong mỗi pillar), thứ tự `--limit` theo (`created_at`, `id`).
+3. Ảnh (từng bài, trước khi tạo bài): thu mọi URL ảnh (bìa + thân bài) -> tra manifest kho cục bộ (url -> sha256, bytes, mime), kiểm lại sha256 tệp -> tạo Media trong Central, tenant `vowasia`, tên tệp `stableFilename`, R2 tiền tố `vowasia/` (cùng cơ chế upload Payload như GTP; KHÔNG dùng `copy-media.ts`) -> ghi `media-map.ndjson` của run. Ảnh đã có (khớp `storedFilenameMatches` trong tenant vowasia) thì DÙNG LẠI, không tải lại (tạo-mới-only cho bài, dùng-lại cho media). Ảnh thiếu trong manifest/lỗi lúc tải ở snapshot/sha256 sai -> bài thành nháp + dòng báo cáo; > 2% ảnh lỗi -> DỪNG (C6). Việc tải (`fetchImageWithRetry`, host allow-list, 20 MB, magic bytes, cấm SVG) xảy ra ở CLI snapshot, không ở import.
+4. Thân bài: `body_sections` JSON -> HTML (`sectionsToHtml` + `sanitizeLegacyHtml`, cấm `script`/`iframe`/`on*`/`javascript:`) -> thay `src` ảnh bằng id Media Central mới -> `htmlToLexical` -> hậu kiểm: mọi node `upload` có `value` là id Media tồn tại trong tenant vowasia; còn URL host cũ trong thân bài -> reject. Hình dạng phần tử ảnh trong `body_sections`: đo bằng B-0b trên snapshot (Q3, chặn B-3).
+5. `title`/`excerpt` là jsonb: hình dạng đo bằng B-0b trên snapshot (Q2, chặn B-2). Importer từ chối (reject có báo cáo) mọi giá trị không đúng hình dạng đã chốt, không đoán.
 6. Tạo bài: chỉ CREATE, `engineSourceName = "legacy:vowasia"`, `origin = "import"`, tenant `vowasia`, ngày đăng theo C7, credit ảnh bìa từ `featured_image_credit`, tag theo C4 (không tạo tag mới trừ khi mapping cho phép). Bài có legacy id đã nằm trong Central (marker vowasia + tenant vowasia, ở bất kỳ run nào) -> BỎ QUA, không sửa. Không bao giờ tạo tác giả (tác giả thiếu -> DỪNG run).
 7. Journal theo run (`scripts/migrate/out/vowasia/runs/<run-id>/`): `slug-map.ndjson` (legacy id, slug, id Central, baselineVersion/UpdatedAt), `media-map.ndjson`, `author-plan.json`, `rejects.ndjson`, fsync từng dòng. Không thêm trường vào `Articles`.
-8. Sau import: `rewrite-links` (second pass, dry-run mặc định, chỉ bài của run, link `/article/[slug]` nội bộ -> bài mới), `timestamps-fix.sql` (sinh sẵn, chủ chạy, `ON_ERROR_STOP`, điều kiện marker + tenant), `redirects` (sinh map 301 `/article/[slug]` -> URL mới; 410/301 cho bài bỏ theo Q1), `verify`.
+8. Sau import: `rewrite-links` (second pass, dry-run mặc định, chỉ bài của run, link `/article/[slug]` nội bộ -> bài mới), `timestamps-fix.sql` (sinh sẵn, chủ chạy, `ON_ERROR_STOP`, điều kiện marker + tenant), `redirects` (sinh map 301 `/article/[slug]` -> `/<pillar>/<slug>` theo định dạng `vowasia-web` `src/lib/redirect-config.ts`; 410 cho 12 bài rejected; nháp không vào map), `verify`.
 
 CLI (dự kiến; hợp đồng mới, chỉ thêm):
-- `migrate:vowasia:import` — dry-run mặc định; `--apply` cần TTY + `--confirm-host=<host>` + banner `neondb` (`assertLocalOrConfirmed` rồi `assertCentralDbName`); `--run-id <mới>` bắt buộc với `--apply`, từ chối nếu thư mục run đã tồn tại; KHÔNG có `--resume`; `--limit N`; `--source live|snapshot:<file>`; `--mapping-overlay <ngoài repo>`.
+- `migrate:vowasia:import` — dry-run mặc định; `--apply` cần TTY + `--confirm-host=<host>` + banner `neondb` (`assertLocalOrConfirmed` rồi `assertCentralDbName`); `--run-id <mới>` bắt buộc với `--apply`, từ chối nếu thư mục run đã tồn tại; KHÔNG có `--resume`; `--limit N`; `--snapshot <dir>` (bắt buộc; kiểm sha256 snapshot + manifest ảnh); `--mapping-overlay <ngoài repo>`.
 - `migrate:vowasia:rollback -- --run-id <id>` — dry-run mặc định; chỉ xoá bài có marker vowasia + tenant vowasia + có trong journal của đúng run đó + `untouched` (bài đã sửa tay giữ lại trừ `--include-edited`); Media do run tạo chỉ xoá khi không bài nào khác dùng; `--list-orphans`.
+- `migrate:vowasia:snapshot` (MỚI, Q5): đọc DB cũ qua role tạm, ghi snapshot + sha256 + kho ảnh + manifest NGOÀI repo (`assertOutDirSafe`, quyền 600). `migrate:vowasia:measure` (MỚI): đo trên snapshot, không DB (Q2/Q3, bảng chéo C8 KB-2).
 - `migrate:vowasia:rewrite-links`, `:redirects`, `:verify`, `:fixture`, `rehearse:vowasia`.
-- `package.json`: chỉ THÊM 7 dòng script trên (không đổi dòng nào khác).
+- `package.json`: chỉ THÊM 9 dòng script trên (không đổi dòng nào khác).
 
 ### 3.5 Implementation Checklist: Giai đoạn B (thứ tự; mỗi bước có test đỏ-trước khi hợp lý)
 
-1. B-1 `lib/vowasia-mapping.ts` + test: zod strict; bảng C8 cứng (5 pillar, 6 đổi tên sub-section, rỗng -> chỉ pillar, cặp lạ -> reject); kiểm mọi pillar/sub-section đích tồn tại trong `scripts/lib/vowasia-taxonomy.ts` (sub-section phải thuộc đúng pillar); `urls.oldOrigin = https://vowasia.com`, `articlePathTemplate = /article/{slug}`, `_provisional` + `--require-final`; `media.hostAllowlist` từ overlay, test từ chối host khác.
-2. B-2 `lib/vowasia-transform.ts` + test: status C2 (rejected -> skip, draft/scheduled -> nháp), C6 thiếu ảnh bìa -> nháp, C7, `title`/`excerpt` theo hình dạng chốt ở Q2 (mặc định tạm: chỉ nhận chuỗi hoặc `{en: chuỗi}`, khác -> reject), làm sạch thân bài, chống drift symbol GTP đã import (D-B1).
+0. B-0 `snapshot-vowasia.ts` + `lib/snapshot-vowasia-main.ts` + test (Q5): chỉ SELECT qua builder đóng; ghi snapshot ndjson + sha256 + kho ảnh + manifest ngoài repo; luật ảnh như media-fetch; tóm tắt số ảnh lỗi.
+0b. B-0b `measure-vowasia.ts` + test: trên snapshot, in hình dạng jsonb `title`/`excerpt` (Q2), vị trí/trường ảnh trong `body_sections` (Q3), bảng chéo (section, subsection) (KB-2). Kết quả chốt B-2/B-3.
+1. B-1 `lib/vowasia-mapping.ts` + test: zod strict; bảng C8 cứng (5 pillar, 6 đổi tên sub-section, rỗng -> chỉ pillar, cặp lạ -> reject); kiểm mọi pillar/sub-section đích tồn tại trong `scripts/lib/vowasia-taxonomy.ts` (sub-section phải thuộc đúng pillar); `urls.oldOrigin = https://vowasia.com`, `articlePathTemplate = /article/{slug}`, đích `/{pillar}/{slug}`, `_provisional` + `--require-final`; `media.hostAllowlist` từ overlay, test từ chối host khác.
+2. B-2 `lib/vowasia-transform.ts` + test: status C2 (rejected -> skip, draft/scheduled -> nháp), C6 thiếu ảnh bìa -> nháp, C7, `title`/`excerpt` theo hình dạng đo ở B-0b (khác -> reject; CHẶN tới khi đo), làm sạch thân bài, chống drift symbol GTP đã import (D-B1).
 3. B-3 `lib/vowasia-body.ts` + test: `body_sections` -> Lexical; ảnh thân bài -> node `upload` với id Media mới; hậu kiểm "0 URL host cũ còn lại"; ca thật hoá từ hình dạng Q3 (fixture có ít nhất 1 section chứa ảnh, ca 8/818).
-4. B-4 `lib/vowasia-author-distribution.ts` (chép từ GTP, pool 6) + test: lệch ≤ 1 trên toàn tập VÀ trên hợp hai run; không fallback tên chung; tác giả thiếu trong Central -> DỪNG.
-5. B-5 `lib/vowasia-slug-plan.ts` + test: giữ slug cũ; reserved từ route `vowasia-web` (Q4); va -> reject; thứ tự `--limit` tất định.
-6. B-6 `lib/vowasia-media.ts` + test: host allow-list, HTTPS-only, 20 MB, dùng lại media đã có, ngưỡng 2% -> dừng, R2 tiền tố `vowasia/` (khẳng định cấu hình tiền tố tenant, không phải đường dẫn tự ghép).
+4. B-4 `lib/vowasia-author-distribution.ts` (round-robin trong pillar, Q8) + test: thứ tự tất định (`created_at`, `id`), lệch ≤ 1 trong mỗi pillar, tính trên TOÀN tập nên hợp hai run vẫn đúng; không fallback tên chung; tác giả thiếu trong Central -> DỪNG.
+5. B-5 `lib/vowasia-slug-plan.ts` + test: giữ slug cũ; reserved từ route `vowasia-web` `/[pillar]/[article]` (danh sách kiểm ở VALIDATE); va -> reject; thứ tự `--limit` tất định.
+6. B-6 `lib/vowasia-media.ts` + test: đọc kho cục bộ theo manifest, kiểm sha256, dùng lại media đã có, ngưỡng 2% -> dừng, KHÔNG có đường mạng, R2 tiền tố `vowasia/` (khẳng định cấu hình tiền tố tenant, không phải đường dẫn tự ghép).
 7. B-7 `lib/import-vowasia-main.ts` + `import-vowasia.ts` (qua `runGuarded`): dry-run mặc định, cổng `--apply` (TTY, `--confirm-host`, banner `neondb`, run-id mới, không `--resume`), journal fsync, skip theo legacy id đã có, không tạo tác giả.
 8. B-8 `rollback-vowasia.ts` + `lib/rollback-vowasia-main.ts` + test: chỉ đúng run-id; không chạm run khác; không chạm bài GTP (marker khác).
-9. B-9 `rewrite-links-vowasia.ts`, `build-vowasia-redirects.ts` (+ test 301 giữ slug, 410/301 theo Q1, `--min-coverage`), `verify-vowasia.ts` (số lượng theo status, ngày, tác giả lệch ≤ 1, mọi node `upload` trỏ Media tồn tại, không URL host cũ, kiểm công khai qua `VOWASIA_READ_TOKEN` chỉ khi chủ đặt biến).
+9. B-9 `rewrite-links-vowasia.ts`, `build-vowasia-redirects.ts` (+ test 301 `/article/[slug]` -> `/<pillar>/<slug>`, 410 cho rejected, nháp không vào map, `--min-coverage`), `verify-vowasia.ts` (số lượng theo status, ngày, tác giả lệch ≤ 1, mọi node `upload` trỏ Media tồn tại, không URL host cũ, kiểm công khai qua `VOWASIA_READ_TOKEN` chỉ khi chủ đặt biến).
 10. B-10 `timestamps-fix.sql` sinh theo run (đầu file: OWNER-RUN, `psql -v ON_ERROR_STOP=1`, điều kiện marker `legacy:vowasia` + tenant vowasia).
-11. B-11 Fixture `fixtures/vowasia-legacy/` (DB cũ tổng hợp: 2 site, một là vowasia, site id kiểu thật theo overlay; đủ ca: 5 status, cặp C8 hợp lệ + 1 cặp lạ, subsection rỗng, thiếu `published_at`, thiếu ảnh bìa, thân bài có ảnh, ảnh host lạ, ảnh hỏng, jsonb title/excerpt) + server ảnh cục bộ giả host allow-list.
-12. B-12 `rehearse-vowasia.sh` + `rehearse-assert.ts` (native PG16, Central cục bộ tạm, MỘT lần, MỘT mình, nền, timeout 7200000): dry-run; run A `--apply --limit 50`; run B (run-id MỚI) phần còn lại; khẳng định không trùng bài, run A không bị sửa, tác giả lệch ≤ 1 trên hợp, node upload trỏ Media mới, 0 URL host cũ; chạy lại run C (run-id mới) => 0 bài mới (idempotent bằng skip); rollback run B không chạm run A; rollback toàn bộ => 0 bài marker vowasia; đột biến (đổi marker, bỏ skip, tắt allow-list host) phải làm assert ĐỎ.
-13. B-13 Cập nhật `VOWASIA-LEGACY.md` (phần B, tiếng Việt, từng bước chủ chạy) và `package.json` (7 dòng).
+11. B-11 Fixture `fixtures/vowasia-legacy/` (DB cũ tổng hợp: 2 site, một là vowasia, site id kiểu thật theo overlay; đủ ca: 5 status, cặp C8 hợp lệ + 1 cặp lạ, subsection rỗng, thiếu `published_at`, thiếu ảnh bìa, thân bài có ảnh, ảnh host lạ, ảnh hỏng, jsonb title/excerpt) + server ảnh cục bộ giả host allow-list (để test CLI snapshot) và kho ảnh + manifest mẫu (để test import).
+12. B-12 `rehearse-vowasia.sh` + `rehearse-assert.ts` (native PG16, Central cục bộ tạm, MỘT lần, MỘT mình, nền, timeout 7200000): snapshot từ DB giả -> measure -> dry-run; run A `--apply --limit 50`; run B (run-id MỚI) phần còn lại; khẳng định không trùng bài, run A không bị sửa, tác giả lệch ≤ 1 trên hợp, node upload trỏ Media mới, 0 URL host cũ; chạy lại run C (run-id mới) => 0 bài mới (idempotent bằng skip); rollback run B không chạm run A; rollback toàn bộ => 0 bài marker vowasia; đột biến (đổi marker, bỏ skip, tắt allow-list host) phải làm assert ĐỎ.
+13. B-13 Cập nhật `VOWASIA-LEGACY.md` (phần B, tiếng Việt, từng bước chủ chạy) và `package.json` (9 dòng).
 14. B-14 Chạy cổng (3.7) tại EVL bởi `vc-tester`; report trong thư mục task; commit/push nhánh, PR nháp.
 
-Bước B-M (sớm, vì rủi ro project cũ bị tạm dừng; cần chủ duyệt Q5): chụp snapshot NGUỒN (3.6) trước khi code B xong, để không phụ thuộc project cũ còn sống. Ảnh vẫn tải ở bước import (cần URL còn sống); nếu chủ muốn an toàn hơn: tải ảnh vào thư mục cục bộ ngoài repo trong cùng lần ngồi snapshot (Q5b).
+Bước B-M (sớm, vì rủi ro project cũ bị tạm dừng; ĐÃ DUYỆT Q5+Q5b): làm B-0 trước mọi bước khác, chủ chạy OB2-OB4 ngay khi B-0 qua EVL. Ghi chú cũ: chụp snapshot NGUỒN (3.6) trước khi code B xong, để không phụ thuộc project cũ còn sống. Ảnh tải trong cùng lần ngồi snapshot (Q5b, đã duyệt).
 
 ### 3.6 Bước chủ chạy thật và khuyến nghị nguồn đọc
 
 Hai cách (role cũ đã bị xoá):
 - (i) **Lặp lại B3-B6 trong MỘT lần ngồi cho mỗi lần đọc**: tạo role (`02`, `02p`), chạy import đọc trực tiếp DB cũ, xoá role (`03e`). Nhược: mỗi run (dry-run, run A 50 bài, run B) cần DB cũ còn sống + role sống lâu hơn; project cũ có thể bị tạm dừng giữa chừng; rủi ro K2 kéo dài.
-- (ii) **Snapshot (KHUYẾN NGHỊ)**: MỘT lần ngồi: `02`/`02p` -> lệnh mới `migrate:vowasia:snapshot` (chỉ SELECT qua builder đóng đã có, chỉ `articles`+`sites` của vowasia, ghi `snapshot.ndjson` + sha256 vào thư mục NGOÀI repo, ví dụ `~/vowasia-private/snapshot-<ngày>/`, quyền 600) -> `03e`. Mọi run sau (dry-run, A, B, rehearsal đối chiếu) đọc `--source snapshot:<file>`, kiểm sha256 trước khi chạy. Ưu: role sống vài phút, không phụ thuộc project cũ, các run tất định trên cùng dữ liệu. Nhược: thêm 1 CLI (bước B-0 mới, trước B-1); dữ liệu cá nhân? không có (chỉ bài viết, C9). Ảnh vẫn tải từ URL Supabase cũ lúc import (hoặc theo Q5b).
+- (ii) **Snapshot (ĐÃ DUYỆT 19-10-26, kèm tải ảnh)**: MỘT lần ngồi: `02`/`02p` -> lệnh mới `migrate:vowasia:snapshot` (chỉ SELECT qua builder đóng đã có, chỉ `articles`+`sites` của vowasia, ghi `snapshot.ndjson` + sha256 vào thư mục NGOÀI repo, ví dụ `~/vowasia-private/snapshot-<ngày>/`, quyền 600) -> `03e`. Mọi run sau (dry-run, A, B, rehearsal đối chiếu) đọc `--source snapshot:<file>`, kiểm sha256 trước khi chạy. Ưu: role sống vài phút, không phụ thuộc project cũ, các run tất định trên cùng dữ liệu. Nhược: thêm 1 CLI (bước B-0 mới, trước B-1); dữ liệu cá nhân? không có (chỉ bài viết, C9). Ảnh tải vào kho cục bộ + manifest trong cùng lần ngồi; import không đọc project cũ.
 
 Danh sách chủ chạy (theo khuyến nghị ii; ai chạy: CHỦ, máy Mac):
 - OB1 (= O1) dry-run `npm run audit:add-vowasia-taxonomy -- --confirm-host=<host>`: tenant `vowasia` + 49 dòng taxonomy đã có (A1). Tenant/taxonomy/6 tác giả thiếu -> DỪNG.
 - OB2 SQL Editor: `02` (điền placeholder) -> `02p` (mật khẩu ở clipboard).
-- OB3 `read -s LEGACY_VOWASIA_DB_URL; export ...` rồi `npm run migrate:vowasia:snapshot -- --mapping-overlay ~/vowasia-private/overlay.json --out ~/vowasia-private/snapshot-<ngày>`; ghi sha256 in ra.
+- OB3 `read -s LEGACY_VOWASIA_DB_URL; export ...` rồi `npm run migrate:vowasia:snapshot -- --mapping-overlay ~/vowasia-private/overlay.json --out ~/vowasia-private/snapshot-<ngày>`; ghi sha256 snapshot + manifest ảnh in ra, xem số ảnh lỗi.
+- OB3b `npm run migrate:vowasia:measure -- --snapshot <dir>` (không DB), gửi kết quả (Q2/Q3/KB-2).
 - OB4 SQL Editor: `03e` -> `CLEANUP OK`; dọn mật khẩu (Notes + Recently Deleted); `unset LEGACY_VOWASIA_DB_URL`.
 - OB5 In tên database (`node -e ...` phải ra `/neondb`), rồi dry-run import từ snapshot; gửi báo cáo dry-run (số theo status, reject, ảnh lỗi, tác giả).
 - OB6 `--apply --limit 50 --run-id <A>`; xem bằng mắt trong /admin (tenant vowasia, ảnh bìa + ảnh thân bài, tác giả, pillar).
@@ -719,39 +735,37 @@ Danh sách chủ chạy (theo khuyến nghị ii; ai chạy: CHỦ, máy Mac):
 - OB8 `rewrite-links` dry-run rồi `--apply`; OB9 chạy `timestamps-fix.sql` (Neon, `ON_ERROR_STOP`); OB10 `verify`; OB11 sinh redirect map, chuyển cho `vowasia-web` KHI có cutover (C10: chưa, giữ tối).
 - Rollback bất cứ lúc nào: `migrate:vowasia:rollback -- --run-id <id>` (dry-run trước).
 
-### 3.7 Cổng (G1-G15 giữ nguyên + mới)
+### 3.7 Cổng (G1-G14 giữ nguyên, G15a-c nằm trong G6, + mới từ G16)
 
-Cổng A vẫn chạy lại để chứng minh không vỡ: G1-G5, G6, G7c, G8 (GTP không đổi byte; G7/G7b đổi gốc so sánh sang commit trước B và cho phép đúng 7 dòng `package.json` mới, mọi dòng chứa `vowasia`), G9 (review mọi SQL/CLI ghi), G10/G10a/G10c, G13, G14. "G15" trong yêu cầu: plan hiện chỉ định nghĩa tới G14; số mới bắt đầu từ G16 để tránh nhầm (Q6).
+Cổng A vẫn chạy lại để chứng minh không vỡ: G1-G5, G6, G7c, G8 (GTP không đổi byte; G7/G7b đổi gốc so sánh sang commit trước B và cho phép đúng 9 dòng `package.json` mới, mọi dòng chứa `vowasia`), G9 (review mọi SQL/CLI ghi), G10/G10a/G10c, G13, G14. G15a-c là ca probe bên trong G6, không phải cổng riêng; cổng mới bắt đầu từ G16 (Q6).
 
 | Gate / Scenario | Strategy | Proves SPEC criterion |
 |---|---|---|
-| G16 `npm run test:migrate-vowasia` mở rộng (mapping C8, transform, body, author, slug, media, rollback rules, chống drift D-B1) | Fully-Automated | AC-B1 C8 đúng bảng, cặp lạ reject; AC-B2 C2/C6/C7; AC-B4 tác giả lệch ≤1, không tạo tác giả |
+| G16 `npm run test:migrate-vowasia` mở rộng (mapping C8, transform, body, author, slug, media, rollback rules, chống drift D-B1) | Fully-Automated | AC-B1 C8 đúng bảng, cặp lạ reject; AC-B2 C2/C6/C7; AC-B4 round-robin trong pillar tất định, lệch ≤1, không tạo tác giả; AC-B11 redirect 301 `/<pillar>/<slug>` + 410 rejected |
 | G17 test cổng `--apply`: thiếu TTY, thiếu/sai `--confirm-host`, DB không `/neondb`, run-id đã tồn tại, có cờ `--resume` -> từ chối | Fully-Automated | AC-B5 an toàn ghi |
-| G18 test media: host lạ, http, > 20 MB, redirect sang host khác, > 2% lỗi -> dừng; node `upload` trỏ id mới | Fully-Automated | AC-B3 ảnh |
+| G18 test media: CLI snapshot (host lạ, http, > 20 MB, redirect sang host khác, magic bytes sai, SVG -> loại); import đọc kho (sha256 sai/thiếu -> nháp, > 2% -> dừng, không gọi mạng); node `upload` trỏ id mới | Fully-Automated | AC-B3 ảnh |
 | G19 `npm run rehearse:vowasia` (MỘT lần, một mình, nền, timeout 7200000, `REHEARSE_MODE=native`) gồm ca run A/B/C + rollback + đột biến đỏ | Hybrid (PG16 cục bộ + Central cục bộ tạm) | AC-B5, AC-B6 rollback theo run, AC-B7 lần chạy thứ hai |
 | G20 `git diff --quiet <base> -- scripts/migrate ':(exclude)scripts/migrate/vowasia'` (GTP 0 byte) + `npm run test:migrate-gtp` | Fully-Automated | AC-B8 không đổi GTP |
-| G21 test snapshot: sha256 sai -> từ chối; ghi chỉ ngoài repo (`assertOutDirSafe`); chỉ SELECT trong query-log | Fully-Automated | AC-B9 snapshot an toàn |
+| G21 test snapshot + measure: sha256 snapshot/manifest sai -> từ chối; measure không mở kết nối DB; ghi chỉ ngoài repo (`assertOutDirSafe`); chỉ SELECT trong query-log | Fully-Automated | AC-B9 snapshot an toàn |
 | G22 review `vc-code-reviewer` trên import/rollback/snapshot/SQL sinh ra | Agent-Probe | AC-B5, AC-B9 |
 | G23 dry-run + run thật trên `neondb` (chủ chạy OB5-OB10) | **Known-Gap** (backlog stub; giữ B ở CONDITIONAL tới khi chủ chạy) | AC-B10 dữ liệu thật |
 | G11 `rehearse:gtp` (đã hẹn chạy ở EVL cuối sau B) | Hybrid | ràng buộc 9 |
 
 ### 3.8 Touchpoints, Public Contracts, Blast Radius (Giai đoạn B)
 
-- Touchpoints (chỉ file MỚI dưới `scripts/migrate/vowasia/` + 7 dòng `package.json` + `VOWASIA-LEGACY.md` sửa + backlog stub G23): `lib/vowasia-{mapping,transform,body,author-distribution,slug-plan,media}.ts` (+ test), `lib/{import,rollback,verify,rewrite-links,snapshot}-vowasia-main.ts`, CLI `import-vowasia.ts`, `rollback-vowasia.ts`, `rewrite-links-vowasia.ts`, `build-vowasia-redirects.ts`, `verify-vowasia.ts`, `snapshot-vowasia.ts`, `fixtures/vowasia-legacy/**`, `fixtures/rehearse-vowasia.sh`, `rehearse-assert.ts`. Chỉ ĐỌC (import) các file GTP liệt kê ở 3.4.
-- Public Contracts mới: 7 npm script; journal run (định dạng ndjson riêng vowasia); marker `legacy:vowasia`; redirect map đưa `vowasia-web`. Không đổi schema Payload, không migration, không đổi API.
+- Touchpoints (chỉ file MỚI dưới `scripts/migrate/vowasia/` + 9 dòng `package.json` + `VOWASIA-LEGACY.md` sửa + backlog stub G23): `lib/vowasia-{mapping,transform,body,author-distribution,slug-plan,media}.ts` (+ test), `lib/{import,rollback,verify,rewrite-links,snapshot}-vowasia-main.ts`, CLI `import-vowasia.ts`, `rollback-vowasia.ts`, `rewrite-links-vowasia.ts`, `build-vowasia-redirects.ts`, `verify-vowasia.ts`, `snapshot-vowasia.ts`, `fixtures/vowasia-legacy/**`, `fixtures/rehearse-vowasia.sh`, `rehearse-assert.ts`. Chỉ ĐỌC (import) các file GTP liệt kê ở 3.4.
+- Public Contracts mới: 9 npm script; định dạng snapshot + manifest ảnh; journal run (định dạng ndjson riêng vowasia); marker `legacy:vowasia`; redirect map đưa `vowasia-web`. Không đổi schema Payload, không migration, không đổi API.
 - Blast Radius: dữ liệu Central tenant `vowasia` (bài + Media + object R2 dưới `vowasia/`) KHI chủ chạy `--apply`; không chạm tenant khác (mọi truy vấn qua tenant filter; rollback lọc marker + tenant + run). Tenant vowasia đang TỐI nên không ảnh hưởng người đọc. DB cũ: chỉ đọc qua role tạm.
-- Rủi ro chính: R-B1 project cũ bị tạm dừng (giảm bằng snapshot sớm, Q5b); R-B2 node ảnh thân bài trỏ sai (giảm bằng hậu kiểm + verify); R-B3 cặp C8 lạ nhiều hơn dự kiến (dry-run lộ ra, reject, chủ quyết); R-B4 Media trùng khi chạy lại (dùng lại theo tên tệp ổn định); R-B5 webhook revalidate vowasia lỗi khi lưu bài (best-effort, như GTP; ghi chú).
+- Rủi ro chính: R-B1 project cũ bị tạm dừng (giảm bằng snapshot + ảnh sớm, Q5/Q5b đã duyệt); R-B2 node ảnh thân bài trỏ sai (giảm bằng hậu kiểm + verify); R-B3 cặp C8 lạ nhiều hơn dự kiến (dry-run lộ ra, reject, chủ quyết); R-B4 Media trùng khi chạy lại (dùng lại theo tên tệp ổn định); R-B5 webhook revalidate vowasia lỗi khi lưu bài (best-effort, như GTP; ghi chú).
 
-### 3.9 Câu hỏi mở cho chủ (default đề xuất trong ngoặc)
+### 3.9 Câu hỏi mở cho chủ
 
-- Q1 Bài rejected (12) ở URL cũ: 410 hay 301 về mục? (Mặc định đề xuất: 410, vì C2 bỏ chúng.) Bài nháp (draft/thiếu ảnh) KHÔNG công khai: URL cũ của chúng 410 tạm hay chưa đưa vào map? (Đề xuất: không đưa vào map tới khi xuất bản.)
-- Q2 Hình dạng jsonb của `title`/`excerpt` (chuỗi? `{en:...}`? nhiều ngôn ngữ?): cần đo bằng discover mở rộng chạy trên snapshot (không cần DB cũ). Chưa biết -> B-2 không chốt được.
-- Q3 Hình dạng phần tử ảnh trong `body_sections` (trường nào giữ URL, có caption/credit không): đo trên snapshot (ca 8/818).
-- Q4 Route bài của `vowasia-web` mới và danh sách reserved slugs: `/article/[slug]` giữ nguyên? (Nếu có, chỉ redirect host-level.)
-- Q5 Duyệt cách nguồn (ii) snapshot + bước B-0 CLI snapshot? (Khuyến nghị: có.) Q5b tải ảnh ra cục bộ ngay lúc snapshot? (Đề xuất: có nếu banner usage-limit còn.)
-- Q6 Đánh số cổng mới từ G16 (không có G15) đúng ý chủ?
-- Q7 D-B1 import chỉ-đọc hàm thuần GTP (khác O-Q1 của A) hay chép? (Đề xuất: import + test chống drift.)
-- Q8 Bài thiếu quốc gia trong phân tác giả: nhóm theo quý (đề xuất) hay theo pillar?
+Đã đóng 19-10-26: Q1, Q4, Q5, Q5b, Q6, Q7, Q8 (xem bảng "Trả lời bổ sung" ở 3.3).
+
+Còn mở / còn chặn:
+- Q2 Hình dạng jsonb `title`/`excerpt`: đo bằng B-0b trên snapshot. CHẶN B-2.
+- Q3 Vị trí/trường ảnh trong `body_sections`: đo bằng B-0b trên snapshot. CHẶN B-3.
+- Q4b Danh sách reserved slug của `vowasia-web`: kiểm ở VALIDATE.
 
 Known-Gap B (có tên): KB-1 TLS pooler không kiểm chứng chỉ (`ssl=require`); KB-2 bảng chéo cặp (section, subsection) chưa đo (dry-run sẽ lộ); KB-3 G23 dữ liệu thật; KB-4 ảnh thân bài chỉ biết qua mẫu cũ 8/818; KB-5 K2-K6 Amendment 2 vẫn áp dụng cho lần tạo role kế tiếp.
 
@@ -761,4 +775,4 @@ Known-Gap B (có tên): KB-1 TLS pooler không kiểm chứng chỉ (`ssl=requir
 
 ### Validate Contract (Giai đoạn B)
 
-(Placeholder: `vc-validate-agent` viết mục này. Chưa có Gate. Giai đoạn B KHÔNG được EXECUTE trước khi mục này có `Gate: PASS` hoặc CONDITIONAL được chủ chấp nhận, và Q2/Q3/Q5 có trả lời.)
+(Placeholder: `vc-validate-agent` viết mục này. Chưa có Gate. Giai đoạn B KHÔNG được EXECUTE trước khi mục này có `Gate: PASS` hoặc CONDITIONAL được chủ chấp nhận. B-0/B-0b có thể EXECUTE trước; B-2/B-3 chờ kết quả đo Q2/Q3.)
