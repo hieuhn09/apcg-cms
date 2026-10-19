@@ -4,6 +4,7 @@
  */
 import path from "node:path";
 import { assertLocalDb, assertLocalOrConfirmed, LocalDbGuardError } from "../../lib/local-db-guard";
+import { assertCentralDbName, CentralDbNameError } from "../../lib/central-db-name-guard";
 import { CliError } from "./args";
 import type { ParsedArgs } from "./args";
 import { legacyBanner, legacySsl } from "./db-banner";
@@ -43,6 +44,8 @@ export interface CentralTarget {
 export function centralTarget(a: ParsedArgs, apply: boolean): CentralTarget {
   const url = process.env.DATABASE_URL;
   const t = assertLocalOrConfirmed(url, a.get("confirm-host"), Boolean(process.stdin.isTTY), apply);
+  // Network bundle: also the database NAME (non-local must be exactly /neondb). GTP keeps its original guard set.
+  if (profile().id !== "gtp") assertCentralDbName(url, t);
   let local = true;
   try {
     assertLocalDb(url);
@@ -78,7 +81,7 @@ export async function openLegacy(a: ParsedArgs, v: ValidationResult, siteId: str
   return reader;
 }
 
-const KNOWN = [CliError, MappingError, LocalDbGuardError, LegacySqlError, OutDirError, RunDirError, DbBannerError, TimestampsError, ProfileError];
+const KNOWN = [CliError, MappingError, LocalDbGuardError, LegacySqlError, OutDirError, RunDirError, DbBannerError, TimestampsError, ProfileError, CentralDbNameError];
 
 /** Uniform failure handler: fixed messages, exit 2 for refusals, 1 otherwise. */
 export function runMain(name: string, fn: () => Promise<number | void>): void {

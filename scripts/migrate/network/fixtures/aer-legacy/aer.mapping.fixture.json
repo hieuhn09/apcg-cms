@@ -1,0 +1,178 @@
+{
+  "version": 1,
+  "_provisional": [],
+  "_evidence": "REHEARSAL fixture mapping for tenant aer (synthetic data). Same as mappings/aer.mapping.json with every owner decision taken at its suggested value; never use for a real run.",
+  "source": {
+    "schema": "aer_ro",
+    "tableAllowList": [
+      "articles",
+      "sites",
+      "site_authors"
+    ],
+    "columns": {
+      "id": "id",
+      "slug": "slug",
+      "title": "title",
+      "dek": "excerpt",
+      "kicker": "kicker",
+      "body": "body_sections",
+      "status": "status",
+      "section": "section",
+      "subsection": "subsection",
+      "tags": "tags",
+      "format": "format",
+      "featured": "featured",
+      "isHero": "is_hero",
+      "readMinutes": "read_minutes",
+      "heroImage": "featured_image",
+      "heroCredit": "featured_image_credit",
+      "seo": "seo",
+      "sourceUrl": "source_url",
+      "byline": "byline",
+      "takeaways": "takeaways",
+      "countries": "countries",
+      "publishedAt": "published_at",
+      "createdAt": "created_at",
+      "updatedAt": "updated_at"
+    }
+  },
+  "body": {
+    "format": "sections",
+    "converter": "html-to-lexical",
+    "lineBreaks": "space"
+  },
+  "status": {
+    "map": {
+      "published": "published",
+      "archived": "archived",
+      "draft": "draft",
+      "scheduled": "draft",
+      "rejected": "SKIP"
+    },
+    "unknown": "reject"
+  },
+  "categories": {
+    "map": {
+      "essays/*": {
+        "pillar": "asia-watch"
+      },
+      "briefings/*": {
+        "pillar": "briefings"
+      },
+      "corporate-asia/*": {
+        "pillar": "corporate-asia"
+      },
+      "the-review-interview/*": {
+        "pillar": "interviews"
+      },
+      "the-long-view/*": {
+        "pillar": "long-view"
+      },
+      "in-focus/*": {
+        "pillar": "in-focus"
+      },
+      "data-annual/*": {
+        "pillar": "in-focus"
+      },
+      "partner-insights/*": {
+        "pillar": "corporate-asia"
+      }
+    },
+    "fallback": null,
+    "unmapped": "reject"
+  },
+  "authors": {
+    "resolve": "byColumn",
+    "map": {},
+    "staff": [
+      "Lena Ho",
+      "Arjun Menon",
+      "Mei Fong Chua",
+      "Rahul Sethi"
+    ],
+    "distribute": {
+      "pool": [
+        "Lena Ho",
+        "Arjun Menon",
+        "Mei Fong Chua",
+        "Rahul Sethi"
+      ],
+      "keepLegacy": false,
+      "groupBy": "none",
+      "maxSpread": 1,
+      "mode": "bySection"
+    },
+    "bySection": {
+      "briefings": "Lena Ho",
+      "corporate-asia": "Arjun Menon",
+      "the-long-view": "Mei Fong Chua",
+      "essays": "Rahul Sethi"
+    },
+    "createMissing": false
+  },
+  "tags": {
+    "keepOnly": [
+      "china",
+      "india",
+      "japan",
+      "south-korea",
+      "indonesia",
+      "vietnam"
+    ],
+    "renames": {
+      "korea": "south-korea",
+      "viet-nam": "vietnam"
+    }
+  },
+  "formatTags": {
+    "enabled": false,
+    "include": []
+  },
+  "countries": {
+    "match": "either"
+  },
+  "readMin": {
+    "wpm": 230
+  },
+  "pin": {
+    "fromFlags": false,
+    "maxPinned": 0
+  },
+  "archivedAs": "section",
+  "events": {
+    "enabled": false
+  },
+  "slug": {
+    "preserve": true,
+    "dedupe": "numeric-suffix",
+    "reservedSlugs": []
+  },
+  "urls": {
+    "oldOrigin": "https://asiaeconomicreview.com",
+    "articlePathTemplate": "/article/{slug}",
+    "sectionPaths": {
+      "essays": "/essays",
+      "briefings": "/briefings",
+      "corporate-asia": "/corporate-asia",
+      "the-review-interview": "/the-review-interview",
+      "the-long-view": "/the-long-view",
+      "in-focus": "/in-focus",
+      "data-annual": "/data-annual",
+      "partner-insights": "/partner-insights"
+    },
+    "extraLegacyPaths": [
+      "/team"
+    ],
+    "gonePaths": [
+      "/corrections"
+    ]
+  },
+  "media": {
+    "maxBytes": 20971520,
+    "failureBudgetPercent": 2,
+    "fetchTimeoutMs": 30000,
+    "concurrency": 3,
+    "hotlinkPolicy": "download",
+    "bodyImages": "drop"
+  }
+}

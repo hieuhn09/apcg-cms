@@ -80,7 +80,7 @@ export type TaxonomyDecision = { ok: true; t: Taxonomy } | { ok: false; reason: 
 export function resolveTaxonomy(section: unknown, subsection: unknown, m: Pick<Mapping, "categories">): TaxonomyDecision {
   const sec = str(section).toLowerCase();
   const sub = str(subsection).toLowerCase();
-  const override = m.categories.map[`${sec}/${sub}`] ?? (sub === "" ? m.categories.map[sec] : undefined);
+  const override = m.categories.map[`${sec}/${sub}`] ?? (sub === "" ? m.categories.map[sec] : undefined) ?? m.categories.map[`${sec}/*`];
   if (override) {
     return {
       ok: true,
