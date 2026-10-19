@@ -74,6 +74,26 @@ and nothing has been run against any database. Field sheet as data:
   tenant-keyed code path the gtp probe already exercises; unit tests cover the vowasia
   entry).
 
+### Example: Asia Economic Review (`aer`)
+
+Owner-run, systemAdmin only. Status 19-10-26: **code only**; the tenant does NOT exist yet
+and nothing has been run against any database. Field sheet as data: `AER_TENANT_FIELDS`
+in `scripts/lib/aer-taxonomy.ts`.
+
+- Name `Asia Economic Review`, slug `aer` (the web repo is `aer-web`; the domain is
+  `asiaeconomicreview.com`), status `active`, default language `en`, supported languages
+  `[en]`, timezone `Asia/Singapore`. Contact: editorial `editor@asiaeconomicreview.com`,
+  general `info@asiaeconomicreview.com`, advertising/partnerships `info@asiapresscentre.com`.
+- Domain, additional domains and **frontend URL: EMPTY at creation** (set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` on; everything else off (incl.
+  translations).
+- **Auto publish engine drafts: OFF** (`audit:add-aer-taxonomy` refuses `--apply` while on).
+- `long-view`, `interviews` and `in-focus` are engine-blocked in code
+  (`src/lib/constants.ts`). AER has **no single-home pillar** (no Press Room). No migration.
+- Then create the taxonomy (6 pillars, 12 sub-sections, 1 newsletter, 4 authors, 6 tags =
+  29 rows) with `npm run audit:add-aer-taxonomy`: see `docs/11-operations.md`
+  "Asia Economic Review rollout". Same `/neondb` name guard as the vowasia script.
+
 ## Configure domain & languages
 
 - **Domain**: `domain` + `additionalDomains` are informational/CORS hints; the
