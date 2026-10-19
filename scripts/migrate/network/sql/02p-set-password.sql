@@ -8,6 +8,14 @@
 -- step of NETWORK-LEGACY.md. No screenshot, no chat. Close the query tab afterwards.
 -- Each run makes a NEW password (the old one stops working). It does not extend the
 -- 14-day VALID UNTIL.
+-- Statement log: the password is generated and applied INSIDE the DO block by a nested
+-- EXECUTE format(...). log_statement / log_min_duration_statement log only the top-level
+-- statement text (this file, which holds no secret), so the literal never reaches the
+-- Postgres log (checked 19-10-26 on a local PG16 with log_statement=all: 0 occurrences).
+-- Residual risk: pgaudit (with nested-statement logging), auto_explain with
+-- log_nested_statements, or an error raised from inside the EXECUTE could still record
+-- the ALTER ROLE text with the password; Supabase does not enable these by default. The
+-- value also leaves the server once, in the result cell new_secret.
 
 DO $$
 DECLARE

@@ -218,3 +218,31 @@ test("redirects: an old section that is not a pillar goes to the pillar its rows
   assert.ok(b.rules.some((r) => r.from === "/essays" && r.to === "/asia-watch" && r.status === 301));
   assert.equal(profile().tenant, "aer");
 });
+test("redirects: GTP keeps the old section slug for a non-pillar old section (unchanged behaviour); AER maps it", () => {
+  const kr = readJ("fixtures/aer-legacy/known-routes.json");
+  const m = { archivedAs: "section", urls: { oldOrigin: "https://x", articlePathTemplate: "/article/{slug}", sectionPaths: { essays: "/essays" }, extraLegacyPaths: [], gonePaths: [] } } as never;
+  const row = (pillar: string) => [{ legacyId: "1", kind: "article", slug: "s1", status: "published", oldUrl: "/article/s1", oldSection: "essays", oldSub: "", pillar }] as never;
+  setProfile(GTP_PROFILE);
+  assert.equal(GTP_PROFILE.redirectNonPillarSectionsToMappedPillar, undefined);
+  const g = buildRedirects(row("asia-watch"), m, kr);
+  // Old GTP behaviour: target = old section slug, i.e. /essays -> /essays, dropped as identity; never the mapped pillar.
+  assert.ok(!g.rules.some((r) => r.from === "/essays"));
+  assert.equal(g.counts.identityDropped, 2); // the article path and the section path
+  setProfile(AER);
+  assert.equal(AER.redirectNonPillarSectionsToMappedPillar, true);
+  const a = buildRedirects(row("asia-watch"), m, kr);
+  assert.ok(a.rules.some((r) => r.from === "/essays" && r.to === "/asia-watch" && r.status === 301));
+  assert.equal(a.counts.identityDropped, 1); // only the article path
+});
+test("image hosts: AER refuses an overlay whose hostAllowlist lacks the legacy storage host; GTP has no such check", () => {
+  setProfile(AER);
+  const m = readJ("fixtures/aer-legacy/aer.mapping.fixture.json");
+  const bad = { ...FIX_OVERLAY, media: { hostAllowlist: ["other.example.com"], hostRewrite: {} } };
+  assert.throws(() => validateMapping(m, bad), /mbolvnwkmkeroqmvbvmt\.supabase\.co/);
+  assert.doesNotThrow(() => validateMapping(m, FIX_OVERLAY));
+  setProfile(GTP_PROFILE);
+  assert.equal(GTP_PROFILE.requiredImageHosts, undefined);
+});
+test("entry: missing --site error names the profile's discover file", () => {
+  assert.throws(() => planEntry(["export", "--tenant", "aer"] as never), /sql\/01-discover-aer\.sql/);
+});

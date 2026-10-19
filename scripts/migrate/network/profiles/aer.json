@@ -20,5 +20,7 @@
     "asia-watch", "briefings", "corporate-asia", "interviews", "long-view", "in-focus", "about", "team", "contact", "corrections",
     "privacy", "terms", "newsletters", "search", "sitemap", "robots", "preview", "api", "article"
   ],
-  "mediaPrefix": "aer"
+  "mediaPrefix": "aer",
+  "redirectNonPillarSectionsToMappedPillar": true,
+  "requiredImageHosts": ["mbolvnwkmkeroqmvbvmt.supabase.co"]
 }

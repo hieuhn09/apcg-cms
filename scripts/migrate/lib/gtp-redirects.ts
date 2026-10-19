@@ -68,8 +68,9 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
   for (const e of articles) {
     if (e.oldSection) {
       const oldSec = m.urls.sectionPaths[e.oldSection] ?? `/${e.oldSection}`;
-      // An old section that is itself a pillar keeps its page (GTP); otherwise it goes to the pillar its rows were mapped to.
-      if (!sectionsSeen.has(oldSec)) sectionsSeen.set(oldSec, sectionTarget(profile().pillarSlugs.includes(e.oldSection) ? e.oldSection : e.pillar ?? e.oldSection));
+      // Default (GTP): the old section slug is kept. Opt-in (AER profile): a non-pillar old section goes to the pillar its rows were mapped to.
+      const secTarget = profile().redirectNonPillarSectionsToMappedPillar && !profile().pillarSlugs.includes(e.oldSection) ? e.pillar ?? e.oldSection : e.oldSection;
+      if (!sectionsSeen.has(oldSec)) sectionsSeen.set(oldSec, sectionTarget(secTarget));
       if (e.oldSub) {
         const oldSubPath = `${oldSec}/${e.oldSub}`;
         if (!sectionsSeen.has(oldSubPath)) sectionsSeen.set(oldSubPath, sectionTarget(e.pillar ?? e.oldSection, e.subSection));

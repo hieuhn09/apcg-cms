@@ -35,6 +35,10 @@ export interface NetworkProfile {
   reservedSlugs?: readonly string[];
   /** Media filename prefix. */
   mediaPrefix: string;
+  /** Redirect a non-pillar old section to the pillar its rows were mapped to (AER). Absent/false = keep the old section slug (GTP behaviour). */
+  redirectNonPillarSectionsToMappedPillar?: boolean;
+  /** Legacy image hosts the effective media.hostAllowlist MUST contain (validate-mapping / import --apply refuse otherwise). Absent = no check (GTP). */
+  requiredImageHosts?: readonly string[];
 }
 
 export const GTP_PROFILE: NetworkProfile = Object.freeze({
@@ -79,6 +83,8 @@ const ProfileSchema = z
     extraOwnerDecisionKeys: z.record(z.string(), z.string()).default({}),
     reservedSlugs: z.array(z.string().regex(SLUG)).optional(),
     mediaPrefix: z.string().regex(SLUG),
+    redirectNonPillarSectionsToMappedPillar: z.boolean().optional(),
+    requiredImageHosts: z.array(z.string().regex(/^[a-z0-9.-]+$/)).optional(),
   })
   .strict();
 
@@ -103,4 +109,10 @@ export function loadProfileFile(file: string): NetworkProfile {
 export function legacyEnvNames(p: NetworkProfile = active): { url: string; ssl: string; ca: string } {
   const base = p.legacyDbEnv.replace(/_URL$/, "");
   return { url: p.legacyDbEnv, ssl: `${base}_SSL`, ca: `${base}_CA` };
+}
+
+/** Required image hosts missing from an effective hostAllowlist (empty = OK). */
+export function missingRequiredImageHosts(allow: readonly string[] | undefined, p: NetworkProfile = active): string[] {
+  const have = new Set((allow ?? []).map((h) => h.toLowerCase()));
+  return (p.requiredImageHosts ?? []).filter((h) => !have.has(h.toLowerCase()));
 }

@@ -91,7 +91,7 @@ export function planEntry(argv: readonly string[], readFile: (p: string) => stri
   const base = parseProfile(raw);
   if (base.tenant !== tenant) throw new EntryError("network: profile tenant does not match --tenant; refusing.");
   const spec = COMMANDS[command as Cmd];
-  if (spec.legacy && !site) throw new EntryError("network: --site <legacy-site-slug|site-uuid> is required for this command (find it with sql/01-discover-site.sql).");
+  if (spec.legacy && !site) throw new EntryError(`network: --site <legacy-site-slug|site-uuid> is required for this command (find it with scripts/migrate/network/sql/01-discover-${tenant}.sql).`);
   let legacySiteSlugs = base.legacySiteSlugs;
   if (site) {
     if (UUID.test(site)) {

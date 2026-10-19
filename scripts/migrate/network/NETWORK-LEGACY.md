@@ -55,6 +55,10 @@ Test: `npm run test:migrate-network`.
 
 ### Các bước của chủ dự án (B5), mỗi lần một bước
 
+**Chỗ giữ chỗ trong lệnh:** `ID_SITE` (id site cũ, từ bước 1) và `HOST_CENTRAL` (host của
+URL Central, từ bước 9) là chữ giữ chỗ. **Agent điền giá trị thật vào trước khi gửi từng
+lệnh**; chủ dự án không tự sửa lệnh. Mỗi khối dưới đây là đúng một lệnh, dán cả khối.
+
 Bước 1 đến 4 làm trong trình duyệt: supabase.com/dashboard, project **globaltravelpost**,
 SQL Editor, New query. Mỗi file: mở file trong repo, chép TOÀN BỘ, dán, bấm Run một lần.
 Không phải sửa gì trong file.
@@ -99,8 +103,19 @@ Không phải sửa gì trong file.
    ```
    npm run migrate:network -- validate-mapping --tenant aer --mapping-overlay ~/aer-private/overlay.json --require-final
    ```
-9. **Đưa URL Central** (`read -s DATABASE_URL`, rồi `export DATABASE_URL`, kiểm `/neondb`
-   theo `huong-dan`), rồi **chạy khô**:
+9. **Đưa URL Central vào Terminal** (không hiện lên màn hình). Gõ lệnh:
+   ```
+   read -s DATABASE_URL
+   ```
+   Dán URL Central (agent nói lấy ở đâu), Enter. Rồi:
+   ```
+   export DATABASE_URL
+   ```
+   Kiểm tên database, phải in ra đúng `/neondb` (khác thì dừng và báo):
+   ```
+   node -e 'console.log(new URL(process.env.DATABASE_URL).pathname)'
+   ```
+   Rồi **chạy khô**:
    ```
    npm run migrate:network -- import --tenant aer --site ID_SITE --mapping-overlay ~/aer-private/overlay.json --confirm-host=HOST_CENTRAL
    ```
@@ -117,7 +132,21 @@ Không phải sửa gì trong file.
     ```
     npm run migrate:network -- rewrite-links --tenant aer --run-id aer-real-1 --apply --confirm-host=HOST_CENTRAL
     ```
-13. **Sửa ngày tạo/sửa** bằng psql với URL **direct** của Neon (không qua pooler):
+13. **Sửa ngày tạo/sửa** bằng psql với URL **direct** của Neon (không qua pooler).
+    Lấy URL: console.neon.tech, project **apcg-master-db**, nút **Connect**, chọn database
+    **neondb**, TẮT **Connection pooling** (Pooled), bấm copy. Gõ lệnh:
+    ```
+    read -s DIRECT_URL
+    ```
+    Dán URL vừa copy, Enter. Rồi:
+    ```
+    export DIRECT_URL
+    ```
+    Kiểm tên database, phải in ra đúng `/neondb` (khác thì dừng và báo):
+    ```
+    node -e 'console.log(new URL(process.env.DIRECT_URL).pathname)'
+    ```
+    Host của URL direct KHÔNG có chữ `-pooler`. Rồi:
     ```
     npm run migrate:network -- timestamps-fix --tenant aer --run-id aer-real-1
     ```

@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { ALLOWED_TABLE_NAMES, effectiveAllowList } from "./legacy-sql";
-import { profile } from "./network-profile";
+import { missingRequiredImageHosts, profile } from "./network-profile";
 
 export const GTP_PILLAR_SLUGS = ["news", "destinations", "business-of-travel", "experiences-luxury", "press-room", "events-awards"] as const;
 
@@ -351,6 +351,10 @@ export function validateMapping(structuralRaw: unknown, overlayRaw: unknown | un
   }
   const structuralOnly = opts.structuralOnly === true;
   if (!structuralOnly && (!m.source.siteFilter || !m.media.hostAllowlist?.length)) throw new MappingError(MAPPING_MESSAGES.overlayRequired);
+  if (!structuralOnly) {
+    const missing = missingRequiredImageHosts(m.media.hostAllowlist);
+    if (missing.length) throw new MappingError(`mapping: media.hostAllowlist must contain the legacy image host(s) ${missing.join(", ")} (tenant profile requiredImageHosts).`);
+  }
   if (opts.requireFinal && prov.length > 0) throw new MappingError(MAPPING_MESSAGES.requireFinal);
   return {
     mapping: m,
