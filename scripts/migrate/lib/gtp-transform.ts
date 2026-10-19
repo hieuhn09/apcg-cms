@@ -137,6 +137,7 @@ export function legacyTags(raw: unknown, m: Pick<Mapping, "tags">): TagRef[] {
     if (!slug) continue;
     slug = m.tags.renames[slug] ?? slug;
     if (m.tags.drop.includes(slug) || out.some((t) => t.slug === slug)) continue;
+    if (m.tags.keepOnly && !m.tags.keepOnly.includes(slug)) continue;
     out.push({ slug, title: titleCaseWords(slug.replace(/-/g, " ")) });
     if (out.length >= m.tags.maxPerArticle) break;
   }
@@ -357,7 +358,7 @@ export function rewriteInternalLinks(html: string, oldOrigin: string, map: (oldP
  * basename never ends in `-<digits>` (Payload's upload renamer increments such a
  * suffix), and lookups must accept Payload's `-<n>` rename (`storedFilenameMatches`).
  */
-export function stableFilename(url: string): string {
+export function stableFilename(url: string, prefix = "gtp"): string {
   const hash = createHash("sha1").update(url).digest("hex").slice(0, 8);
   let base = "image";
   try {
@@ -374,7 +375,7 @@ export function stableFilename(url: string): string {
   }
   base = base.replace(/\./g, "-").slice(-60).replace(/^-+|-+$/g, "") || "image";
   if (/[0-9]$/.test(base)) base += "-img";
-  return `gtp-${hash}-${base}.${ext}`;
+  return `${prefix}-${hash}-${base}.${ext}`;
 }
 
 /** Does a stored media filename match the stable one, allowing Payload's `-<n>` rename? */

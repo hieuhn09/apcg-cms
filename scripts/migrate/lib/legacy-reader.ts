@@ -13,6 +13,7 @@ import path from "node:path";
 import pg from "pg";
 import { ALLOWED_TABLES, CURSOR_TS, EPOCH, LegacyReadOnlyDb, catalogColumns, cursorOf, keysetPage, setCatalog, siteAuthorsRows, siteRow, slugPlanRows, type AllowedTable, type TableSpec } from "./legacy-sql";
 import { redactRow } from "./gtp-exports";
+import { profile } from "./network-profile";
 import { writeFileSafe, writeJsonSafe } from "./out-dir";
 import { readNdjson } from "./run-dir";
 import { sortKey } from "./slug-plan";
@@ -45,7 +46,7 @@ export class LiveLegacyReader implements LegacyReader {
   private constructor(private readonly db: LegacyReadOnlyDb, private readonly schema: string, private readonly siteId: string, private readonly allow: AllowedTable[]) {}
 
   static async open(url: string, ssl: false | { rejectUnauthorized: boolean; ca?: string }, schema: string, siteId: string, allow: AllowedTable[]): Promise<LiveLegacyReader> {
-    const db = new LegacyReadOnlyDb(() => new pg.Client({ connectionString: url, ssl: ssl === false ? false : ssl, application_name: "gtp-legacy-migrate" }) as never);
+    const db = new LegacyReadOnlyDb(() => new pg.Client({ connectionString: url, ssl: ssl === false ? false : ssl, application_name: `${profile().id}-legacy-migrate` }) as never);
     const r = new LiveLegacyReader(db, schema, siteId, allow);
     const rows = await db.query(catalogColumns(schema, allow));
     for (const c of rows) {
@@ -176,6 +177,9 @@ export async function writeSnapshot(reader: LiveLegacyReader, dir: string, opts:
 export async function assertGtpSite(reader: LegacyReader): Promise<Row> {
   const s = await reader.siteRow();
   if (!s) throw new Error(READER_MESSAGES.siteMissing);
-  if (String(s.slug) !== "gtp") throw new Error(READER_MESSAGES.siteNotGtp);
+  const p = profile();
+  if (p.legacySiteSlugs.length && !p.legacySiteSlugs.includes(String(s.slug))) {
+    throw new Error(p.id === "gtp" ? READER_MESSAGES.siteNotGtp : `legacy: the site filter does not point at the expected legacy site (slug ${p.legacySiteSlugs.join("/")}); refusing (another site must never be read).`);
+  }
   return s;
 }

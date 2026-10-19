@@ -38,14 +38,16 @@ export class TimestampsError extends Error {
   override name = "TimestampsError";
 }
 
-export function generateTimestampsFix(entries: readonly TimestampEntry[], opts: { tenantSlug: string; runId: string }): TimestampsOutput {
+export function generateTimestampsFix(entries: readonly TimestampEntry[], opts: { tenantSlug: string; runId: string; markerSourceName?: string }): TimestampsOutput {
+  const markerName = opts.markerSourceName ?? MARKER_SOURCE_NAME;
+  if (!/^legacy:[a-z0-9.-]+$/.test(markerName)) throw new TimestampsError("timestamps: marker is not SQL-safe; refusing.");
   if (!SAFE_SLUG.test(opts.tenantSlug)) throw new TimestampsError("timestamps: tenant slug is not SQL-safe; refusing.");
   if (!/^[A-Za-z0-9_-]+$/.test(opts.runId)) throw new TimestampsError("timestamps: run id is not SQL-comment-safe; refusing.");
   const blocks: string[] = [];
   const baseline: Record<string, string> = {};
   const skipped: TimestampsOutput["skipped"] = [];
   const tenant = `(SELECT id FROM tenants WHERE slug = '${opts.tenantSlug}')`;
-  const marker = `a.origin = 'import' AND a.engine_source_name = '${MARKER_SOURCE_NAME}'`;
+  const marker = `a.origin = 'import' AND a.engine_source_name = '${markerName}'`;
   for (const e of entries) {
     if (!SAFE_SLUG.test(e.slug)) {
       skipped.push({ slug: e.slug, reason: "slugNotSqlSafe" });
