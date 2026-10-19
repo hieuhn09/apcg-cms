@@ -197,3 +197,41 @@ test("read-only db: BEGIN READ ONLY / QUERY / COMMIT order, unbranded and foreig
   await assert.rejects(db.query(countRows(INT_REG, "articles", "1")), { message: SQL_MESSAGES.notBranded });
   assert.throws(() => new VowasiaReadOnlyDb({ ...REG } as SqlRegistry, () => new FakeClient([])), { message: SQL_MESSAGES.badRegistry });
 });
+
+// Amendment 2 (19-10-26): owner SQL 02 allows EXACTLY two Supabase pg_net relations and
+// self-checks the role's default_transaction_read_only setting; 01e labels them.
+const SQL_DIR = path.resolve(HERE, "..", "sql");
+const ALLOWED_PUBLIC_RELATIONS = ["net._http_response", "net.http_request_queue"];
+
+test("Amendment 2: 02 allow-list is exactly the two pg_net relations, matched by schema.name AND relkind r", () => {
+  const tpl = readFileSync(path.join(SQL_DIR, "02-create-readonly-role-views.sql.template"), "utf8");
+  const code = tpl.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const decl = code.match(/allow_public_relations constant text\[\] := ARRAY\[([^\]]*)\];/g) ?? [];
+  assert.equal(decl.length, 1, "exactly one allow_public_relations declaration");
+  const names = [...(decl[0] ?? "").matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  assert.deepEqual(names, ALLOWED_PUBLIC_RELATIONS, "allow-list holds exactly the two names, schema-qualified");
+  assert.match(code, /NOT \(c\.relkind = 'r' AND n\.nspname \|\| '\.' \|\| c\.relname = ANY \(allow_public_relations\)\)/, "exact schema+name+relkind r exclusion inside the table check");
+  assert.ok(!/nspname\s*(=|<>|NOT IN|IN)\s*\(?\s*'net'/.test(code), "no whole-schema exemption for net");
+});
+
+test("Amendment 2: 02 sets default_transaction_read_only once and self-checks it via pg_db_role_setting", () => {
+  const tpl = readFileSync(path.join(SQL_DIR, "02-create-readonly-role-views.sql.template"), "utf8");
+  const code = tpl.split("\n").filter((l) => !/^\s*--/.test(l));
+  assert.equal(code.filter((l) => /default_transaction_read_only/.test(l) && /ALTER ROLE/.test(l)).length, 1, "one ALTER ROLE line");
+  assert.ok(code.includes("ALTER ROLE vowasia_migrator SET default_transaction_read_only = on;"));
+  const body = code.join("\n");
+  assert.match(body, /pg_db_role_setting/);
+  assert.match(body, /'default_transaction_read_only=on' = ANY \(s\.setconfig\)/);
+  assert.match(body, /SELF-CHECK STOP: vowasia_migrator default_transaction_read_only is not set to on/);
+});
+
+test("Amendment 2: 01e 5f labels the allow-listed relations and shows PUBLIC table privileges, still one statement", () => {
+  const sql = readFileSync(path.join(SQL_DIR, "01e-inspect-single-result.sql"), "utf8");
+  const code = sql.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  assert.match(code, /\(allowed by 02 allow-list\)/);
+  for (const n of ALLOWED_PUBLIC_RELATIONS) assert.ok(code.includes(`'${n}'`), `01e names ${n}`);
+  assert.match(code, /c\.relkind = 'r' AND n\.nspname \|\| '\.' \|\| c\.relname IN \('net\._http_response', 'net\.http_request_queue'\)/);
+  assert.match(code, /PUBLIC privileges=/);
+  assert.ok(!/5f PUBLIC-readable relations \(02 stops on any\)/.test(code), "5f title no longer claims 02 stops on any row");
+  assert.equal((code.match(/;/g) ?? []).length, 1, "01e stays one statement");
+});

@@ -32,6 +32,11 @@
  *      or a NOLOGIN role can use the shared tables; then the filled 02b applies
  *      (RLS SETUP OK, NOINHERIT, VALID UNTIL); manual removal then 03 restores
  *      RLS off; 03 directly after 02b is recorded (policies dropped, RLS on).
+ *   G14 (Amendment 2): with net._http_response + net.http_request_queue granted ALL
+ *      to PUBLIC, 02 applies (NOTICE lists both, role session read-only by default);
+ *      a third PUBLIC table in net, net2._http_response, an allow-listed name that is
+ *      a view, and 02 without the default_transaction_read_only line each STOP with
+ *      nothing created; 01e 5f labels only the exact allow-listed table.
  * The generated role password is never printed and never written to sql/*.
  */
 import assert from "node:assert/strict";
@@ -262,6 +267,54 @@ async function main(): Promise<void> {
   assert.match(rDef.err, /SELF-CHECK STOP: vowasia_migrator can EXECUTE 1 SECURITY DEFINER function\(s\) outside public/);
   assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, "definer STOP creates nothing");
   await withClient("probe_uuid", (c) => c.query("DROP SCHEMA probe_ext CASCADE"));
+  // G14 (Amendment 2): Supabase pg_net relations. net._http_response + net.http_request_queue
+  // with ALL granted to PUBLIC (Supabase default) are allowed BY NAME; anything else still STOPs.
+  const stop14 = async (sqlText: string, why: RegExp, what: string): Promise<void> => {
+    const f = path.join(DIR, "02-g14.sql");
+    writeFileSync(f, sqlText, { mode: 0o600 });
+    const r = psql("probe_uuid", f);
+    assert.notEqual(r.status, 0, `${what}: 02 must stop`);
+    assert.match(r.err, why, what);
+    assert.equal(await withClient("probe_uuid", async (c) => (await c.query(countSql)).rows[0].n), 0, `${what}: nothing created (role and schema absent)`);
+  };
+  await withClient("probe_uuid", async (c) => {
+    await c.query("CREATE SCHEMA net");
+    await c.query("GRANT USAGE ON SCHEMA net TO PUBLIC");
+    await c.query("CREATE TABLE net._http_response (id bigint, status_code int)");
+    await c.query("CREATE TABLE net.http_request_queue (id bigint, url text)");
+    await c.query("GRANT ALL ON net._http_response, net.http_request_queue TO PUBLIC");
+  });
+  // G14b: a third PUBLIC-readable table in the same schema -> STOP (not a whole-schema exemption).
+  await withClient("probe_uuid", (c) => c.query("CREATE TABLE net.other (i int); GRANT SELECT ON net.other TO PUBLIC"));
+  await stop14(fill(tpl02, u.siteV, "probe_uuid"), /SELF-CHECK STOP: vowasia_migrator has a privilege on a table outside vowasia_ro/, "G14b net.other");
+  await withClient("probe_uuid", (c) => c.query("DROP TABLE net.other"));
+  // G14c: the same table name in another schema -> STOP (exact schema+name match).
+  await withClient("probe_uuid", async (c) => {
+    await c.query("CREATE SCHEMA net2");
+    await c.query("GRANT USAGE ON SCHEMA net2 TO PUBLIC");
+    await c.query("CREATE TABLE net2._http_response (id bigint)");
+    await c.query("GRANT ALL ON net2._http_response TO PUBLIC");
+  });
+  await stop14(fill(tpl02, u.siteV, "probe_uuid"), /SELF-CHECK STOP: vowasia_migrator has a privilege on a table outside vowasia_ro/, "G14c net2._http_response");
+  await withClient("probe_uuid", (c) => c.query("DROP SCHEMA net2 CASCADE"));
+  // G14c': an allow-listed NAME that is a view (relkind v), not a table -> STOP (relkind r only).
+  await withClient("probe_uuid", async (c) => {
+    await c.query("ALTER TABLE net.http_request_queue RENAME TO http_request_queue_t");
+    await c.query("REVOKE ALL ON net.http_request_queue_t FROM PUBLIC"); // only the view stays PUBLIC-readable
+    await c.query("CREATE VIEW net.http_request_queue AS SELECT * FROM net.http_request_queue_t");
+    await c.query("GRANT SELECT ON net.http_request_queue TO PUBLIC");
+  });
+  await stop14(fill(tpl02, u.siteV, "probe_uuid"), /SELF-CHECK STOP: vowasia_migrator has a privilege on a table outside vowasia_ro/, "G14c' allow-listed name as a view");
+  await withClient("probe_uuid", async (c) => {
+    await c.query("DROP VIEW net.http_request_queue");
+    await c.query("ALTER TABLE net.http_request_queue_t RENAME TO http_request_queue");
+    await c.query("GRANT ALL ON net.http_request_queue TO PUBLIC");
+  });
+  // G14d: mutation without the ALTER ROLE ... default_transaction_read_only line -> STOP.
+  const noSetting = fill(tpl02, u.siteV, "probe_uuid").replace("ALTER ROLE vowasia_migrator SET default_transaction_read_only = on;\n", "");
+  assert.notEqual(noSetting, fill(tpl02, u.siteV, "probe_uuid"), "G14d mutation removed the setting line");
+  await stop14(noSetting, /SELF-CHECK STOP: vowasia_migrator default_transaction_read_only is not set to on/, "G14d setting missing");
+  log("G14 b/c/d: a third PUBLIC table in net, net2._http_response, an allow-listed name as a view, and a missing default_transaction_read_only setting -> STOP inside the transaction, nothing created");
   assert.equal(await baseState("probe_uuid"), before, "base tables unchanged by a rolled-back 02");
   log("C 02: wrong site id / wrong slug / wrong db name / neondb / PUBLIC SECURITY DEFINER in public and outside public -> STOP inside the transaction, nothing created");
   const filled = path.join(DIR, "02-filled.sql");
@@ -270,6 +323,7 @@ async function main(): Promise<void> {
   assert.equal(applied.status, 0, `02 apply failed: ${applied.err}`);
   assert.equal(lastLine(applied.out), "SELF-CHECK OK", "02 self-check");
   assert.match(applied.out, /^probe_uuid\|postgres$/m, "02 prints database and user first");
+  assert.match(applied.err, /allow-listed relations reachable by the role \(Amendment 2\): net\._http_response, net\.http_request_queue/, "G14a NOTICE lists both allowed relations");
   assert.equal(await withClient("postgres", async (c) => (await c.query("SELECT (rolvaliduntil > now() AND rolvaliduntil < now() + interval '15 days') AS ok FROM pg_roles WHERE rolname = 'vowasia_migrator'")).rows[0].ok), true, "role has VALID UNTIL ~14 days");
   await withClient("postgres", (c) => c.query(`ALTER ROLE vowasia_migrator PASSWORD ${c.escapeLiteral(PASSWORD)}`));
   assert.equal(await baseState("probe_uuid"), before, "base tables RLS/policies/grants unchanged by 02");
@@ -289,6 +343,9 @@ async function main(): Promise<void> {
       await expectPgError("42703", () => c.query("SELECT author_email FROM vowasia_ro.articles"), "personal column not in view");
       for (const t of ["public.articles", "public.sites", "public.secret_table_a"]) await expectPgError("42501", () => c.query(`SELECT 1 FROM ${t} LIMIT 1`), `read ${t}`);
       assert.equal((await c.query("SHOW default_transaction_read_only")).rows[0].default_transaction_read_only, "on", "role default read-only");
+      // G14a: the allowed pg_net table is reachable (inherited from PUBLIC, documented limit), but read-only by default.
+      await c.query("SELECT count(*) FROM net._http_response");
+      await expectPgError("25006", () => c.query("DELETE FROM net._http_response"), "G14a write to net in the default read-only session");
       await expectPgError("42501", () => c.query("UPDATE vowasia_ro.articles SET title = 'x'"), "update in the default session");
       await c.query("BEGIN READ WRITE");
       await expectPgError("42501", () => c.query("INSERT INTO vowasia_ro.articles (id, site_id) VALUES (gen_random_uuid(), gen_random_uuid())"), "insert via view");
@@ -312,6 +369,7 @@ async function main(): Promise<void> {
     PASSWORD,
   );
   assert.equal(await baseState("probe_uuid"), before, "base tables unchanged after role checks");
+  log("G14a: 02 applies with net._http_response + net.http_request_queue granted ALL to PUBLIC; NOTICE lists both; SHOW default_transaction_read_only = on; write to net refused in the default session");
   log("C role: reads only vowasia via views; base tables, decoys, writes, DDL and SET ROLE refused");
 
   // D: discover through the role (views), overlay fixture.
@@ -438,11 +496,17 @@ async function main(): Promise<void> {
     await c.query("GRANT USAGE, CREATE ON SCHEMA probe_open TO PUBLIC");
     await c.query("CREATE FUNCTION public.leak_e() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'");
     await c.query("CREATE FUNCTION public.trg_e() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS 'BEGIN RETURN NEW; END'");
+    await c.query("CREATE SCHEMA net; GRANT USAGE ON SCHEMA net TO PUBLIC; CREATE TABLE net._http_response (id bigint); GRANT ALL ON net._http_response TO PUBLIC");
+    await c.query("CREATE SCHEMA net2; GRANT USAGE ON SCHEMA net2 TO PUBLIC; CREATE TABLE net2._http_response (id bigint); GRANT SELECT ON net2._http_response TO PUBLIC");
   });
   await withClient("probe_empty", async (c) => {
     const r = await c.query(sql01e);
     assert.ok(r.rows.some((x) => x.section === "6 vowasia site row" && x.item === "public.sites" && /^columns missing/.test(x.detail)), "01e does not fail when public.sites lacks slug/name");
     assert.ok(r.rows.some((x) => x.section.startsWith("5f ") && x.item === "public.sites"), "01e 5f lists a PUBLIC-readable table (02 would stop)");
+    const f5 = (item: string) => r.rows.find((x) => x.section.startsWith("5f ") && x.item === item)?.detail ?? "";
+    assert.match(f5("net._http_response"), /^relkind=r \(allowed by 02 allow-list\) PUBLIC privileges=.*SELECT/, "01e 5f marks the allow-listed pg_net table and shows PUBLIC privileges");
+    assert.match(f5("net2._http_response"), /\(outside articles\/sites\) PUBLIC privileges=SELECT$/, "01e 5f does not mark the same name in another schema");
+    assert.ok(!/allowed by/.test(f5("public.sites")), "01e 5f: public.sites is not allow-listed (02 would stop)");
     assert.ok(r.rows.some((x) => x.section.startsWith("5g ") && x.item === "probe_open"), "01e 5g lists a schema where PUBLIC can add objects");
     assert.ok(r.rows.some((x) => x.section.startsWith("5d ") && x.item === "public.leak_e" && x.detail.startsWith("in_public=yes")), "01e 5d marks an ordinary definer in public");
     assert.ok(!r.rows.some((x) => x.item === "public.trg_e"), "01e 5d does not count trigger-returning functions (same as 02)");

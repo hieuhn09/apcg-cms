@@ -18,7 +18,8 @@
 -- (bảng thiếu thì các mục liên quan in 'missing', không báo lỗi). Nếu public.sites
 -- thiếu cột id/slug/name, mục 6 in 'columns missing' (không lỗi); khi đó chạy riêng
 -- truy vấn dự phòng một dòng ở VOWASIA-LEGACY.md (B2).
--- Mục 5d, 5f, 5g đếm ĐÚNG như điều kiện DỪNG của 02 (không tính hàm trả trigger).
+-- Mục 5d, 5f, 5g đếm ĐÚNG như điều kiện DỪNG của 02 (không tính hàm trả trigger;
+-- 5f: 02 KHÔNG dừng với hàng mang nhãn '(allowed by 02 allow-list)', Amendment 2).
 
 WITH
 s1 AS (
@@ -143,11 +144,16 @@ s5d AS (
 ),
 s5f AS (
   -- Như 02: mọi bảng/view mà PUBLIC có quyền (bảng hoặc cột; grantee 0 = PUBLIC).
-  -- 02 dừng nếu có BẤT KỲ hàng nào.
-  SELECT 57 AS ord, 0 AS sub, '5f PUBLIC-readable relations (02 stops on any)' AS section,
+  -- 02 dừng nếu có BẤT KỲ hàng nào KHÔNG mang nhãn '(allowed by 02 allow-list)'
+  -- (Amendment 2: đúng net._http_response và net.http_request_queue, relkind 'r').
+  SELECT 57 AS ord, 0 AS sub, '5f PUBLIC-readable relations (02 stops on any not allowed by its allow-list)' AS section,
          n.nspname || '.' || c.relname AS item,
          'relkind=' || c.relkind::text
-         || CASE WHEN n.nspname || '.' || c.relname IN ('public.articles', 'public.sites') THEN ' (articles/sites)' ELSE ' (outside articles/sites)' END AS detail
+         || CASE WHEN c.relkind = 'r' AND n.nspname || '.' || c.relname IN ('net._http_response', 'net.http_request_queue') THEN ' (allowed by 02 allow-list)'
+                 WHEN n.nspname || '.' || c.relname IN ('public.articles', 'public.sites') THEN ' (articles/sites)'
+                 ELSE ' (outside articles/sites)' END
+         || ' PUBLIC privileges=' || coalesce((SELECT string_agg(DISTINCT a.privilege_type, ',' ORDER BY a.privilege_type)
+                                              FROM aclexplode(c.relacl) a WHERE a.grantee = 0), '(column-level only)') AS detail
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname NOT IN ('vowasia_ro', 'pg_catalog', 'information_schema', 'pg_toast')
     AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -214,7 +220,7 @@ emptyrows AS (
   SELECT x.ord, 0 AS sub, x.section, '(none)' AS item, '' AS detail
   FROM (VALUES (20, '2 public tables/views'), (30, '3 rls policies (public)'), (40, '4 site_id column types'),
                (52, '5a nologin roles reading the tables'), (53, '5e role membership'), (54, '5b connected roles'),
-               (57, '5f PUBLIC-readable relations (02 stops on any)'), (58, '5g schemas where PUBLIC can add objects (02 stops on any)'),
+               (57, '5f PUBLIC-readable relations (02 stops on any not allowed by its allow-list)'), (58, '5g schemas where PUBLIC can add objects (02 stops on any)'),
                (60, '6b columns')) AS x(ord, section)
   WHERE NOT EXISTS (SELECT 1 FROM allrows a WHERE a.section = x.section)
 ),

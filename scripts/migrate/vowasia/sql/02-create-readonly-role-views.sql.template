@@ -46,7 +46,19 @@
 --   - PostgreSQL <= 14: PUBLIC mặc định có CREATE trên schema public, nên tự kiểm
 --     LUÔN dừng ở đó. Đó là hành vi đúng: dừng và báo, KHÔNG tự REVOKE.
 --   - default_transaction_read_only chỉ là MẶC ĐỊNH của phiên (role tự tắt được);
---     hàng rào thật là: role chỉ có SELECT trên hai view.
+--     hàng rào thật là: role chỉ có SELECT trên hai view. Tự kiểm DỪNG nếu dòng
+--     ALTER ROLE ... default_transaction_read_only = on bị xoá/gõ sai
+--     (đọc lại pg_db_role_setting trong cùng giao dịch).
+--   - Amendment 2 (19-10-26): allow_public_relations cho qua ĐÚNG hai bảng tiện ích
+--     mở rộng pg_net của Supabase, net._http_response và net.http_request_queue
+--     (khớp chính xác schema.tên VÀ relkind 'r'). Mặc định Supabase cấp quyền cho
+--     PUBLIC trên hai bảng này (mọi role, kể cả anon/authenticated, đều có), nên role
+--     mới thừa hưởng; file này KHÔNG REVOKE/GRANT gì trong schema net. Mọi quan hệ
+--     khác mà PUBLIC với tới (kể cả bảng khác trong net, hay cùng tên ở schema khác)
+--     vẫn DỪNG. Giới hạn: role về lý thuyết đọc/ghi được hai bảng đó nếu tự tắt
+--     default_transaction_read_only; chặn bằng hạn 14 ngày, mật khẩu chỉ chủ giữ,
+--     xoá role khi xong (03 / 03e). Project khác có bảng tiện ích khác: vẫn DỪNG,
+--     cần amendment mới.
 --   - Role có hạn dùng (VALID UNTIL, 14 ngày). Đổi mật khẩu KHÔNG gia hạn. Nếu
 --     Giai đoạn B bị hoãn lâu hơn: chạy 03 rồi chạy lại file này, HOẶC
 --     ALTER ROLE vowasia_migrator VALID UNTIL với mốc mới (xem VOWASIA-LEGACY.md).
@@ -110,7 +122,16 @@ DECLARE
   n_definer int;
   -- Đổi thành 'yes' CHỈ sau khi đã xem file 01 mục 5d và chấp nhận các hàm đó.
   allow_definer_outside_public constant text := 'no';
+  -- Amendment 2: ĐÚNG hai bảng pg_net của Supabase (schema.tên, relkind 'r'). KHÔNG thêm tên.
+  allow_public_relations constant text[] := ARRAY['net._http_response', 'net.http_request_queue'];
+  allowed_seen text;
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
+    WHERE r.rolname = 'vowasia_migrator' AND s.setdatabase = 0
+      AND 'default_transaction_read_only=on' = ANY (s.setconfig)) THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator default_transaction_read_only is not set to on; nothing was created (HS5)';
+  END IF;
   IF (SELECT count(*) FROM vowasia_ro.sites) <> 1 THEN
     RAISE EXCEPTION 'SELF-CHECK STOP: view sites does not return exactly 1 row (wrong site id?); nothing was created (HS5)';
   END IF;
@@ -137,9 +158,17 @@ BEGIN
       AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
       AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
       AND (has_table_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
-           OR has_any_column_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))) THEN
+           OR has_any_column_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))
+      AND NOT (c.relkind = 'r' AND n.nspname || '.' || c.relname = ANY (allow_public_relations))) THEN
     RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator has a privilege on a table outside vowasia_ro (PUBLIC grant?); nothing was created (HS5)';
   END IF;
+  SELECT string_agg(n.nspname || '.' || c.relname, ', ' ORDER BY n.nspname, c.relname) INTO allowed_seen
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE c.relkind = 'r' AND n.nspname || '.' || c.relname = ANY (allow_public_relations)
+    AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
+    AND (has_table_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+         OR has_any_column_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'));
+  RAISE NOTICE 'vowasia: allow-listed relations reachable by the role (Amendment 2): %', coalesce(allowed_seen, '(none)');
   IF EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.prosecdef
