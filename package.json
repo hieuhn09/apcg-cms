@@ -46,6 +46,8 @@
     "lint:migrate": "eslint scripts/migrate --ignore-pattern \"scripts/migrate/out/**\"",
     "test:migrate-gtp": "tsx --test scripts/migrate/lib/*.test.ts",
     "migrate:vowasia:discover": "tsx scripts/migrate/vowasia/discover-vowasia.ts",
+    "migrate:vowasia:snapshot": "tsx scripts/migrate/vowasia/snapshot-vowasia.ts",
+    "migrate:vowasia:measure": "tsx scripts/migrate/vowasia/measure-vowasia.ts",
     "test:migrate-vowasia": "tsx --test scripts/migrate/vowasia/lib/*.test.ts",
     "probe:migrate-vowasia": "bash scripts/migrate/vowasia/fixtures/keyset-probe.sh",
     "audit:gcv-export": "tsx scripts/audit/gcv-audit-export.ts",

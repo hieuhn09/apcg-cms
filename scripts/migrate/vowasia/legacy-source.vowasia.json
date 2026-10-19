@@ -17,8 +17,12 @@
       "subsection": "subsection",
       "slug": "slug",
       "title": "title",
+      "excerpt": "excerpt",
       "body": "body_sections",
-      "image": "featured_image"
+      "image": "featured_image",
+      "imageCredit": "featured_image_credit",
+      "tags": "tags",
+      "updatedAt": "updated_at"
     }
   }
 }

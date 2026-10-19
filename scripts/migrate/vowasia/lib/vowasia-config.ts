@@ -62,7 +62,7 @@ const tableSchema = z
   })
   .strict();
 
-const ROLE_NAMES = ["createdAt", "publishedAt", "status", "category", "section", "subsection", "slug", "title", "body", "image", "name", "bio", "beats"] as const;
+export const ROLE_NAMES = ["createdAt", "publishedAt", "status", "category", "section", "subsection", "slug", "title", "body", "image", "name", "bio", "beats", "excerpt", "imageCredit", "tags", "updatedAt"] as const;
 export type ColumnRole = (typeof ROLE_NAMES)[number];
 
 const rolesSchema = z.object(Object.fromEntries(ROLE_NAMES.map((r) => [r, ident.optional()])) as Record<ColumnRole, z.ZodOptional<typeof ident>>).strict();

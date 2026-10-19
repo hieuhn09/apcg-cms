@@ -107,3 +107,26 @@ test("m6: expectedSiteSlug is locked to the vowasia slug (an overlay cannot poin
   }
   assert.equal(parseSourceConfig(withSource({ expectedSiteSlug: "vowasia" })).source.expectedSiteSlug, "vowasia");
 });
+
+test("B-α U1: the hypothesis maps the 13 snapshot roles, incl. excerpt / imageCredit / tags / updatedAt", () => {
+  const cfg = parseSourceConfig(base());
+  assert.deepEqual(cfg.source.columnRoles, {
+    createdAt: "created_at",
+    publishedAt: "published_at",
+    status: "status",
+    section: "section",
+    subsection: "subsection",
+    slug: "slug",
+    title: "title",
+    excerpt: "excerpt",
+    body: "body_sections",
+    image: "featured_image",
+    imageCredit: "featured_image_credit",
+    tags: "tags",
+    updatedAt: "updated_at",
+  });
+  // the new roles are optional (an overlay may rename them) and still identifier-checked
+  const renamed = parseSourceConfig(withSource({ columnRoles: { imageCredit: "hero_credit", updatedAt: "modified_at" } }));
+  assert.equal(renamed.source.columnRoles.imageCredit, "hero_credit");
+  assert.throws(() => parseSourceConfig(withSource({ columnRoles: { excerpt: "Bad-Name" } })), { message: CONFIG_MESSAGES.ident });
+});
