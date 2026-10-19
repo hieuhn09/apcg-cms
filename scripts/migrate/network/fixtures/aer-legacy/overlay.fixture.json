@@ -1,0 +1,4 @@
+{
+  "source": { "siteFilter": "00000000-0000-0000-0000-0000000ae001" },
+  "media": { "hostAllowlist": ["legacy-storage.fixture.invalid"], "hostRewrite": { "legacy-storage.fixture.invalid": "127.0.0.1:55428" } }
+}

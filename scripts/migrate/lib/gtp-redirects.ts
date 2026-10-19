@@ -6,6 +6,7 @@
 import type { Mapping } from "./gtp-mapping";
 import { normalise } from "./normalise-path";
 import type { SlugMapEntry } from "./run-dir";
+import { profile } from "./network-profile";
 import { isKnownDestination, type KnownRoutes, type MapValue } from "./gtp-redirect-contract";
 
 export interface RedirectRule {
@@ -67,7 +68,8 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
   for (const e of articles) {
     if (e.oldSection) {
       const oldSec = m.urls.sectionPaths[e.oldSection] ?? `/${e.oldSection}`;
-      if (!sectionsSeen.has(oldSec)) sectionsSeen.set(oldSec, sectionTarget(e.oldSection));
+      // An old section that is itself a pillar keeps its page (GTP); otherwise it goes to the pillar its rows were mapped to.
+      if (!sectionsSeen.has(oldSec)) sectionsSeen.set(oldSec, sectionTarget(profile().pillarSlugs.includes(e.oldSection) ? e.oldSection : e.pillar ?? e.oldSection));
       if (e.oldSub) {
         const oldSubPath = `${oldSec}/${e.oldSub}`;
         if (!sectionsSeen.has(oldSubPath)) sectionsSeen.set(oldSubPath, sectionTarget(e.pillar ?? e.oldSection, e.subSection));
@@ -78,7 +80,7 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
       add(e.oldUrl, `/article/${e.slug}`, 301, "article", "slug-map", e.legacyId);
       out.counts.published = (out.counts.published ?? 0) + 1;
     } else if (e.status === "archived") {
-      const to = m.archivedAs === "410" ? null : sectionTarget(e.pillar ?? e.oldSection ?? "news", e.subSection);
+      const to = m.archivedAs === "410" ? null : sectionTarget(e.pillar ?? e.oldSection ?? (profile().pillarSlugs[0] as string), e.subSection);
       add(e.oldUrl, to, m.archivedAs === "410" ? 410 : 301, "article", "slug-map", e.legacyId);
       out.counts.archived = (out.counts.archived ?? 0) + 1;
     } else out.counts.draftsNoRule = (out.counts.draftsNoRule ?? 0) + 1;
@@ -99,7 +101,7 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
     add(p, null, 410, "static", "rule", `gone:${p}`);
     out.counts.gone = (out.counts.gone ?? 0) + 1;
   }
-  const feedTarget = kr.static.find((s) => FEEDS.includes(s)) ?? "/news";
+  const feedTarget = kr.static.find((s) => FEEDS.includes(s)) ?? `/${profile().pillarSlugs[0] as string}`;
   for (const f of FEEDS) {
     add(f, feedTarget, 301, "feed", "rule", `feed:${f}`);
     out.counts.feeds = (out.counts.feeds ?? 0) + 1;

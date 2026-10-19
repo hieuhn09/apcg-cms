@@ -1,0 +1,24 @@
+{
+  "id": "aer",
+  "tenant": "aer",
+  "legacySiteSlugs": [],
+  "markerSourceName": "legacy:asiaeconomicreview",
+  "legacyDbEnv": "LEGACY_DB_URL",
+  "readTokenEnv": "CENTRAL_READ_TOKEN",
+  "mappingPath": "scripts/migrate/network/mappings/aer.mapping.json",
+  "fixtureSiteId": "00000000-0000-0000-0000-0000000ae001",
+  "pillarSlugs": ["asia-watch", "briefings", "corporate-asia", "interviews", "long-view", "in-focus"],
+  "singleHomePillars": [],
+  "extraOwnerDecisionKeys": {
+    "categories.map": "AER-section-map",
+    "authors.distribute": "AER-bylines",
+    "authors.bySection": "AER-bylines",
+    "tags.keepOnly": "AER-tags",
+    "media.bodyImages": "AER-body-images"
+  },
+  "reservedSlugs": [
+    "asia-watch", "briefings", "corporate-asia", "interviews", "long-view", "in-focus", "about", "team", "contact", "corrections",
+    "privacy", "terms", "newsletters", "search", "sitemap", "robots", "preview", "api", "article"
+  ],
+  "mediaPrefix": "aer"
+}

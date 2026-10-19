@@ -26,10 +26,11 @@ import { writeFileSafe } from "./out-dir";
 import { applyRewrittenLinks } from "./verify-parity-links";
 import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId } from "./run-dir";
 import type { SlugPlanEntry } from "./slug-plan";
+import { profile } from "./network-profile";
 
 type Doc = Record<string, unknown>;
 type P = Awaited<ReturnType<typeof getPayload>>;
-const MARKER = { origin: "import", engineSourceName: "legacy:globaltravelpost" };
+const MARKER = { origin: "import", engineSourceName: profile().markerSourceName };
 
 async function findAll(payload: P, collection: string, where: Doc, extra: Doc = {}): Promise<Doc[]> {
   const out: Doc[] = [];
@@ -79,7 +80,7 @@ async function main(): Promise<number> {
   const src: Doc[] = [];
   for await (const p of reader.pages("articles", ["id", "slug", "title", "status", "section", "subsection", "body_sections", "featured_image", "source_url", "published_at", "byline"], batch)) src.push(...p);
   const eventsSrc: Doc[] = [];
-  for await (const p of reader.pages("events", "all", batch)) eventsSrc.push(...p);
+  if (v.mapping.events.enabled) for await (const p of reader.pages("events", "all", batch)) eventsSrc.push(...p);
   await reader.close();
   const exp = expectedFromSource(src, m);
 
@@ -237,7 +238,7 @@ async function main(): Promise<number> {
       if (e && e.status === "published" && !visible) fails.push(`${String(d.slug)}: published row not public`);
     }
     if (publicBase) {
-      if (!tok.token) throw new CliError("verify: --public-base needs GTP_READ_TOKEN.");
+      if (!tok.token) throw new CliError(`verify: --public-base needs ${profile().readTokenEnv}.`);
       const headers = { authorization: `Bearer ${tok.token}` };
       const published = art.filter((d) => d.workflowStatus === "published");
       const nonPublic = art.filter((d) => d.workflowStatus !== "published");
@@ -258,9 +259,10 @@ async function main(): Promise<number> {
   }
   // 10 single-home
   {
-    const pr = [...pillars.entries()].find(([, s]) => s === "press-room")?.[0];
-    const fails = art.filter((d) => relId(d.pillar) === pr && (relId(d.subSection) || (Array.isArray(d.secondarySections) && d.secondarySections.length) || d.exclusive === true)).map((d) => String(d.slug));
-    add("10", "single-home (press-room)", fails);
+    const sh = new Set(profile().singleHomePillars);
+    const prs = new Set([...pillars.entries()].filter(([, s]) => sh.has(s)).map(([id]) => id));
+    const fails = art.filter((d) => prs.has(relId(d.pillar) ?? "") && (relId(d.subSection) || (Array.isArray(d.secondarySections) && d.secondarySections.length) || d.exclusive === true)).map((d) => String(d.slug));
+    add("10", `single-home (${profile().singleHomePillars.join(", ") || "none for this tenant"})`, fails);
   }
   // 11 provenance and marker
   {
@@ -294,7 +296,7 @@ async function main(): Promise<number> {
     add("E", "events (imported = total - duplicates - near; inactive archived; briefs shape)", fails);
   }
   // 12 PII scan of the report itself (below)
-  const lines = [`# GTP parity report (run ${run.dir.split("/").pop()})`, "", `- Central: ${central.banner}; tenant ${tenantSlug}; marker rows ${markerRows.length} (articles ${art.length}, events ${ev.length})`, ""];
+  const lines = [`# ${profile().id.toUpperCase()} parity report (run ${run.dir.split("/").pop()})`, "", `- Central: ${central.banner}; tenant ${tenantSlug}; marker rows ${markerRows.length} (articles ${art.length}, events ${ev.length})`, ""];
   for (const c of checks) {
     lines.push(`## ${c.id} ${c.name}: ${c.status}`);
     for (const d of c.detail) lines.push(`- ${d}`);

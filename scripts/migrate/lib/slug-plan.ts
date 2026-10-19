@@ -14,6 +14,7 @@
 import { slugify } from "../../../src/lib/http";
 import type { Mapping } from "./gtp-mapping";
 import { enText, mapStatus, str } from "./gtp-transform";
+import { profile } from "./network-profile";
 
 export const DEFAULT_RESERVED_SLUGS = [
   "news", "destinations", "business-of-travel", "experiences-luxury", "press-room", "events-awards", "about", "team", "contact",
@@ -72,7 +73,7 @@ export function baseSlugFor(row: PlanRow): { slug: string; changed?: { from: str
 }
 
 export function buildSlugPlan(rows: readonly PlanRow[], m: Pick<Mapping, "status" | "slug">, reservedExtra: readonly string[] = []): SlugPlanEntry[] {
-  const reserved = new Set([...DEFAULT_RESERVED_SLUGS, ...m.slug.reservedSlugs, ...reservedExtra]);
+  const reserved = new Set([...(profile().reservedSlugs ?? DEFAULT_RESERVED_SLUGS), ...m.slug.reservedSlugs, ...reservedExtra]);
   const eligible = rows.filter((r) => mapStatus(r.status, m).kind === "import");
   const ordered = [...eligible].sort((a, b) => (sortKey(a.created_at, a.id) < sortKey(b.created_at, b.id) ? -1 : 1));
   const used = new Map<string, string>(); // slug -> legacyId that owns it

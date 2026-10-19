@@ -4,6 +4,7 @@
  */
 import path from "node:path";
 import { assertLocalDb, assertLocalOrConfirmed, LocalDbGuardError } from "../../lib/local-db-guard";
+import { assertCentralDbName, CentralDbNameError } from "../../lib/central-db-name-guard";
 import { CliError } from "./args";
 import type { ParsedArgs } from "./args";
 import { legacyBanner, legacySsl } from "./db-banner";
@@ -14,6 +15,7 @@ import { assertOutDirSafe, OutDirError, repoRoot } from "./out-dir";
 import { RunDirError } from "./run-dir";
 import { DbBannerError } from "./db-banner";
 import { TimestampsError } from "./gtp-timestamps";
+import { ProfileError, legacyEnvNames, profile } from "./network-profile";
 
 export const DEFAULT_OUT = path.join(repoRoot(), "scripts/migrate/out");
 
@@ -42,20 +44,23 @@ export interface CentralTarget {
 export function centralTarget(a: ParsedArgs, apply: boolean): CentralTarget {
   const url = process.env.DATABASE_URL;
   const t = assertLocalOrConfirmed(url, a.get("confirm-host"), Boolean(process.stdin.isTTY), apply);
+  // Network bundle: also the database NAME (non-local must be exactly /neondb). GTP keeps its original guard set.
+  if (profile().id !== "gtp") assertCentralDbName(url, t);
   let local = true;
   try {
     assertLocalDb(url);
   } catch {
     local = false;
   }
-  console.log(`[gtp] Central target: ${t.banner} (${local ? "LOCAL" : "NON-LOCAL"})${apply ? "" : " [dry run]"}`);
+  console.log(`[${profile().id}] Central target: ${t.banner} (${local ? "LOCAL" : "NON-LOCAL"})${apply ? "" : " [dry run]"}`);
   return { url: url as string, banner: t.banner, local };
 }
 
 export const IMPORT_TENANT = "gtp";
 export function assertImportTenant(): string {
-  const t = process.env.IMPORT_TENANT_SLUG ?? IMPORT_TENANT;
-  if (t !== IMPORT_TENANT) throw new CliError("cli: IMPORT_TENANT_SLUG other than gtp is refused.");
+  const want = profile().tenant;
+  const t = process.env.IMPORT_TENANT_SLUG ?? want;
+  if (t !== want) throw new CliError(`cli: IMPORT_TENANT_SLUG other than ${want} is refused.`);
   return t;
 }
 
@@ -65,18 +70,18 @@ export async function openLegacy(a: ParsedArgs, v: ValidationResult, siteId: str
   let reader: LegacyReader;
   if (snap) {
     reader = SnapshotLegacyReader.open(resolvePath(snap), siteId);
-    console.log(`[gtp] legacy source: snapshot ${path.basename(resolvePath(snap))}`);
+    console.log(`[${profile().id}] legacy source: snapshot ${path.basename(resolvePath(snap))}`);
   } else {
-    const url = process.env.LEGACY_GTP_DB_URL;
+    const url = process.env[legacyEnvNames().url];
     const b = legacyBanner(url);
-    console.log(`[gtp] legacy source: ${b.banner} (read-only, site-filtered)`);
+    console.log(`[${profile().id}] legacy source: ${b.banner} (read-only, site-filtered)`);
     reader = await LiveLegacyReader.open(url as string, legacySsl(process.env, b.local), v.mapping.source.schema, siteId, effectiveAllowList(v.mapping.source.tableAllowList));
   }
   await assertGtpSite(reader);
   return reader;
 }
 
-const KNOWN = [CliError, MappingError, LocalDbGuardError, LegacySqlError, OutDirError, RunDirError, DbBannerError, TimestampsError];
+const KNOWN = [CliError, MappingError, LocalDbGuardError, LegacySqlError, OutDirError, RunDirError, DbBannerError, TimestampsError, ProfileError, CentralDbNameError];
 
 /** Uniform failure handler: fixed messages, exit 2 for refusals, 1 otherwise. */
 export function runMain(name: string, fn: () => Promise<number | void>): void {

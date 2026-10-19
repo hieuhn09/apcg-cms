@@ -22,12 +22,13 @@ import { pDelete, pFind, pUpdate } from "../../lib/payload-loose";
 import { CliError } from "./args";
 import { parseCommand } from "./cli-spec";
 import { assertImportTenant, centralTarget, outDir, runMain } from "./cli-common";
+import { profile } from "./network-profile";
 import { untouched } from "./rollback-rules";
 import { RunDir, RunDirError, RUN_MESSAGES, checkRunId, journaledArticleIds } from "./run-dir";
 
 type Doc = Record<string, unknown>;
 type P = Awaited<ReturnType<typeof getPayload>>;
-const MARKER = { origin: "import", engineSourceName: "legacy:globaltravelpost" };
+const MARKER = { origin: "import", engineSourceName: profile().markerSourceName };
 const ctx = { disableRevalidate: true, skipTranslationEnqueue: true };
 
 async function findAll(payload: P, collection: string, where: Doc, extra: Doc = {}): Promise<Doc[]> {
