@@ -336,3 +336,31 @@ Chỉ đổi chữ trong `VOWASIA-LEGACY.md` và dòng chú thích `--` của `s
 | NIT `\` trong 01e | có | ghi chú ở B2: thoát của LIKE, không phải meta-lệnh |
 
 Cổng chạy lại (16-10-26): G1 56/56; G2 0 lỗi, 1 cảnh báo có sẵn; G3 exit 0; G4 69/69; G5 267/267; G7 chỉ `package.json`; G7b 3 dòng; G7c rỗng; G8 exit 0; G10 (3 lệnh, gồm cổng mật khẩu danh sách trắng) rỗng; G10a rỗng; G13 exit 0. G6 (probe) không chạy: không đổi gì probe dùng. Quét tĩnh doc: mỗi khối bash một dòng, không `#`/`<`/`>`, không `postgres://`/`postgresql://`, không "Cmd+H".
+
+## Amendment 2 (19-10-26): EXECUTE
+
+TL;DR: `02` nay cho qua ĐÚNG hai bảng pg_net của Supabase (`net._http_response`, `net.http_request_queue`, khớp schema+tên+relkind `r`) và tự kiểm `default_transaction_read_only=on` qua `pg_db_role_setting`; `01e` 5f gắn nhãn hai bảng đó; probe G14a-d xanh, mọi đột biến đỏ; mọi cổng xanh. Không đụng GTP, không DB thật, không file mới. G9 review chưa chạy (orchestrator gọi).
+
+**Đã làm (đúng phạm vi Amendment 2):**
+
+| File | Thay đổi |
+|---|---|
+| `sql/02-create-readonly-role-views.sql.template` | `allow_public_relations constant text[]` = đúng 2 tên; phép kiểm bảng thêm `AND NOT (c.relkind = 'r' AND n.nspname \|\| '.' \|\| c.relname = ANY (allow_public_relations))`; `RAISE NOTICE` liệt kê quan hệ được phép mà role với tới; tự kiểm `pg_db_role_setting` (setdatabase 0) đầu khối TỰ KIỂM, STOP `default_transaction_read_only is not set to on`. Dòng `ALTER ROLE ... default_transaction_read_only = on` giữ nguyên, không lặp. Header ghi lý do + giới hạn. |
+| `sql/01e-inspect-single-result.sql` | Tiêu đề 5f: `(02 stops on any not allowed by its allow-list)`; `detail` thêm `(allowed by 02 allow-list)` cho đúng 2 bảng (relkind r) và `PUBLIC privileges=...`; vẫn một câu, thứ tự hàng không đổi. `01` không có mục 5f: không sửa. |
+| `sql/03e-drop-in-editor.sql.template` | Header: tìm `__` (phải ra 0) thay cho "tìm chữ LEGACY_DB_NAME" (khớp doc B6). |
+| `lib/vowasia-sql.test.ts` | +3 test (allow-list đúng 2 tên + khớp chính xác; một dòng ALTER ROLE + tự kiểm setting; nhãn 01e + một câu). |
+| `fixtures/keyset-probe.ts` | Ca G14 b, c, c' (tên trong danh sách nhưng là view), d (bỏ dòng ALTER ROLE) STOP không tạo gì; G14a: `02` áp với 2 bảng `net` cấp ALL cho PUBLIC, NOTICE liệt kê cả hai, `SHOW default_transaction_read_only` = on, `DELETE FROM net._http_response` bị từ chối (25006) trong phiên mặc định; 01e 5f gắn nhãn đúng bảng, không gắn `net2._http_response`. `.sh` không đổi. |
+| `VOWASIA-LEGACY.md` | O1: lệnh có `--confirm-host=TÊN_HOST`; O3 ghi chú + B2 đoạn "Về `5f` và hai bảng `net`" (lý do, không REVOKE/GRANT trong `net`, giới hạn K2, chỉ thử PG16 cục bộ K1); bảng "02 dừng ở đâu" thêm dòng setting; B5: xoá hẳn ghi chú ở "Recently Deleted" của Notes. |
+| Plan | Checklist Amendment 2 bước 1-7 đánh dấu; một dòng bằng chứng. HS5 đã ghi ngoại lệ từ trước, không đổi. |
+
+**Đỏ trước (red-first):**
+- Unit: 3 test mới ĐỎ 3/3 trên template/01e cũ, rồi xanh.
+- Probe với `02` của HEAD: `FAILED: G14d setting missing` (02 cũ không tự kiểm).
+- Đột biến trên `02` mới (mỗi lần một probe, chạy một mình): M1 thêm `net.other` -> `FAILED: G14b net.other: 02 must stop` (unit đỏ 1); M2 bỏ `relkind = 'r'` -> `FAILED: G14c' allow-listed name as a view: 02 must stop` (unit đỏ 1); M3 chỉ khớp tên (`'net.' || relname`) -> `FAILED: G14c net2._http_response: 02 must stop` (unit đỏ 1); M4 tắt tự kiểm setting -> `FAILED: G14d setting missing: 02 must stop` (unit KHÔNG đỏ: test chỉ kiểm chữ, probe mới bắt hành vi); M5 danh sách rỗng -> `02 apply failed: ... has a privilege on a table outside vowasia_ro` (unit đỏ 1).
+- Lỗi tự bắt: lần đầu M2 lọt probe vì ca c' để bảng gốc đổi tên vẫn có quyền PUBLIC (02 dừng sai lý do). Đã sửa ca (REVOKE trên bảng đổi tên trong DB tạm), M2 nay đỏ.
+
+**Cổng (19-10-26, kết quả thật):** G1 59/59; G2 0 lỗi, 1 cảnh báo có sẵn (`seed-gtp-legacy-fixture.ts:179 't50sec'`); G3 exit 0; G4 69/69; G5 267/267; G6 exit 0 `ALL PROBE CHECKS PASSED`, cleanup xong, không listener 5433x trước khi chạy, không thư mục tạm còn lại; G7 chỉ `package.json`; G7b đúng 3 dòng vowasia; G7c rỗng; G8 exit 0; G10 (01 không từ khoá ghi) rỗng; cổng mật khẩu danh sách trắng: nguyên trạng XANH, 6 đột biến (`PASSWORD '...'`, `E'...'`, `$$...$$`, xuống dòng, giá trị viết sẵn thay `pw`, thêm ALTER sau EXECUTE) đều ĐỎ (bản sao tạm ngoài repo, đã xoá); G10a: 0 từ khoá ghi, 1 dấu `;`, 0 dòng bắt đầu bằng `\`; G10c rỗng; G13 exit 0; G14a-d xanh (trong G6); `validate-plan-artifact.mjs` 0 failure.
+
+**Known-Gap (giữ nguyên tên):** K1 chưa thử trong SQL Editor thật của Supabase; K2 `default_transaction_read_only` tắt được bằng `SET` (role đọc/ghi được 2 bảng `net` nếu tự tắt); K3 bảng tiện ích khác ở project khác vẫn DỪNG, cần amendment mới. Thêm: unit test không bắt đột biến M4 (chỉ probe bắt).
+
+**Còn lại:** G9 review độc lập (`vc-code-reviewer`) trên SQL `02` + EVL độc lập (`vc-tester`); chủ chạy lại `01e` trong Editor để thấy nhãn mới trước khi chạy B3.

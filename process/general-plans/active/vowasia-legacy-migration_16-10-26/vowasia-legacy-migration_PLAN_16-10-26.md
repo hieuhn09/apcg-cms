@@ -84,7 +84,7 @@ Hard Stops (dừng, báo chủ, không tự xử lý):
 - HS2: cần sửa một file GTP hoặc file ngoài danh sách Touchpoints (ngoài 3 dòng `package.json`) => dừng, xin amendment.
 - HS3: DB banner không phải `/neondb` ở lệnh Central có `--apply`; hoặc site row đọc ra có slug khác `vowasia`.
 - HS4: phát hiện bí mật trong repo/log/báo cáo (kể cả tên bảng nhạy cảm của DB dùng chung) => dừng và xoá khỏi artefact trước khi tiếp.
-- HS5: kết quả SQL đọc cho thấy phương án role đã chọn có thể ảnh hưởng site cũ (ví dụ cần bật RLS mà role của site cũ không bypass) => không chạy, chủ quyết lại.
+- HS5 (ngoại lệ duy nhất: Amendment 2, đúng hai quan hệ `net._http_response` và `net.http_request_queue` của Supabase pg_net, khớp chính xác schema+tên+relkind `r`): kết quả SQL đọc cho thấy phương án role đã chọn có thể ảnh hưởng site cũ (ví dụ cần bật RLS mà role của site cũ không bypass) => không chạy, chủ quyết lại.
 - HS6: rehearsal/probe không dọn sạch tiến trình hoặc DB tạm của chính nó.
 - HS7: Giai đoạn B bị yêu cầu thực thi khi chưa có discover report + các quyết định ở mục 2 cột CHƯA CHỐT.
 
@@ -269,7 +269,7 @@ Chỉ `package.json` là file hiện có được phép đổi. Docs/context (`d
 
 ## Public Contracts (mục 9)
 
-- CLI: `npm run migrate:vowasia:discover -- [--mapping-overlay <path>] [--site-id <id>] [--out <dir>] [--sample N] [--schema S]`; đọc `LEGACY_VOWASIA_DB_URL` (+ `LEGACY_VOWASIA_DB_SSL`, `LEGACY_VOWASIA_DB_CA`) từ môi trường; exit 0 thành công, 2 từ chối có chủ đích (thông báo cố định), 1 lỗi khác.
+- CLI: `npm run migrate:vowasia:discover -- [--mapping-overlay <path>] [--out <dir>] [--sample N] [--schema S]`; đọc `LEGACY_VOWASIA_DB_URL` (+ `LEGACY_VOWASIA_DB_SSL`, `LEGACY_VOWASIA_DB_CA`) từ môi trường; exit 0 thành công, 2 từ chối có chủ đích (thông báo cố định), 1 lỗi khác.
 - Artefact: `scripts/migrate/out/vowasia/{legacy-schema-report.md, legacy-mapping.template.json, query-log.json}` (git-ignored, 700/600).
 - Hằng số xuất cho B: `TENANT_SLUG`, `MARKER_SOURCE_NAME`, `MARKER_ORIGIN` (marker `legacy:vowasia`).
 - Không đổi: API công khai/engine/hub, schema Payload, migration Payload, `src/**`.
@@ -410,6 +410,51 @@ Status: phạm vi do chủ duyệt, ghi tại đây. `## Validate Contract` bên
 - (d) Rủi ro mới: mật khẩu sinh nằm ở ô kết quả mà Supabase có thể lưu trong lịch sử truy vấn; chủ chép ngay vào trình quản lý mật khẩu, xoá lịch sử/kết quả, và `03e` xoá role khi xong. Known-Gap: không kiểm soát được việc Supabase lưu kết quả.
 - (e) Vòng sửa sau Amendment 1 thêm: phím Cmd+Option+F (Mac) thay Cmd+H để thay placeholder trong Editor; `01e` thêm mục 5f, 5g, 5d (mở rộng); guard `SECURITY DEFINER` loại hàm trigger; banner redact tên pooler; Cách B cấm chạy `02b`; doc bảng 11 chỗ `02` có thể dừng. Số file giữ 30.
 - (f) Vòng sửa tài liệu cuối (16-10-26): chỉ chữ trong VOWASIA-LEGACY.md và chú thích SQL: tìm `__` không còn dính chú thích 03e; bảng chỗ-02-dừng thêm 'already exists'; cách ghép URL ở B5 không dựa vào clipboard; thêm cảnh báo hạn dùng 14 ngày và khoá cột bảng ở Cách B; bỏ chữ Cmd+H; số file giữ 30.
+
+## Amendment 2 (19-10-26): allow-list of Supabase pg_net relations in file 02
+
+Status: phạm vi do chủ duyệt (trả lời "A", 19-10-26), ghi tại đây. `## Validate Contract` và `Gate: PASS` GIỮ NGUYÊN; Amendment 2 KHÔNG được validate lại bằng PVL đầy đủ, phủ bằng EVL độc lập (`vc-tester`) + G9 (`vc-code-reviewer`, bắt buộc REQUEST/APPROVE trên thay đổi SQL của `02`), theo tiền lệ Amendment 1. Giới hạn nói thẳng: không có "mắt thứ hai" ở giai đoạn plan cho thay đổi SQL; rủi ro chuyển sang EVL + G9.
+
+**Sự kiện quan sát (chủ chạy `01e` trong SQL Editor của project Supabase `globaltravelpost`, 19-10-26):** mục 5f liệt kê hai quan hệ mà PUBLIC với tới được: `net._http_response` (~28 hàng) và `net.http_request_queue` (0 hàng), relkind `r`, owner `supabase_admin`. PUBLIC có DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE trên cả hai và USAGE trên schema `net` (mặc định pg_net của Supabase). Guard hiện tại của `02` kiểm `has_schema_privilege USAGE` nên việc dừng là thật: `02` sẽ DỪNG ở bước tự kiểm B3 ("privilege on a table outside vowasia_ro").
+
+**Quyết định của chủ (nguyên văn): "A"** = cho phép đúng hai quan hệ này theo tên, với role mặc định chỉ-đọc. Chủ cấm REVOKE/GRANT/sửa bất cứ gì trong project cũ (không đổi `net.*`).
+
+**Phạm vi (chỉ những mục sau, không gì khác):**
+
+1. `sql/02-create-readonly-role-views.sql.template`: thêm công tắc có tên `allow_public_relations constant text[]` chứa ĐÚNG `'net._http_response'` và `'net.http_request_queue'` (viết schema-qualified; khớp chính xác `nspname || '.' || relname` VÀ `relkind = 'r'`). Phép tự kiểm "quyền trên bảng ngoài `vowasia_ro`" CHỈ bỏ qua các quan hệ trong danh sách; mọi quan hệ khác vẫn DỪNG. Danh sách KHÔNG phải miễn trừ cả schema. Sau phép kiểm, `RAISE NOTICE` liệt kê những quan hệ được phép mà role với tới được (Editor không hiện NOTICE; chấp nhận).
+2. File `02`: dòng `ALTER ROLE vowasia_migrator SET default_transaction_read_only = on` ĐÃ có sẵn (cạnh `statement_timeout`); Amendment 2 KHÔNG thêm dòng thứ hai mà thêm TỰ KIỂM trong cùng giao dịch: `RAISE EXCEPTION` nếu `pg_db_role_setting` không có `default_transaction_read_only=on` cho role (dòng bị xoá/gõ sai thì cả giao dịch huỷ). Nói thẳng trong plan và tài liệu: đây chỉ là MẶC ĐỊNH; ai giữ mật khẩu có thể `SET` tắt nó. Rủi ro dư được chặn bởi: hạn 14 ngày (`VALID UNTIL`), mật khẩu chỉ chủ giữ, xoá role sau khi dùng (`03`/`03e`). Đây là NỚI CÓ GHI NHẬN của HS5 cho đúng hai quan hệ tiện ích mở rộng Supabase, có lý do: PUBLIC đã cấp quyền cho mọi role kể cả `anon`/`authenticated` (SUY LUẬN từ ACL, chưa kiểm lại từng role).
+3. `sql/01e-inspect-single-result.sql` (và `01` nếu có mục tương đương): mục 5f vẫn liệt kê các quan hệ nhưng `detail` thêm nhãn `(allowed by 02 allow-list)` cho hai tên trên và hiện quyền bảng của PUBLIC; chú thích đếm-điểm-dừng của `02` phải còn đúng (`02` chỉ dừng với hàng KHÔNG nằm trong allow-list). Giữ thiết kế một result set và thứ tự hàng.
+4. Fixture/probe (`fixtures/keyset-probe.ts` / `.sh`, PG16 cổng 54336, DB tạm): thêm ca (a) schema `net` với hai bảng cấp ALL cho PUBLIC: `02` qua, `SHOW default_transaction_read_only` bằng role báo `on`; (b) thêm một bảng PUBLIC-đọc-được thứ ba (`net.other` hoặc `public.other`): `02` DỪNG, không tạo gì (rollback, role vắng); (c) bảng cùng tên khác schema (`net2._http_response`): DỪNG (khớp chính xác); (d) đột biến thiếu setting: DỪNG. Test đơn vị trong `lib/` (test SQL hiện có hoặc file mới nếu bắt buộc) khẳng định template chứa allow-list đúng 2 tên và dòng `ALTER ROLE ... default_transaction_read_only`; đột biến đỏ trước (red-first).
+5. Tài liệu: `VOWASIA-LEGACY.md` mục Cách B: nói `02` nay cho qua đúng hai quan hệ Supabase đó (vì sao, giới hạn trung thực ở trên), tuyệt đối không REVOKE/GRANT gì trong `net`. Sửa luôn các mục tài liệu còn tồn: lệnh O1 phải có `--confirm-host`; ghi chú dọn "Recently Deleted" trong Notes sau ghi chú mật khẩu; sửa chữ đầu `03e`. Plan: đã bỏ `--site-id` khỏi hợp đồng CLI (mục Public Contracts) và HS5 đã ghi ngoại lệ Amendment 2.
+
+**Cổng EXECUTE/EVL:** G1 `test:migrate-vowasia`, G2 `lint:migrate`, G3 `typecheck`, G4 `test:migrate-gtp`, G5 `test:single-home`, G6 `keyset-probe.sh` (chạy MỘT MÌNH, cổng 54336), cổng mật khẩu danh sách trắng giữ nguyên với 6 đột biến vẫn đỏ, G7/G7b/G7c/G8/G10a/G10c/G13 như plan, cộng **G14 mới** (ca probe Amendment 2 a-d, chứng minh bằng đột biến đỏ trước). Review độc lập G9-style (`vc-code-reviewer`) bắt buộc trên thay đổi SQL `02`.
+
+**Known-Gap (có tên):** (K1) chưa chứng minh trong SQL Editor thật của Supabase, chỉ PG16 cục bộ; (K2) `default_transaction_read_only` ghi đè được bằng `SET`; (K3) allow-list đặc thù Supabase: quan hệ tiện ích mở rộng khác ở project khác vẫn DỪNG và cần Amendment mới.
+
+**Hard stops giữ nguyên (HS1-HS7):** không ghi production bởi agent, không bí mật, không commit file chứa thông tin đăng nhập, KHÔNG chạm tooling GTP, không chạy gì trên DB thật.
+
+### Verification Evidence bổ sung (Amendment 2)
+
+| Gate / Scenario | Strategy | Proves SPEC criterion |
+|---|---|---|
+| G14a probe: `net` + 2 bảng PUBLIC ALL -> `02` qua; `SHOW default_transaction_read_only` = on | Hybrid (PG16 cục bộ) | AC-A8 (Amendment 2), allow-list đúng hai tên |
+| G14b probe: bảng PUBLIC-đọc-được thứ ba -> `02` DỪNG, role vắng | Hybrid | AC-A8 (không phải miễn trừ cả schema) |
+| G14c probe: `net2._http_response` -> DỪNG | Hybrid | AC-A8 (khớp chính xác schema+tên) |
+| G14d đột biến thiếu setting -> DỪNG | Hybrid | AC-A8 (tự kiểm setting) |
+| Test đơn vị `lib/`: template có đúng 2 tên allow-list + dòng ALTER ROLE (đỏ-trước) | Fully-Automated | AC-A8 |
+| G9 review `02` SQL | Agent-Probe | AC-A8 |
+
+Bằng chứng EXECUTE (19-10-26): G14a-d xanh trên PG16 cục bộ (cổng 54336, chạy một mình); 5 đột biến `02` (thêm tên thứ ba, bỏ `relkind`, khớp chỉ tên, tắt tự kiểm setting, danh sách rỗng) đều làm probe ĐỎ; chi tiết ở REPORT mục "Amendment 2".
+
+### Checklist EXECUTE (Amendment 2)
+
+1. Viết test đơn vị (allow-list đúng 2 tên, dòng ALTER ROLE, tự kiểm setting) và chứng minh ĐỎ trước. [XONG 19-10-26: 3 test mới trong `vowasia-sql.test.ts`, đỏ 3/3 trước khi sửa]
+2. Sửa `02`: `allow_public_relations`, lọc phép kiểm bảng theo allow-list, `RAISE NOTICE`, tự kiểm `pg_db_role_setting`. [XONG 19-10-26]
+3. Sửa `01e` (và `01` nếu cần): nhãn `(allowed by 02 allow-list)`, quyền bảng của PUBLIC, giữ một result set. [XONG 19-10-26; `01` không có mục 5f, không sửa]
+4. Mở rộng `keyset-probe.ts/.sh` với ca G14a-d; chạy riêng, cổng 54336, dọn tiến trình/DB tạm. [XONG 19-10-26: chỉ sửa `.ts`; thêm ca c' (tên trong danh sách nhưng là view)]
+5. Sửa `VOWASIA-LEGACY.md` (Cách B, O1 `--confirm-host`, Recently Deleted, `03e` header). [XONG 19-10-26]
+6. Chạy G1-G5, G6, cổng mật khẩu + 6 đột biến, G7/G7b/G7c/G8/G10a/G10c/G13, G14. [XONG 19-10-26: tất cả xanh, xem REPORT mục Amendment 2]
+7. Gọi G9-style review độc lập; ghi report; KHÔNG commit nếu chủ chưa yêu cầu. [report XONG; G9 do orchestrator gọi; commit cục bộ theo lệnh orchestrator 19-10-26, chưa push]
 
 ## Resume and Execution Handoff (mục 17)
 

@@ -46,13 +46,13 @@ Agent không giữ, không xin, không nhìn bí mật.
 node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'
 ```
 
-Nếu dòng in ra không kết thúc bằng `/neondb`: dừng. Nếu đúng, chạy:
+Nếu dòng in ra không kết thúc bằng `/neondb`: dừng. Nếu đúng, chạy lệnh dưới, thay `TÊN_HOST` bằng ĐÚNG chữ đầu tiên của dòng vừa in (tên host, không có cổng). Central không phải DB cục bộ nên script từ chối nếu thiếu `--confirm-host` (kể cả dry run):
 
 ```bash
-npm run audit:add-vowasia-taxonomy
+npm run audit:add-vowasia-taxonomy -- --confirm-host=TÊN_HOST
 ```
 
-Ghi lại: tenant `vowasia` có hay không ("not found"), và 49 dòng là `exists` hay `create`. Không thêm `--apply` ở bước này.
+Ghi lại: tenant `vowasia` có hay không ("not found"), và 49 dòng là `exists` hay `create`. Không thêm `--apply` ở bước này (không có `--apply` thì `--confirm-host` chỉ cho phép đọc, không ghi gì).
 
 ## O2: đọc cấu trúc DB cũ (chỉ SELECT)
 
@@ -162,6 +162,7 @@ Ghi chú:
 
     Xong thì `unset LEGACY_ADMIN_URL`.
 
+- 02 cho qua ĐÚNG hai bảng `pg_net` của Supabase (`net._http_response`, `net.http_request_queue`) mà PUBLIC có quyền mặc định; mọi bảng khác PUBLIC với tới vẫn làm 02 dừng. Lý do và giới hạn: xem Cách B, B2 (đoạn "Về `5f` và hai bảng `net`"). Không REVOKE/GRANT gì trong `net`.
 - View khoá cột của bảng `articles`/`sites`: KHÔNG chạy migration đổi cột các bảng đó của site cũ trong khoảng giữa O3 (chạy 02) và bước Dọn (chạy 03); migration đó có thể lỗi vì view đang phụ thuộc cột.
 
 ## O3b: phương án 1 (02b), KHÔNG khuyên dùng
@@ -335,9 +336,11 @@ Nếu cả câu báo lỗi (không ra bảng), hoặc mục 6 ghi `columns missi
 echo "SELECT id, slug, name FROM public.sites WHERE lower(slug) LIKE '%vow%';" | pbcopy
 ```
 
-Báo lại đúng các nhóm như mục "Báo lại" của O2 (1 đến 6), đọc từ cột `section`: `6b columns` (cột của hai bảng), `2 public tables/views` và `5 acl of articles/sites` (cờ RLS, quyền), `3 rls policies (public)`, `5 login roles`, `5a nologin roles reading the tables`, `5e role membership`, `5b connected roles`, `5c public privileges` (gồm `databases PUBLIC can CONNECT to` và `password_encryption`), `5d security definer callable by PUBLIC` (chỉ cần dòng `count by schema` và giá trị `in_public` trong cột `detail` của từng hàm), `5f PUBLIC-readable relations (02 stops on any)` (chỉ báo SỐ hàng, và tên nếu là bảng VowAsia), `5g schemas where PUBLIC can add objects (02 stops on any)`, `4 site_id column types`, và `6 vowasia site row` (chỉ báo slug và name; id site: không cần gửi cho ai, chỉ dùng trong ô tìm và thay ở B3). Không báo tên bảng nhạy cảm nào khác. Trước khi chụp màn hình: chỉ chụp phần cần báo, không chụp dòng chứa thông tin nhạy cảm.
+Báo lại đúng các nhóm như mục "Báo lại" của O2 (1 đến 6), đọc từ cột `section`: `6b columns` (cột của hai bảng), `2 public tables/views` và `5 acl of articles/sites` (cờ RLS, quyền), `3 rls policies (public)`, `5 login roles`, `5a nologin roles reading the tables`, `5e role membership`, `5b connected roles`, `5c public privileges` (gồm `databases PUBLIC can CONNECT to` và `password_encryption`), `5d security definer callable by PUBLIC` (chỉ cần dòng `count by schema` và giá trị `in_public` trong cột `detail` của từng hàm), `5f PUBLIC-readable relations (02 stops on any not allowed by its allow-list)` (chỉ báo SỐ hàng, tên nếu là bảng VowAsia, và tên các hàng có nhãn `(allowed by 02 allow-list)` cùng cột `detail` của chúng), `5g schemas where PUBLIC can add objects (02 stops on any)`, `4 site_id column types`, và `6 vowasia site row` (chỉ báo slug và name; id site: không cần gửi cho ai, chỉ dùng trong ô tìm và thay ở B3). Không báo tên bảng nhạy cảm nào khác. Trước khi chụp màn hình: chỉ chụp phần cần báo, không chụp dòng chứa thông tin nhạy cảm.
 
-Đọc trước chỗ 02 sẽ DỪNG: nếu `5d` có hàm `in_public=yes` (dừng cứng, không có cách nới), hoặc `5d` có hàm `in_public=no` (dừng khi `allow_definer_outside_public` còn là `'no'`, tức mặc định), hoặc `5f` có hàng nào, hoặc `5g` có schema nào, hoặc `5c` dòng `database CONNECT | TEMP | can add schemas` có giá trị cuối là `true`, thì 02 SẼ dừng ở B3. Khi đó KHÔNG chạy B3; báo lại đúng các hàng đó (xem bảng "02 dừng ở đâu" trong B3).
+Về `5f` và hai bảng `net` (Amendment 2, 19-10-26): trên Supabase, tiện ích mở rộng `pg_net` mặc định cho PUBLIC mọi quyền trên `net._http_response` và `net.http_request_queue` (mọi role, kể cả `anon`/`authenticated`, đều có; suy luận từ ACL, chưa kiểm từng role). 02 nay cho qua ĐÚNG hai bảng này theo tên (khớp chính xác schema, tên và loại bảng thường), nên chúng hiện ở `5f` với nhãn `(allowed by 02 allow-list)` và không làm 02 dừng. Mọi hàng `5f` khác (kể cả bảng khác trong `net`, hay cùng tên ở schema khác) vẫn làm 02 dừng. TUYỆT ĐỐI không REVOKE/GRANT hay sửa gì trong schema `net` (site cũ dùng nó). Giới hạn nói thẳng: role mới thừa hưởng quyền đó từ PUBLIC; role mặc định chỉ đọc (`default_transaction_read_only`, 02 tự kiểm dòng này có thật), nhưng ai giữ mật khẩu vẫn tự tắt được bằng `SET`. Rủi ro còn lại được chặn bằng: hạn 14 ngày, mật khẩu chỉ chủ giữ, xoá role khi xong (B6). Chưa thử trong SQL Editor thật, chỉ trên PostgreSQL 16 cục bộ.
+
+Đọc trước chỗ 02 sẽ DỪNG: nếu `5d` có hàm `in_public=yes` (dừng cứng, không có cách nới), hoặc `5d` có hàm `in_public=no` (dừng khi `allow_definer_outside_public` còn là `'no'`, tức mặc định), hoặc `5f` có hàng nào KHÔNG mang nhãn `(allowed by 02 allow-list)`, hoặc `5g` có schema nào, hoặc `5c` dòng `database CONNECT | TEMP | can add schemas` có giá trị cuối là `true`, thì 02 SẼ dừng ở B3. Khi đó KHÔNG chạy B3; báo lại đúng các hàng đó (xem bảng "02 dừng ở đâu" trong B3).
 
 Cũng xem hàng `password_encryption` trong `5c`: nếu giá trị là `md5` (không phải `scram-sha-256`): DỪNG, không làm B3, báo orchestrator.
 
@@ -374,7 +377,8 @@ Sau khi thay hết: tìm `__` (hai dấu gạch dưới) trong Editor; không đ
 | `SELF-CHECK STOP: ... bypasses RLS or is superuser` / `... is a member of another role` | role vừa tạo có quyền thừa (ví dụ được thêm vào role khác bởi một cấu hình mặc định của cụm). Không phải do role cùng tên có sẵn: trường hợp đó dừng sớm hơn ở dòng `already exists` | DỪNG và báo |
 | `SELF-CHECK STOP: ... can CREATE in this database` | PUBLIC tạo được schema trong database (mục `5c`, giá trị cuối `true`) | DỪNG và báo |
 | `SELF-CHECK STOP: ... can CREATE in a schema` | PUBLIC tạo được đối tượng trong một schema (mục `5g`) | DỪNG và báo |
-| `SELF-CHECK STOP: ... has a privilege on a table outside vowasia_ro` | PUBLIC đọc/ghi được một bảng (mục `5f`) | DỪNG và báo số hàng mục `5f` |
+| `SELF-CHECK STOP: ... has a privilege on a table outside vowasia_ro` | PUBLIC đọc/ghi được một bảng KHÔNG nằm trong danh sách cho phép (hàng `5f` không mang nhãn `(allowed by 02 allow-list)`) | DỪNG và báo số hàng mục `5f` không mang nhãn đó; KHÔNG tự thêm tên vào danh sách (cần amendment mới) |
+| `SELF-CHECK STOP: ... default_transaction_read_only is not set to on` | dòng `ALTER ROLE ... default_transaction_read_only = on` của 02 bị xoá hoặc gõ sai | dán lại mẫu 02 nguyên vẹn (B3), Run lại; vẫn dừng thì báo |
 | `SELF-CHECK STOP: ... SECURITY DEFINER function in schema public` | hàm SECURITY DEFINER thường trong `public` mà PUBLIC gọi được (mục `5d`, `in_public=yes`); hàm trả trigger không tính | DỪNG và báo; không có cách nới |
 | `SELF-CHECK STOP: ... SECURITY DEFINER function(s) outside public` | như trên, ở schema khác (`in_public=no`) | DỪNG và báo dòng `count by schema`; chỉ nới `allow_definer_outside_public` khi orchestrator nói rõ |
 | `lock timeout` | bảng gốc đang bận | đợi vài phút, Run lại; lặp lại thì báo |
@@ -422,7 +426,7 @@ export LEGACY_VOWASIA_DB_URL
 export LEGACY_VOWASIA_DB_SSL=require
 ```
 
-Xoá ghi chú tạm ngay. Đóng tab B4 (và xoá nó khỏi Saved queries nếu đã lỡ lưu) để ô `new_secret` không còn trên màn hình. Xoá mật khẩu khỏi clipboard: bôi đen một chữ vô hại bất kỳ (ví dụ chữ `vowasia` trong trang này) rồi Cmd+C. Rồi làm O5 (overlay ngoài repo, rồi `npm run migrate:vowasia:discover`). Dòng đầu chỉ in `host:port/database` và chế độ SSL; tên đăng nhập và mã project không được in. Khi xong discover, `unset LEGACY_VOWASIA_DB_URL` như O5.
+Xoá ghi chú tạm ngay. Nếu dùng ứng dụng Notes (Ghi chú) của Apple: ghi chú vừa xoá còn nằm ở thư mục "Recently Deleted" (Đã xoá gần đây) tới 30 ngày; mở thư mục đó và xoá hẳn ghi chú (Delete). Đóng tab B4 (và xoá nó khỏi Saved queries nếu đã lỡ lưu) để ô `new_secret` không còn trên màn hình. Xoá mật khẩu khỏi clipboard: bôi đen một chữ vô hại bất kỳ (ví dụ chữ `vowasia` trong trang này) rồi Cmd+C. Rồi làm O5 (overlay ngoài repo, rồi `npm run migrate:vowasia:discover`). Dòng đầu chỉ in `host:port/database` và chế độ SSL; tên đăng nhập và mã project không được in. Khi xong discover, `unset LEGACY_VOWASIA_DB_URL` như O5.
 
 ### B6: dọn
 
