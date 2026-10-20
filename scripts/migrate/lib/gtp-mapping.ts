@@ -86,7 +86,10 @@ export const MappingSchema = z
       .object({
         format: z.enum(["sections", "auto", "html", "markdown", "lexical-json", "text"]).default("sections"),
         converter: z.enum(["html-to-lexical", "markdown-to-lexical", "passthrough-lexical", "plain-paragraphs"]).default("html-to-lexical"),
-        lineBreaks: z.enum(["space", "br", "paragraph"]).default("space"),
+        lineBreaks: z.enum(["space", "br"]).default("space"),
+        // AER: the old site stored each section as ONE block and split it into paragraphs at render time
+        // (sentences grouped while the paragraph stays <= reflowMaxChars). Unset = paragraphs kept as stored.
+        reflowMaxChars: z.number().int().positive().optional(),
         sanitize: z.boolean().default(true),
         stripEmbeds: z.boolean().default(true),
         allowedTags: z.array(z.string()).default(DEFAULT_ALLOWED_TAGS),
@@ -217,7 +220,7 @@ export type Mapping = z.infer<typeof MappingSchema>;
 export const KEY_TABLE: readonly string[] = [
   "version", "_provisional", "_evidence",
   "source.schema", "source.siteFilter", "source.tableAllowList", "source.columns",
-  "body.format", "body.converter", "body.lineBreaks", "body.sanitize", "body.stripEmbeds", "body.allowedTags", "body.maxBytes",
+  "body.format", "body.converter", "body.lineBreaks", "body.reflowMaxChars", "body.sanitize", "body.stripEmbeds", "body.allowedTags", "body.maxBytes",
   "status.map", "status.unknown",
   "categories.map", "categories.fallback", "categories.unmapped",
   "routing.pressRelease", "routing.events",

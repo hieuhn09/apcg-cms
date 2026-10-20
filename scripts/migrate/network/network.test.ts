@@ -64,7 +64,7 @@ test("mapping: committed aer mapping is FINAL (owner 20-10-26) and passes --requ
   assert.doesNotThrow(() => validateMapping(readJ("fixtures/aer-legacy/aer.mapping.fixture.json"), FIX_OVERLAY, { requireFinal: true }));
   // Published only; old sub-sections survive (briefings/corporate-asia pass through, essays -> asia-watch keeps its sub).
   assert.deepEqual(Object.entries(m.status.map).filter(([, v]) => v !== "SKIP").map(([k]) => k), ["published"]);
-  assert.equal(m.body.lineBreaks, "paragraph");
+  assert.equal(m.body.reflowMaxChars, 380);
   const tx = (sec: string, sub: string) => resolveTaxonomy(sec, sub, m);
   assert.deepEqual(tx("briefings", "policy"), { ok: true, t: { pillar: "briefings", subSection: "policy", rehomed: false, oldSection: "briefings", oldSub: "policy" } });
   assert.deepEqual(tx("corporate-asia", "capital"), { ok: true, t: { pillar: "corporate-asia", subSection: "capital", rehomed: false, oldSection: "corporate-asia", oldSub: "capital" } });

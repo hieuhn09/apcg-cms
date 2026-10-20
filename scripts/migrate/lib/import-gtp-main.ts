@@ -586,7 +586,7 @@ async function main(): Promise<number> {
           const oldSlug = str(row.slug) || slug;
           const legacyCreatedAt = isoOrNull(row.created_at);
           const legacyUpdatedAt = isoOrNull(row.updated_at);
-          const body = sectionsToHtml(row.body_sections, m.body.lineBreaks);
+          const body = sectionsToHtml(row.body_sections, m.body.lineBreaks, m.body.reflowMaxChars);
           const textLinks = (body.paragraphs.join(" ").match(new RegExp(`${oldOrigin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^\\s)"']+`, "g")) ?? []).map((u) => u.replace(/[.,;:]+$/, ""));
           const entryBase = {
             legacyId, kind: "article" as const, slug, status: sd.status, legacyCreatedAt, legacyUpdatedAt,

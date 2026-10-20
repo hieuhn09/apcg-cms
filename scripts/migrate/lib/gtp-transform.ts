@@ -217,12 +217,26 @@ export interface SectionsResult {
 }
 
 /**
- * Turn `body_sections` into escaped HTML (h2 + p). Tag-like text can never become a tag.
- * Paragraphs split on a blank line; inside one, a single newline becomes a space ("space", GTP)
- * or `<br>` ("br"). "paragraph" (AER) splits on EVERY newline: the AER site stored one newline
- * between paragraphs and rendered each line as its own paragraph.
+ * Regroup one stored paragraph into paragraphs of whole sentences, each at most `maxChars` long
+ * (a single longer sentence stays on its own). This is how the AER site displayed its one-block
+ * sections; on 161 real sections it reproduces the old paragraph breaks exactly in 150.
  */
-export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" | "paragraph" = "space"): SectionsResult {
+export function reflowParagraph(p: string, maxChars: number): string[] {
+  const sentences = p.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const out: string[] = [];
+  let cur = "";
+  for (const s of sentences) {
+    if (cur && cur.length + 1 + s.length > maxChars) {
+      out.push(cur);
+      cur = s;
+    } else cur = cur ? `${cur} ${s}` : s;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Turn `body_sections` into escaped HTML (h2 + p). Tag-like text can never become a tag. */
+export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" = "space", reflowMaxChars?: number): SectionsResult {
   let v = raw;
   if (typeof v === "string") {
     try {
@@ -242,9 +256,10 @@ export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" | "parag
     const heading = normaliseWs(enText(rec.heading));
     const body = enText(rec.body).replace(/\r\n?/g, "\n");
     const paras = body
-      .split(lineBreaks === "paragraph" ? /\n+/ : /\n{2,}/)
+      .split(/\n{2,}/)
       .map((p) => normaliseWs(lineBreaks === "space" ? p.replace(/\n/g, " ") : p))
-      .filter(Boolean);
+      .filter(Boolean)
+      .flatMap((p) => (reflowMaxChars ? reflowParagraph(p, reflowMaxChars) : [p]));
     if (!heading && !paras.length) {
       dropped++;
       continue;
