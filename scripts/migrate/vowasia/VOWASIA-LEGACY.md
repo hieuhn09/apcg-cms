@@ -464,6 +464,7 @@ Quy tắc chung của phần B:
 - Với `--apply`, bốn biến `R2_BUCKET`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` phải có giá trị (công cụ chỉ in TÊN biến). Thiếu thì công cụ từ chối, vì Payload sẽ lưu ảnh lên ổ đĩa máy Mac.
 - Snapshot, kho ảnh, thư mục runs và file trả lời link nằm NGOÀI repo, ví dụ `~/vowasia-private/`. Công cụ từ chối mọi thư mục nằm trong repo (kể cả thư mục bị git-ignore) hoặc trong bất kỳ cây git nào.
 - Importer chỉ TẠO MỚI: không sửa, không xoá bài có sẵn, không bao giờ tạo tác giả, tag, pillar hay sub-section (thiếu thì DỪNG và in danh sách thiếu).
+- KHÔNG mở đường hầm SSH (SSH tunnel) hay chuyển cổng (port-forward) nào tới Central production trong lúc chạy BẤT KỲ lệnh nào của phần B. Qua đường hầm, host trông như `127.0.0.1` (máy cục bộ), nên công cụ bỏ qua các lớp chặn dành cho Central thật (TTY, `--confirm-host`, kiểm tên `neondb`, kiểm R2). Luôn trỏ thẳng tới host Neon thật.
 - Digest manifest để dùng cho `--expect-sha256`: `50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105`.
 
 ## OB1: kiểm taxonomy trên Central (chạy thử)
@@ -508,7 +509,8 @@ Cùng lệnh OB6 nhưng bỏ `--limit 50` và dùng `--run-id B` (run-id MỚI; 
 
 ## Khi một lần `--apply` dừng giữa chừng
 
-- Lỗi upload ảnh (Q12, ví dụ sai thông tin R2 hay mất mạng): công cụ DỪNG trước khi tạo bài đang xử lý, ghi `failed / uploadError`, gỡ khoá, thoát mã khác 0. Sửa nguyên nhân rồi chạy lại với run-id MỚI. Không có bài nháp nào bị tạo thiếu ảnh vì lỗi upload.
+- Lỗi upload ảnh (Q12, ví dụ sai thông tin R2 hay mất mạng): công cụ DỪNG trước khi tạo bài đang xử lý, ghi `failed / uploadError`, gỡ khoá, thoát mã khác 0. Sửa nguyên nhân rồi chạy lại với run-id MỚI. Không có bài nháp nào bị tạo thiếu ảnh vì lỗi upload. Ảnh đã tải lên TRƯỚC lỗi đó (của bài dừng giữa chừng) vẫn nằm trong Media, không bài nào dùng; chỉ rollback của CHÍNH run đó xoá được chúng (chạy thử rồi `--apply`).
+- Nếu lệnh tạo bài báo lỗi nhưng bài thật ra đã được ghi (ví dụ mất kết nối ngay sau khi ghi), công cụ tìm lại bài theo slug và ghi nó vào journal như bài đã tạo, nên rollback của run đó vẫn xoá được.
 - Máy sập, terminal bị đóng, hay `kill -9`: file khoá `~/vowasia-private/runs/.import.lock` còn lại, nên cả rollback `--apply` cũng bị từ chối (công cụ in ra pid, run-id của khoá). Cách gỡ khoá cũ, theo đúng thứ tự:
   1. Kiểm không còn tiến trình import/rollback/rewrite-links nào đang chạy:
 
@@ -533,7 +535,7 @@ rm ~/vowasia-private/runs/.import.lock
 npm run migrate:vowasia:rewrite-links -- --run-id A --runs-dir ~/vowasia-private/runs --snapshot ~/vowasia-private/snapshot --expect-sha256 50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105 --old-site-links-file ~/vowasia-private/old-site-links.txt --confirm-host=<host Central>
 ```
 
-Chạy thử in từng link: slug bài, URL, quyết định và đoạn thay thế chính xác. Đúng thì chạy lại với `--apply`. Làm lại cho `--run-id B`. Công cụ từ chối nếu file thiếu link, có link lạ, dòng sai định dạng hay một link lặp lại. Chỉ bài do chính run đó tạo mới bị đổi; rollback của run vẫn xoá được bài đã đổi.
+Chạy thử in từng link: slug bài, URL, quyết định và đoạn thay thế chính xác. Đúng thì chạy lại với `--apply`. Làm lại cho `--run-id B`. Công cụ từ chối nếu file thiếu link, có link lạ, dòng sai định dạng hay một link lặp lại. Chỉ bài do chính run đó tạo mới bị đổi; rollback của run vẫn xoá được bài đã đổi. Link trỏ tới bài do run KHÁC tạo (ví dụ bài trong run A trỏ tới bài của run B) được giữ NGUYÊN, không đổi; đó là hệ quả của việc chia 50 bài / phần còn lại.
 
 ## OB9: timestamps-fix.sql (từng run)
 
@@ -571,7 +573,7 @@ Giữ journal cho tới khi chắc chắn không cần rollback; sau đó xoá h
 npm run migrate:vowasia:rollback -- --run-id A --runs-dir ~/vowasia-private/runs --confirm-host=<host Central>
 ```
 
-Chạy thử in kế hoạch, không ghi gì. Đúng thì chạy lại với `--apply`. Chỉ xoá bài của đúng run đó còn mang dấu import `legacy:vowasia` và chưa bị sửa tay (thêm `--include-edited` để xoá cả bài đã sửa); ảnh do run đó tạo chỉ bị xoá khi không bài nào khác dùng (kể cả dùng trong thân bài). Lỗi xoá một bài được báo lại, không bao giờ chuyển bài sang archived thay thế.
+Chạy thử in kế hoạch, không ghi gì. Đúng thì chạy lại với `--apply`. Chỉ xoá bài của đúng run đó còn mang dấu import `legacy:vowasia` và chưa bị sửa tay (thêm `--include-edited` để xoá cả bài đã sửa); ảnh do run đó tạo chỉ bị xoá khi không bài nào khác dùng (kể cả dùng trong thân bài). Lỗi xoá một bài được báo lại, không bao giờ chuyển bài sang archived thay thế. Lưu ý: khi kiểm một ảnh còn được dùng hay không, rollback chỉ quét các BÀI VIẾT của tenant vowasia (ảnh bìa và ảnh trong thân bài). Nó không quét tác giả, pillar, newsletter hay các bản cũ hơn của bài; nếu bạn đã gắn một ảnh của run này vào những chỗ đó bằng tay, hãy kiểm trong /admin trước khi chạy `--apply`.
 
 ## Kiểm thử cục bộ phần B (agent)
 
