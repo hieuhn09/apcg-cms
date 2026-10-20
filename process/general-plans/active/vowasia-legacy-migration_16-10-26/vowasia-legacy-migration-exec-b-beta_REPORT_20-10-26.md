@@ -119,3 +119,24 @@ All within the blast radius (only `scripts/migrate/vowasia/**`, 7 `package.json`
 
 CONTEXT_PARTIAL: none.
 Follow-up stubs created: `process/general-plans/backlog/vowasia-b-beta-owner-import_NOTE_20-10-26.md`.
+
+## G22 fix cycle 1 (20-10-26)
+
+Scope: G22 findings F-1..F-8 (review `vowasia-legacy-migration-g22-review-b-beta_REPORT_20-10-26.md`). Commits `e9e6226` (code + tests), `bd29ac7` (rehearsal), `a4a9aa4` (runbook). Base HEAD `2227e6b`. Not pushed.
+
+Red first: new/extended tests added before any fix; `test:migrate-vowasia` = 194 pass / **5 fail** (preflight message, F-1 lost reply, F-3 report redaction, F-4 outcome-only rollback, F-3 `redact()` env values). After the fixes: **199/199**.
+
+| Finding | Change | Red -> green evidence |
+|---|---|---|
+| F-1 | `import-vowasia-main.ts`: on a create error, re-query (tenant vowasia, slug); a marker row found is journaled as created (outcome + slug-map with its baseline). The slug was re-checked free just before the create, so the row is this run's. Orphan preflight text now says no rollback can remove an unjournaled row: point `--runs-dir` at its run directory, or check and delete in /admin. Fake Central gained `failCreateAfterCommit`. | test "F-1: a create that commits but then errors..." red (2 outcomes created, 3 rows) -> green (3 created, 3 slug-map lines, next run not blocked); preflight test red on old advice -> green |
+| F-2 | `rehearse-vowasia.sh` exports the 4 R2 names as empty strings (dotenv cannot override); `rehearse-assert.ts` exits 2 if any is unset or non-empty. Empty is falsy for `payload.config.ts`, so media stays local. | shell/assert only; `bash -n` OK; proved by G19 (tester) |
+| F-3 | `redact()` also masks the Central `DATABASE_URL` (value + password) and the 4 R2 values (+ endpoint host), longest first. `report.failed[].reason` (createError) and the Q12 `report.stop` text pass through `redact(…, deps.env)`. | `redact` unit test red -> green; import test with fake values (DB password, R2 key/secret/bucket) in the failure text: report json/md leaked -> green |
+| F-4 | `rollback-vowasia-main.ts`: outcome `created` lines with an id and no slug-map line are checked with conditions (b)-(e) (marker + tenant + slug, not in another run, version 1 unless `--include-edited`, created after run start) and deleted if all hold. | test "outcome created ... no slug-map line" red (1 row left) -> green; "edited outcome-only row is kept" green both ways (guard) |
+| F-5 | runbook Rollback: media reference scan covers tenant articles only; check other uses in /admin first. | doc |
+| F-6 | runbook part B rules: no SSH tunnel / port-forward to production during any command. | doc |
+| F-7 | runbook OB8: links to an article of another run stay unchanged. | doc |
+| F-8 | runbook: Q12 stop leaves orphan Media only that run's rollback removes; `rehearse-assert.ts` header mutant list corrected (no "old image host" mutant). | doc |
+
+Gates after the fix (G6, G19, G11 NOT run, left to the tester): G1 199/199; G2 exit 0 (0 errors, 1 pre-existing warning in a GTP fixture file); G3 exit 0; G4 69/69; G5 267/267; G7 prints only `package.json`; G7b 7 added / 0 removed; G7c exit 0; SQL-unchanged exit 0; pins exit 0; G8 exit 0; G10c exit 0; G10c-local exit 0; G13 exit 0.
+
+Residuals: F-9, F-10 untouched (NITs, no defect). Rollback delete-error text (`rep.errors`) is not passed through `redact()` (out of this cycle's list). F-1 relies on the slug re-check right before the create; a concurrent non-import writer is excluded by the lock and tenant scope.
