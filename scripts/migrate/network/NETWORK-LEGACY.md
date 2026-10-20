@@ -53,6 +53,11 @@ Test: `npm run test:migrate-network`.
 
 ### Các bước của chủ dự án (B5), mỗi lần một bước
 
+**Trước khi ngồi làm:** `~/apcg-cms/.env.local` phải có đủ 4 biến `R2_BUCKET`, `R2_ENDPOINT`,
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` của bucket R2 production. Thiếu biến nào thì
+importer từ chối chạy với Central thật (kể cả chạy khô), vì Payload sẽ lưu ảnh vào ổ máy
+thay vì R2 và ảnh của mọi bài trên Central sẽ hỏng. Mac cũng cần `psql` (bước 13).
+
 **Chỗ giữ chỗ trong lệnh:** `ID_SITE` (id site cũ, từ bước 1) và `HOST_CENTRAL` (host của
 URL Central, từ bước 9) là chữ giữ chỗ. **Agent điền giá trị thật vào trước khi gửi từng
 lệnh**; chủ dự án không tự sửa lệnh. Mỗi khối dưới đây là đúng một lệnh, dán cả khối.

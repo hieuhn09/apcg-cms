@@ -18,6 +18,7 @@ import { generateTimestampsFix } from "../lib/gtp-timestamps";
 import { legacyBanner, legacySsl } from "../lib/db-banner";
 import { expectedFromSource } from "../lib/gtp-expected";
 import { buildRedirects } from "../lib/gtp-redirects";
+import { missingR2Vars, r2GuardMessage } from "../lib/r2-guard";
 import type { AuthorItem } from "../lib/gtp-author-distribution";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
@@ -253,4 +254,14 @@ test("image hosts: AER refuses an overlay whose hostAllowlist lacks the legacy s
 });
 test("entry: missing --site error names the profile's discover file", () => {
   assert.throws(() => planEntry(["export", "--tenant", "aer"] as never), /sql\/01-discover-aer\.sql/);
+});
+
+/* ── R2 guard: a non-local import must not fall back to local-disk media ── */
+test("r2 guard: all four R2 vars required (blank counts as missing); message names the gaps", () => {
+  const full = { R2_BUCKET: "b", R2_ENDPOINT: "https://e", R2_ACCESS_KEY_ID: "k", R2_SECRET_ACCESS_KEY: "s" };
+  assert.deepEqual(missingR2Vars(full), []);
+  assert.deepEqual(missingR2Vars({}), ["R2_BUCKET", "R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]);
+  assert.deepEqual(missingR2Vars({ ...full, R2_SECRET_ACCESS_KEY: "  " }), ["R2_SECRET_ACCESS_KEY"]);
+  assert.match(r2GuardMessage(["R2_BUCKET"]), /R2_BUCKET is not set; images would be saved to this machine's disk/);
+  assert.match(r2GuardMessage(["R2_BUCKET", "R2_ENDPOINT"]), /R2_BUCKET, R2_ENDPOINT are not set/);
 });

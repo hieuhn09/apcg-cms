@@ -52,6 +52,7 @@ import { htmlToLexical } from "./lexical-body";
 import { LiveLegacyReader, writeSnapshot } from "./legacy-reader";
 import { effectiveAllowList } from "./legacy-sql";
 import { fetchImageWithRetry } from "./media-fetch";
+import { missingR2Vars, r2GuardMessage } from "./r2-guard";
 import { normaliseKey } from "./normalise-path";
 import { assertOutDirSafe, writeFileSafe } from "./out-dir";
 import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId, type MediaMapEntry, type RunState, type SlugMapEntry } from "./run-dir";
@@ -164,6 +165,10 @@ async function main(): Promise<number> {
   const entity = resolveEntity(a);
   const tenantSlug = assertImportTenant();
   const central = centralTarget(a, a.apply);
+  if (!central.local) {
+    const missingR2 = missingR2Vars(process.env);
+    if (missingR2.length) throw new CliError(r2GuardMessage(missingR2));
+  }
   if (!a.get("mapping-overlay")) throw new CliError("import: --mapping-overlay is required (it carries the site filter and the image host).");
   const v0 = loadEffectiveMapping(a, STRUCTURAL_MAPPING_PATH, { structuralOnly: false });
   const siteId = v0.mapping.source.siteFilter as string;
