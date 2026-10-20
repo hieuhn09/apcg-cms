@@ -216,8 +216,13 @@ export interface SectionsResult {
   text: string;
 }
 
-/** Turn `body_sections` into escaped HTML (h2 + p). Tag-like text can never become a tag. */
-export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" = "space"): SectionsResult {
+/**
+ * Turn `body_sections` into escaped HTML (h2 + p). Tag-like text can never become a tag.
+ * Paragraphs split on a blank line; inside one, a single newline becomes a space ("space", GTP)
+ * or `<br>` ("br"). "paragraph" (AER) splits on EVERY newline: the AER site stored one newline
+ * between paragraphs and rendered each line as its own paragraph.
+ */
+export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" | "paragraph" = "space"): SectionsResult {
   let v = raw;
   if (typeof v === "string") {
     try {
@@ -237,7 +242,7 @@ export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" = "space
     const heading = normaliseWs(enText(rec.heading));
     const body = enText(rec.body).replace(/\r\n?/g, "\n");
     const paras = body
-      .split(/\n{2,}/)
+      .split(lineBreaks === "paragraph" ? /\n+/ : /\n{2,}/)
       .map((p) => normaliseWs(lineBreaks === "space" ? p.replace(/\n/g, " ") : p))
       .filter(Boolean);
     if (!heading && !paras.length) {

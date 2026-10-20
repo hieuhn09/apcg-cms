@@ -86,7 +86,7 @@ export const MappingSchema = z
       .object({
         format: z.enum(["sections", "auto", "html", "markdown", "lexical-json", "text"]).default("sections"),
         converter: z.enum(["html-to-lexical", "markdown-to-lexical", "passthrough-lexical", "plain-paragraphs"]).default("html-to-lexical"),
-        lineBreaks: z.enum(["space", "br"]).default("space"),
+        lineBreaks: z.enum(["space", "br", "paragraph"]).default("space"),
         sanitize: z.boolean().default(true),
         stripEmbeds: z.boolean().default(true),
         allowedTags: z.array(z.string()).default(DEFAULT_ALLOWED_TAGS),

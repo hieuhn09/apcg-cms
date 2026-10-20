@@ -186,3 +186,10 @@ test("C11/G39 unit: legacy-source-urls one line per unique URL, collisions liste
   assert.deepEqual(r.collisions, [{ source_url: "https://a.com/x", legacyIds: ["1", "2", "3"] }]);
   assert.equal(subscribersCsv([{ email: "=cmd", newsletter: "a,b", source: "s", created_at: "t" }]), "email,newsletter,source,created_at\n'=cmd,\"a,b\",s,t\n");
 });
+
+test("body lineBreaks: paragraph splits on every newline (AER); space keeps GTP behaviour", () => {
+  const raw = [{ heading: { en: "Markets" }, body: { en: "One.\nTwo.\n\nThree.\r\nFour." } }];
+  assert.equal(sectionsToHtml(raw, "paragraph").html, "<h2>Markets</h2><p>One.</p><p>Two.</p><p>Three.</p><p>Four.</p>");
+  assert.equal(sectionsToHtml(raw, "space").html, "<h2>Markets</h2><p>One. Two.</p><p>Three. Four.</p>");
+  assert.equal(sectionsToHtml(raw).html, sectionsToHtml(raw, "space").html);
+});

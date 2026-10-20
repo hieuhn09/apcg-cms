@@ -157,7 +157,7 @@ async function main(): Promise<number> {
         fails.push(`no Central row for ${String(r.id)}`);
         continue;
       }
-      const s = sectionsToHtml(r.body_sections);
+      const s = sectionsToHtml(r.body_sections, m.body.lineBreaks);
       // Pass 2 (rewrite-links) legitimately replaced old-site URLs with /article/<slug>: apply the same mapping to the source text.
       const srcText = applyRewrittenLinks(s.text, blocks(d.body).map((b) => b.text).join("\n"), e?.textLinks ?? [], oldToNew);
       const a1 = plainTextForParity(srcText);
