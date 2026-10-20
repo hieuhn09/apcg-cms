@@ -75,3 +75,18 @@ test("verify fails on an old image host in a body, a missing article, and a stat
     done(c);
   }
 });
+
+test("verify fails when one imported row lost its import marker (it must not vanish from the plan)", async () => {
+  const c = setup();
+  try {
+    await all(c);
+    const a = c.central.rows("articles").find((x) => x.slug === "ring-post") as Record<string, unknown>;
+    a.engineSourceName = "legacy:mutant";
+    assert.equal(await verify(c), 3);
+    const out = c.logs.join("\n");
+    assert.match(out, /ring-post: missing in Central \(a tenant-vowasia article without the import marker holds this slug\)/);
+    assert.match(out, /journaled by a run but no longer carries the import marker/);
+  } finally {
+    done(c);
+  }
+});

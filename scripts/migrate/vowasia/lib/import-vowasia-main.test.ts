@@ -341,3 +341,21 @@ test("bylines: spread within 1 per pillar over two runs", async () => {
     done(c);
   }
 });
+
+test("local test hooks: forced upload error stops the run (Q12); hooks are refused against a non-local Central", async () => {
+  const c = setup({ env: { VOWASIA_TEST_FAIL_UPLOAD_AT: "1" } });
+  try {
+    assert.equal(await runImport(apply(c, "A"), c.deps), 1);
+    assert.equal(articleWrites(c).length, 0, "no article created after the forced upload error");
+    assert.equal(new RunDir(path.join(c.runs, "A")).outcomes()[0]?.reason, "uploadError");
+  } finally {
+    done(c);
+  }
+  const r = setup({ env: { DATABASE_URL: REMOTE, VOWASIA_TEST_KILL_BEFORE_JOURNAL: "1", R2_BUCKET: "b", R2_ENDPOINT: "e", R2_ACCESS_KEY_ID: "k", R2_SECRET_ACCESS_KEY: "s" } });
+  try {
+    await assert.rejects(() => runImport([...apply(r, "A"), "--confirm-host", "central.example.invalid"], r.deps), /LOCAL rehearsal Central only/);
+    assert.equal(r.central.writes.length, 0);
+  } finally {
+    done(r);
+  }
+});

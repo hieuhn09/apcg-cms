@@ -45,7 +45,10 @@ export async function runVerify(argv: readonly string[], deps: ImportDeps): Prom
     const tenantId = await loadTenantId(port);
     const tax = await checkTaxonomy(port, tenantId);
     const docs = await tenantArticles(port, tenantId);
-    const plan = buildPlan(input, store, docs.filter((d) => !isMarker(d)).map((d) => ({ id: d.id as Id, slug: String(d.slug), marker: false })));
+    // the expected set comes from the snapshot alone; a Central row that lost its marker must
+    // show up as "missing", not silently leave the plan as a slug clash
+    const plan = buildPlan(input, store, []);
+    const nonMarker = new Map(docs.filter((d) => !isMarker(d)).map((d) => [String(d.slug), d]));
     const media = new Set((await findAll(port, "media", { tenant: { equals: tenantId } })).map((m) => String(m.id)));
     const name = (map: Map<string, Id>, id: unknown) => [...map.entries()].find(([, v]) => String(v) === relId(id))?.[0];
     const authorIds = new Set([...tax.authorId.values()].map(String));
@@ -61,7 +64,7 @@ export async function runVerify(argv: readonly string[], deps: ImportDeps): Prom
       bump(exp.tag, p.tag ?? "(no tag)");
       const d = bySlug.get(p.slug);
       if (!d) {
-        problems.push(`${p.slug}: missing in Central`);
+        problems.push(`${p.slug}: missing in Central${nonMarker.has(p.slug) ? " (a tenant-vowasia article without the import marker holds this slug)" : ""}`);
         continue;
       }
       const status = String(d.workflowStatus);
@@ -82,6 +85,9 @@ export async function runVerify(argv: readonly string[], deps: ImportDeps): Prom
       if (oldHostsLeft(d.body, plan.imageHosts).length) problems.push(`${p.slug}: old image host left in the body`);
     }
     for (const d of bySlug.values()) if (!journaled.has(String(d.id))) problems.push(`${String(d.slug)}: marker article not in any run journal (slug-map incomplete)`);
+    const live = new Set([...bySlug.values()].map((d) => String(d.id)));
+    const gone = [...journaled].filter((id) => !live.has(id) && docs.some((d) => String(d.id) === id));
+    for (const id of gone) problems.push(`article ${id}: journaled by a run but no longer carries the import marker`);
     const kv = (m: Record<string, number>) => Object.entries(m).sort().map(([k, v]) => `${k} ${v}`).join(", ");
     log(`[${TOOL}] status expected: ${kv(exp.status)}; found: ${kv(got.status)}`);
     log(`[${TOOL}] pillar expected: ${kv(exp.pillar)}; found: ${kv(got.pillar)}`);

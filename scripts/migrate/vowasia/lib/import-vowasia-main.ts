@@ -62,6 +62,8 @@ const CONSECUTIVE_FAILURE_STOP = 5;
 export interface ImportHooks {
   /** LOCAL rehearsal only: exit (137) after the N-th article create, before its outcome line. */
   killBeforeJournal?: number;
+  /** LOCAL rehearsal only: the N-th Media create of the run throws (forced upload error, Q12). */
+  failUploadAt?: number;
 }
 
 export interface ImportDeps {
@@ -80,11 +82,30 @@ export interface ImportDeps {
 /** LOCAL-only test hooks from the environment (refused against a non-local Central). */
 export function importHooks(env: Record<string, string | undefined>, local: boolean): ImportHooks {
   const k = env.VOWASIA_TEST_KILL_BEFORE_JOURNAL;
-  if (!k) return {};
+  const f = env.VOWASIA_TEST_FAIL_UPLOAD_AT;
+  if (!k && !f) return {};
   if (!local) throw new CliError(`${TOOL}: VOWASIA_TEST_* hooks are for a LOCAL rehearsal Central only; refusing.`);
-  const n = Number(k);
-  if (!Number.isInteger(n) || n < 1) throw new CliError(`${TOOL}: VOWASIA_TEST_KILL_BEFORE_JOURNAL must be a positive integer.`);
-  return { killBeforeJournal: n };
+  const num = (v: string, name: string) => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) throw new CliError(`${TOOL}: ${name} must be a positive integer.`);
+    return n;
+  };
+  return { ...(k ? { killBeforeJournal: num(k, "VOWASIA_TEST_KILL_BEFORE_JOURNAL") } : {}), ...(f ? { failUploadAt: num(f, "VOWASIA_TEST_FAIL_UPLOAD_AT") } : {}) };
+}
+
+/** Wrap a port so the N-th Media create throws (local rehearsal of the Q12 stop). */
+function withForcedUploadError(port: CentralPort, n: number): CentralPort {
+  let seen = 0;
+  return {
+    ...port,
+    find: port.find.bind(port),
+    update: port.update.bind(port),
+    delete: port.delete.bind(port),
+    create: async (c, d, o) => {
+      if (c === "media" && ++seen === n) throw new Error("VOWASIA_TEST_FAIL_UPLOAD_AT: forced upload error (local rehearsal hook)");
+      return port.create(c, d, o);
+    },
+  };
 }
 
 function wordCount(p: PlannedArticle): number {
@@ -127,7 +148,8 @@ export async function runImport(argv: readonly string[], deps: ImportDeps): Prom
       const dangling = allRuns(runsDir).flatMap((r) => r.dangling().map((i) => `${r.id}: ${i.slug}`));
       if (dangling.length) throw new RunError(`${TOOL}: dangling intent(s) without an outcome line (a crashed run): ${dangling.join(", ")}; run migrate:vowasia:rollback -- --run-id <that run> first (dry run, then --apply); refusing.`);
     }
-    const port = await deps.openPort();
+    const opened = await deps.openPort();
+    const port = hooks.failUploadAt !== undefined ? withForcedUploadError(opened, hooks.failUploadAt) : opened;
     try {
       return await importBody(a.apply, runId, limit, runsDir, snapDir, input, port, target.local, hooks, deps, now);
     } finally {
