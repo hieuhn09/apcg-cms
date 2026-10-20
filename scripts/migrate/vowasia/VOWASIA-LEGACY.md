@@ -451,3 +451,136 @@ npm run probe:migrate-vowasia
 ```
 
 Lệnh đầu là unit test (không DB, không mạng). Lệnh thứ hai dựng PG16 tạm cục bộ (cổng 54336, xác thực trust chỉ trên 127.0.0.1), tự dọn; chạy một mình. Probe kiểm keyset (trùng mili-giây khác micro-giây, `created_at` trùng, NULL, 1970), chạy `01` bằng role không có quyền ghi, áp `02` (kể cả trường hợp tự kiểm STOP thì không tạo gì) và `03`, các bản cho SQL Editor (`01e` trả đúng một bảng, mục site đầu tiên, hàng tổng cuối; `02` dán như một chuỗi, hàm SECURITY DEFINER trả trigger không làm 02 dừng còn hàm thường thì dừng; `02p` dừng khi thiếu role/schema/view, sinh mật khẩu trong SQL và role đăng nhập SCRAM được bằng nó; `03e` báo trạng thái trong ô kết quả), cả bằng chủ bảng KHÔNG phải superuser có CREATEROLE, kiểm hàng rào của `02b`, kiểm role chỉ đọc đúng site và không ghi được, chạy discover qua role và kiểm đầu ra không lộ id site, mật khẩu, thân bài. Nó không chứng minh hành vi trên DB cũ THẬT (đó là O2-O5).
+
+---
+
+# Phần B: import vào Central (chặng B-β, chủ chạy trên máy Mac)
+
+TL;DR: Import tạo bài MỚI trong tenant `vowasia` từ snapshot đã kiểm (không đọc DB cũ nữa). Mọi lệnh mặc định là chạy thử (dry run, không ghi gì). Chỉ khi thêm `--apply` mới ghi. Mỗi lần `--apply` dùng một `--run-id` MỚI; không có `--resume`; hoàn tác theo từng run bằng rollback. Agent không chạy bước nào ở đây trên Central thật.
+
+Quy tắc chung của phần B:
+- Central đích là database `neondb`. URL Central nằm trong `.env.local` như khi chạy O1 (không dán vào chat, không truyền qua cờ). Dòng đầu tiên mỗi công cụ in ra là tên database; phải là `"/neondb"`, khác thì DỪNG.
+- Với Central không cục bộ, mọi lệnh cần `--confirm-host=<host của Central>`; `--apply` còn cần chạy trong terminal thật (TTY).
+- Với `--apply`, bốn biến `R2_BUCKET`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` phải có giá trị (công cụ chỉ in TÊN biến). Thiếu thì công cụ từ chối, vì Payload sẽ lưu ảnh lên ổ đĩa máy Mac.
+- Snapshot, kho ảnh, thư mục runs và file trả lời link nằm NGOÀI repo, ví dụ `~/vowasia-private/`. Công cụ từ chối mọi thư mục nằm trong repo (kể cả thư mục bị git-ignore) hoặc trong bất kỳ cây git nào.
+- Importer chỉ TẠO MỚI: không sửa, không xoá bài có sẵn, không bao giờ tạo tác giả, tag, pillar hay sub-section (thiếu thì DỪNG và in danh sách thiếu).
+- Digest manifest để dùng cho `--expect-sha256`: `50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105`.
+
+## OB1: kiểm taxonomy trên Central (chạy thử)
+
+```bash
+npm run audit:add-vowasia-taxonomy -- --confirm-host=<host Central>
+```
+
+Dòng đầu phải là `"/neondb"`. Kỳ vọng: tenant `vowasia` có và 49 dòng (gồm 6 tác giả) đều `exists`. Thiếu dòng nào thì DỪNG và báo.
+
+## OB-R: kết quả rehearsal
+
+Chủ KHÔNG chạy rehearsal (cần Linux, PG16 native, `runuser`). Agent chạy G19 ở bước EVL; chủ đọc kết quả trong báo cáo EVL. Phải xanh mới làm tiếp.
+
+## OB5: chạy thử import (ĐIỂM DỪNG)
+
+```bash
+npm run migrate:vowasia:import -- --snapshot ~/vowasia-private/snapshot --expect-sha256 50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105 --confirm-host=<host Central> --runs-dir ~/vowasia-private/runs
+```
+
+Kiểm: dòng đầu `"/neondb"`; khối số liệu in ra khớp mục 4.1 của plan (370 dòng, 12 bị loại vì `rejected`, 358 sẽ import, 0 lỗi C8, 140 bài thiếu ngày đăng tính trên mọi dòng, 9 bài không ảnh bìa chia theo status cũ, số mục redirect dự kiến). Gửi khối số liệu (không có bí mật) lại để đối chiếu.
+
+Đọc 4 dòng `link: old-site-article slug=... url=...`. Với TỪNG link, chủ quyết: `rewrite` (đổi thành `/<pillar>/<slug>` nếu bài đích được import và đang published trong CÙNG run) hoặc `keep` (giữ nguyên). Viết file trả lời ngoài repo, ví dụ `~/vowasia-private/old-site-links.txt`, mỗi link một dòng, chép URL ĐÚNG như dòng in ra:
+
+```text
+<slug bài chứa link> <URL> rewrite
+```
+
+Không có giá trị mặc định. OB6 chưa được bắt đầu khi file này chưa có và câu trả lời chưa được ghi vào plan (mục 3.3). Link loại `external` không bao giờ bị đổi.
+
+## OB6: import phần A (50 bài)
+
+```bash
+npm run migrate:vowasia:import -- --snapshot ~/vowasia-private/snapshot --expect-sha256 50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105 --confirm-host=<host Central> --runs-dir ~/vowasia-private/runs --apply --limit 50 --run-id A
+```
+
+Sao lưu `~/vowasia-private/`. Mở /admin, tenant vowasia, xem 50 bài: ảnh bìa, ảnh trong thân bài, tác giả, pillar.
+
+## OB7: import phần còn lại
+
+Cùng lệnh OB6 nhưng bỏ `--limit 50` và dùng `--run-id B` (run-id MỚI; không bao giờ `--resume`). Các bài của A được bỏ qua.
+
+## Khi một lần `--apply` dừng giữa chừng
+
+- Lỗi upload ảnh (Q12, ví dụ sai thông tin R2 hay mất mạng): công cụ DỪNG trước khi tạo bài đang xử lý, ghi `failed / uploadError`, gỡ khoá, thoát mã khác 0. Sửa nguyên nhân rồi chạy lại với run-id MỚI. Không có bài nháp nào bị tạo thiếu ảnh vì lỗi upload.
+- Máy sập, terminal bị đóng, hay `kill -9`: file khoá `~/vowasia-private/runs/.import.lock` còn lại, nên cả rollback `--apply` cũng bị từ chối (công cụ in ra pid, run-id của khoá). Cách gỡ khoá cũ, theo đúng thứ tự:
+  1. Kiểm không còn tiến trình import/rollback/rewrite-links nào đang chạy:
+
+```bash
+ps aux | grep -E "import-vowasia|rollback-vowasia|rewrite-links-vowasia"
+```
+
+     Chỉ được thấy chính dòng `grep`.
+  2. Đọc pid và run-id in trong thông báo từ chối.
+  3. Xoá khoá bằng tay:
+
+```bash
+rm ~/vowasia-private/runs/.import.lock
+```
+
+  4. Rollback run bị sập: chạy thử trước, rồi `--apply` (xem mục Rollback).
+  5. Chỉ sau đó mới chạy run mới, với run-id MỚI.
+
+## OB8: rewrite-links (từng run)
+
+```bash
+npm run migrate:vowasia:rewrite-links -- --run-id A --runs-dir ~/vowasia-private/runs --snapshot ~/vowasia-private/snapshot --expect-sha256 50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105 --old-site-links-file ~/vowasia-private/old-site-links.txt --confirm-host=<host Central>
+```
+
+Chạy thử in từng link: slug bài, URL, quyết định và đoạn thay thế chính xác. Đúng thì chạy lại với `--apply`. Làm lại cho `--run-id B`. Công cụ từ chối nếu file thiếu link, có link lạ, dòng sai định dạng hay một link lặp lại. Chỉ bài do chính run đó tạo mới bị đổi; rollback của run vẫn xoá được bài đã đổi.
+
+## OB9: timestamps-fix.sql (từng run)
+
+Mỗi thư mục run có `timestamps-fix.sql` (khôi phục ngày tạo/cập nhật cũ, chỉ cho bài của run đó). Đọc số khối ở đầu file, rồi chạy trên URL TRỰC TIẾP (không qua pooler) của Central, trong một phiên:
+
+```bash
+psql "$CENTRAL_DIRECT_URL" -v ON_ERROR_STOP=1 -f ~/vowasia-private/runs/A/timestamps-fix.sql
+```
+
+`CENTRAL_DIRECT_URL` nhập bằng `read -s CENTRAL_DIRECT_URL` (không `export`, không dán vào chat). Làm lại cho run B. Một lỗi bất kỳ huỷ cả file, không gì bị đổi.
+
+## OB10: verify
+
+```bash
+npm run migrate:vowasia:verify -- --snapshot ~/vowasia-private/snapshot --runs-dir ~/vowasia-private/runs --expect-sha256 50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105 --confirm-host=<host Central>
+```
+
+Phải in `VERIFY OK`. Gửi các dòng số liệu (status, pillar, tag) lại.
+
+## OB11: redirect map
+
+```bash
+npm run migrate:vowasia:redirects -- --snapshot ~/vowasia-private/snapshot --expect-sha256 50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105 --out ~/vowasia-private/redirects --min-coverage 100 --confirm-host=<host Central>
+```
+
+Kỳ vọng 349 mục (12 mục 410 + 337 mục 308). Nếu công cụ in `STOP O-B12` (bài published cũ thành nháp vì ảnh trong kho hỏng): đây là câu hỏi mở cho chủ, công cụ không tự chọn; không có file nào được ghi. Mở PR vào `vowasia-web` thêm nội dung `redirect-map.json` vào `src/redirects/redirect-map.json`. KHÔNG merge trước ngày chuyển (C10: chưa có; VowAsia vẫn TỐI).
+
+## OB12: dọn
+
+Giữ journal cho tới khi chắc chắn không cần rollback; sau đó xoá hoặc mã hoá snapshot, kho ảnh, journal và file trả lời.
+
+## Rollback (bất cứ lúc nào, theo từng run)
+
+```bash
+npm run migrate:vowasia:rollback -- --run-id A --runs-dir ~/vowasia-private/runs --confirm-host=<host Central>
+```
+
+Chạy thử in kế hoạch, không ghi gì. Đúng thì chạy lại với `--apply`. Chỉ xoá bài của đúng run đó còn mang dấu import `legacy:vowasia` và chưa bị sửa tay (thêm `--include-edited` để xoá cả bài đã sửa); ảnh do run đó tạo chỉ bị xoá khi không bài nào khác dùng (kể cả dùng trong thân bài). Lỗi xoá một bài được báo lại, không bao giờ chuyển bài sang archived thay thế.
+
+## Kiểm thử cục bộ phần B (agent)
+
+```bash
+npm run test:migrate-vowasia
+```
+
+```bash
+REHEARSE_MODE=native npm run rehearse:vowasia
+```
+
+Rehearsal chạy MỘT mình, nền, trên Linux có PG16 native (cổng 54346, 54347, 3518, 3519), với Central cục bộ tạm và ảnh lưu ổ đĩa cục bộ. Nó không chứng minh upload R2 thật, dấu nhắc TTY trên macOS hay banner `neondb` trên host thật (đó là OB5-OB10).
