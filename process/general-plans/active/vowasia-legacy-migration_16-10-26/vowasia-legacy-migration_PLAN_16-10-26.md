@@ -616,7 +616,7 @@ Execute start: T1 đỏ-trước (out-dir.test.ts: a, b độc lập, c) rồi c
 
 ## Amendment 3 (19-10-26): kết quả Giai đoạn A thật + kế hoạch Giai đoạn B
 
-Status: PLANNED cho B (chưa EXECUTE). HS7 nay ĐƯỢC MỞ cho việc LẬP PLAN B: đã có discover thật + quyết định C8/C3/C10/ảnh. Việc THỰC THI B vẫn cần: PVL của mục này (`### Validate Contract (Chặng B-α)`: PASS 19-10-26; `### Validate Contract (Chặng B-β)`: B-0b đã đo 20-10-26, Amendment 4 written; awaiting inner PVL), xác nhận A1 (O1), và trả lời các câu hỏi mở ở mục 3.9. `## Validate Contract` ở trên chỉ phủ Giai đoạn A, không phủ B.
+Status: PLANNED cho B (chưa EXECUTE). HS7 nay ĐƯỢC MỞ cho việc LẬP PLAN B: đã có discover thật + quyết định C8/C3/C10/ảnh. Việc THỰC THI B vẫn cần: PVL của mục này (`### Validate Contract (Chặng B-α)`: PASS 19-10-26; `### Validate Contract (Chặng B-β)`: PASS 20-10-26, inner PVL pass 3), xác nhận A1 (O1), và trả lời các câu hỏi mở ở mục 3.9. `## Validate Contract` ở trên chỉ phủ Giai đoạn A, không phủ B.
 
 ### 3.1 Sự kiện: chạy thật Giai đoạn A (19-10-26, chủ chạy, một lần ngồi)
 
@@ -922,18 +922,177 @@ Accepted by: không cần chấp nhận concern (Gate PASS). Chủ vẫn phải 
 
 ### Validate Contract (Chặng B-β)
 
-Status: GATED — Amendment 4 written (20-10-26: B-0b measured, B-beta designed in `## Amendment 4`); awaiting inner PVL; KHÔNG EXECUTE
-date: 2026-10-19
-generated-by: inner-pvl: phase-B (chặng B-β, placeholder)
+Status: PASS
+Date: 20-10-26
+date: 2026-10-20
+generated-by: inner-pvl: B-beta
+# No `supersedes:` line: the earlier B-beta section was a GATED placeholder (no gate, no test gates), not a validate-contract. The B-α contract above and the phase-A `## Validate Contract` stay unchanged.
 
-B-β chỉ được validate sau: (1) chủ chạy OB1-OB4 + OB3b và gửi kết quả measure; (2) plan-supplement ghi Q2 (hình dạng `title`/`excerpt`), Q3 (vị trí ảnh trong `body_sections`), KB-2 (bảng chéo section/subsection); (3) inner PVL riêng từ V1. Gate: chưa có. Known-gap B-β có tên: Q2, Q3, KB-2, KB-3 (G23), KB-4, KB-6.
+Scope of this PASS: ONLY stage B-beta as specified in `## Amendment 4` (§4.3 design, §4.4 items 1-15, §4.5 gates, §4.6 owner steps). Precedence: for B-beta, §4.x governs wherever §3.x differs (line under the Amendment 4 heading). PASS means the orchestrator may offer "ENTER EXECUTE MODE" for B-beta; the owner still has to say it. PASS does NOT close B-beta: G23 (owner run on `neondb`) is a named residual and the high-risk evidence pack is required before closeout (§4.7).
 
-Mục PHẢI xử lý ở PVL B-β (carry-forward từ PVL-S3, không chặn B-α):
-- CF1 (U24 còn hở, ảnh hưởng tính kiểm được của cổng) `--min-coverage` (L702, L736, AC-B13): tử số "số URL có mục map" gồm cả mục archived -> `/<pillar>` và rejected -> 410, nên tỉ lệ có thể vượt 1 và che mất bài published thiếu mục. Sửa: tử số = số bài nguồn status `published` CÓ mục map; mẫu số = số bài nguồn status `published`; báo riêng số mục archived/nháp/410.
-- CF2 Rollback chạy dry-run (mặc định) KHÔNG được ghi dòng `resolved`; chỉ `--apply` mới ghi. Nêu rõ trong B-8 và test.
-- CF3 Rollback ghi `resolved` vào `--runs-dir`, nên rollback cũng phải qua `assertOutsideRepo`.
-- CF4 Chạy song song hai `--apply` không có khoá; cân nhắc lockfile trong `--runs-dir` (preflight intent treo không bảo vệ khi hai run chạy cùng lúc). Ghi chú; chủ chạy tuần tự.
-- CF5 Câu Q9 (L674) đọc được thành "107 bài archived nhập thành nháp"; C2 và "Hệ quả số" nói archived GIỮ archived. Viết lại một câu cho rõ (archived giữ archived; cả archived lẫn nháp-thiếu-ảnh-bìa -> `/<pillar>`).
+PVL history (B-beta): pass 1 BLOCKED (F1 + C1-C13) -> supplement 1 (`f447a21`) -> pass 2 CONDITIONAL (3 CONCERN) -> supplement 2 (`b5ccad6`) -> pass 3 PASS (this contract; validator wording fixes V-W3, V-W4 applied under V6 step 1, see below). Carry-forward CF1-CF5 from the B-α contract: all closed (CF1 §4.4 item 8 + G28; CF2/CF3 §4.4 item 7 + G27; CF4 §4.4 item 6 + G26; CF5 §4.2.7).
+
+Parallel strategy: sequential (EXECUTE: ONE `vc-execute-agent`, opus, files are tightly coupled; EVL: ONE `vc-tester`, sonnet; G22: ONE `vc-code-reviewer`, sonnet; G19 then G11 run alone, one after the other)
+Rationale: 3/7 signals (S2 production data surface via create-only import; S6 trust boundary: R2 credentials in env, production `neondb`; S7 about 30 new files). MEDIUM score, but libs share types and one test tree, so parallel executors would drift on interfaces. Agent count 1 + 1 + 1 = 3 (cost guard not triggered).
+
+Evidence for this pass (read-only, 20-10-26, HEAD `b5ccad6`, clean tree before writing): `validate-plan-artifact.mjs` 0 failures / 0 warnings; `git diff --name-only 9d9e5a4 HEAD` = only files under `process/general-plans/active/vowasia-legacy-migration_16-10-26/` (base still valid); G1 `test:migrate-vowasia` 113/113; G4 `test:migrate-gtp` 69/69; G5 `test:single-home` 267/267; G8 exit 0; SQL-unchanged exit 0; G10c (new form) exit 0; G7c exit 0; G13 exit 0; `vowasia-web` @ `da9716c` redirect contract unchanged (`redirect-middleware.ts`: 410 for object values, 308 for strings; `redirect-map.json` = `{}`). G2/G3/G6 measured green at `9d9e5a4` in pass 1; no code changed since.
+
+Validator wording fixes applied in pass 3 (V6 step 1; no scope, file, owner-decision or new-gate change):
+- V-W3 (§4.2.3, §4.4 item 9 test 4): "extra/unknown entry" now means "not among the `old-site-article` links of the WHOLE verified snapshot". Before the fix the natural reading was "not found in this run's articles", which contradicts OB8 (the same answer file is passed to every run): run A or run B would be refused whenever the owner's links fall in both runs. The only reading consistent with OB5 (owner answers for all links of the whole-snapshot dry-run) and OB8 was chosen.
+- V-W4 (§4.5 G10c-local): the command now starts with three `test -f` guards, and the text says local URLs must use a literal host and literal numeric port. Measured in pass 3: without the guards the command exits 0 when the files are missing or misplaced (vacuous pass; the main G10c excludes them by basename, so a misplaced file would escape both checks); a template like `` `postgres://${user}...@127.0.0.1:${PORT}/${db}` `` (the B-α `keyset-probe.ts` style) is flagged red. With the guards: missing files exit 1, literal local URLs exit 0, a non-local URL exits 1.
+
+Test gates (C3 5-column table, stage B-beta; base `BASE_BB = 9d9e5a4`, or any later commit that changes only `process/`; executor checks at start that `git diff --name-only 9d9e5a4 HEAD -- . ':(exclude)process'` is empty and records `BASE_BB` in the report):
+
+| criterion id | behavior | strategy | proving test | gap-resolution |
+|---|---|---|---|---|
+| AC-B2, AC-B12, AC-B15 | transform: `{en}` title/excerpt, reject on other shapes, status table, no cover -> draft `noCover`, `published_at` fallback counted on both bases, tag table Q10, old SEO ignored | Fully-Automated | G1 `npm run test:migrate-vowasia` -> `lib/vowasia-transform.test.ts` (part of G24/G25) | B |
+| AC-B3 | body: section order H2 -> upload -> paragraphs; `body.en` escaped text, never HTML; blank-line split; alt/credit chain; 0 pending upload nodes; no old image host; store-failed image -> section dropped + draft; links returned with class | Fully-Automated | G1 -> `lib/vowasia-body.test.ts` (G24) | B |
+| AC-B4 | author round-robin per pillar by (`created_at`, `id`), spread <= 1 on the full set, missing author -> throw | Fully-Automated | G1 -> `lib/vowasia-author-distribution.test.ts` | B |
+| AC-B5 (slug) | keep slug; `page` reserved -> reject; clash with non-marker vowasia article -> reject; deterministic `--limit` order | Fully-Automated | G1 -> `lib/vowasia-slug-plan.test.ts` | B |
+| AC-B3, AC-B16 | media: manifest lookup, sha256/magic/size re-check, `vowasia-` stable filename, reuse, no network import, prefix `vowasia`; `storeFailure` vs thrown `UploadError` (Q12: stop before article create) | Fully-Automated | G1 -> `lib/vowasia-media.test.ts` (G29) | B |
+| AC-B5, AC-B17 | `--apply` gates and preflights: taxonomy presence STOP (no taxonomy create), TTY, `--confirm-host`, `/neondb` (dry-run too), run-id rules, no `--resume`, `--runs-dir` outside repo (dry-run too), R2 env, `--expect-sha256`, sha chain, lock, dangling intent, unjournaled marker row; dry-run writes only `<runs-dir>/dry-<ts>` | Fully-Automated | G1 -> `lib/import-vowasia-main.test.ts` (G17, G26, G30) | B |
+| AC-B6 | rollback: only that run's journal rows, marker + tenant; body-referenced Media kept (full body scan); dry-run writes nothing; delete error -> report, no archive; 5-condition dangling-intent rule; 3 required scenarios; lock; stale lock | Fully-Automated | G1 -> `lib/rollback-vowasia-main.test.ts` (G27, G26) | B |
+| AC-B11, AC-B13 | redirects: rules of §4.2.7 one case each; old draft (even no-cover) -> no entry; O-B12 row -> STOP; CF1 ratio <= 1, missing published entry fails | Fully-Automated | G1 -> `lib/vowasia-redirects.test.ts` (G28, G16b) | B |
+| AC-B14 | rewrite-links answer file: tests 1-10 of §4.4 item 9 (V-W3 wording) plus E16-E18 tests (accept file outside repo, other-run entry ignored, rollback still deletes a rewritten row) | Fully-Automated | G1 -> `lib/rewrite-links-vowasia-main.test.ts` (G24) | B |
+| Q11 (timestamps) | `timestamps-fix.sql` per run: OWNER-RUN header, `ON_ERROR_STOP`, WHERE marker + tenant + this run's ids | Fully-Automated | G1 -> `lib/vowasia-timestamps.test.ts` (golden file) | B |
+| AC-B10 (code part) | verify compares Central with the plan: counts, author, upload nodes resolve to vowasia Media, 0 old host, slug-map complete | Fully-Automated | G1 -> `lib/verify-vowasia-main.test.ts` | B |
+| D-B1, AC-B8 | 11 pinned GTP files unchanged; pins file frozen; no GTP file edited | Fully-Automated | G1 (`gtp-import-pins.test.ts`) + `git diff --quiet 9d9e5a4 -- scripts/migrate/vowasia/lib/gtp-import-pins.ts` + G8/G20 `git diff --quiet fe88bc4 -- scripts/migrate ':(exclude)scripts/migrate/vowasia'` + G4 `npm run test:migrate-gtp` | A |
+| AC-B5, AC-B6, AC-B7, AC-B3 | end-to-end on PG16 + local Central: bootstrap (seed.ts unchanged, tenant via `rehearse-bootstrap.ts`, taxonomy `--apply` = 49 created, fixture seed), snapshot -> measure -> dry-run, run A `--limit 50`, run B, run C = 0 new, crash between create and journal + stale lock recovery, Q12 upload stop, rollback per run, redirect build, Media `prefix === "vowasia"`, mutants red | Hybrid (precondition: `/usr/lib/postgresql/16/bin`, `runuser`, ports 54346/54347/3518/3519 free; agent on Linux only) | G19 `REHEARSE_MODE=native npm run rehearse:vowasia` (Bash tool `run_in_background: true`, `timeout: 7200000` ms; alone) | B |
+| AC-B8 | GTP rehearsal still green | Hybrid (same PG16 precondition; ports 54326/54327) | G11 `REHEARSE_MODE=native REHEARSE_SKIP_NPM_CI=1 npm run rehearse:gtp` (background, `timeout: 7200000` ms; only after G19 exited) | A |
+| AC-A* (phase A not broken) | config/reader/discover/role SQL | Hybrid (PG16 native, ports 54331-54339) | G6 `npm run probe:migrate-vowasia` (alone) | A |
+| HS1 | owner-run SQL unchanged; no DB URL scheme in docs/libs; rehearsal files hold local URLs only | Fully-Automated | `git diff --quiet 9d9e5a4 -- scripts/migrate/vowasia/sql`; G10c and G10c-local exactly as §4.5 (V-W4 form); G13 `test -f process/general-plans/backlog/vowasia-real-db-validation_NOTE_16-10-26.md` | A |
+| quality | lint and types | Fully-Automated | G2 `npm run lint:migrate` (0 errors; the 1 known warning `seed-gtp-legacy-fixture.ts:179` allowed), G3 `npm run typecheck` (exit 0), G5 `npm run test:single-home` | A |
+| AC-B8 (scope) | only allowed files change | Fully-Automated | G7 `git diff --name-only 9d9e5a4 -- . ':(exclude)scripts/migrate/vowasia' ':(exclude)process/general-plans'` prints only `package.json`; G7b `git diff -U0 9d9e5a4 -- package.json \| grep -E '^\+[^+]'` = exactly 7 lines, each contains `vowasia` (`migrate:vowasia:import`, `:rollback`, `:rewrite-links`, `:redirects`, `:verify`, `:fixture`, `rehearse:vowasia`) AND `git diff -U0 9d9e5a4 -- package.json \| grep -E '^-[^-]'` empty; G7c `! git ls-files --others --exclude-standard \| grep -vE "^(scripts/migrate/vowasia/\|process/general-plans/)"` | B |
+| AC-B5, AC-B9 | write safety judged by a reviewer (import, rollback, rewrite-links, redirects, timestamps SQL, lock, guards) | Agent-Probe | G22 `vc-code-reviewer` (sonnet); verdict recorded in `harness/review-decision.json` | B |
+| high-risk closeout | 5-artifact evidence pack | Fully-Automated (structure) | `node .claude/skills/vc-risk-evidence-pack/scripts/validate-risk-artifacts.mjs process/general-plans/active/vowasia-legacy-migration_16-10-26/harness` exits 0 | B |
+| AC-B10 (real data), KB-3, KB-6 | real dry-run/apply/verify on `neondb` with R2 | residual (not a proving strategy) | owner OB1, OB5-OB12; backlog stub `process/general-plans/backlog/vowasia-b-beta-owner-import_NOTE_20-10-26.md` (gate: `test -f` on it) | D |
+
+Failing stubs (red-first; write before code; names match the scenarios):
+Failing stub (transform):
+test("should read title.en and reject any other title shape with titleShape", () => { throw new Error("NOT IMPLEMENTED — TDD stub: Q2 shape") })
+test("should count date fallbacks over all rows and over imported rows", () => { throw new Error("NOT IMPLEMENTED — TDD stub: C1 two bases") })
+Failing stub (body):
+test("should emit H2, then the upload node, then paragraphs inside one section", () => { throw new Error("NOT IMPLEMENTED — TDD stub: section order") })
+test("should escape < > & in body.en and never create HTML nodes", () => { throw new Error("NOT IMPLEMENTED — TDD stub: text not HTML") })
+test("should leave zero pending upload nodes and zero old image hosts", () => { throw new Error("NOT IMPLEMENTED — TDD stub: post-check") })
+Failing stub (author / slug):
+test("should keep author spread within 1 per pillar on the full set", () => { throw new Error("NOT IMPLEMENTED — TDD stub: Q8") })
+test("should reject slug page and a clash with a non-marker article", () => { throw new Error("NOT IMPLEMENTED — TDD stub: slug plan") })
+Failing stub (media, G29):
+test("should plan the article as draft and drop the section on a store-level failure", () => { throw new Error("NOT IMPLEMENTED — TDD stub: C6 branch") })
+test("should stop before the article create when the Media upload throws", () => { throw new Error("NOT IMPLEMENTED — TDD stub: Q12 Dừng ngay") })
+Failing stub (import gates, G17/G26/G30):
+test("should stop with the full missing list and create no taxonomy when a pillar, sub-section, tag or author is missing", () => { throw new Error("NOT IMPLEMENTED — TDD stub: C13") })
+test("should refuse a dry-run whose --runs-dir is inside the repo, even when git-ignored", () => { throw new Error("NOT IMPLEMENTED — TDD stub: C8 dry-run location") })
+test("should refuse a second --apply while .import.lock exists and print the holder", () => { throw new Error("NOT IMPLEMENTED — TDD stub: CF4 lock") })
+Failing stub (rollback, G27):
+test("should keep a Media row referenced only from another article body", () => { throw new Error("NOT IMPLEMENTED — TDD stub: body-ref Media") })
+test("should leave the run dir byte-identical on rollback dry-run", () => { throw new Error("NOT IMPLEMENTED — TDD stub: CF2") })
+test("should report and not archive when an article delete throws", () => { throw new Error("NOT IMPLEMENTED — TDD stub: no archive fallback") })
+Failing stub (redirects, G28):
+test("should give an old draft with no cover no map entry", () => { throw new Error("NOT IMPLEMENTED — TDD stub: owner rule C3") })
+test("should fail coverage when one published row has no entry, however many archived entries exist", () => { throw new Error("NOT IMPLEMENTED — TDD stub: CF1") })
+test("should stop and list rows that were published and became draft by a stored-image failure", () => { throw new Error("NOT IMPLEMENTED — TDD stub: O-B12") })
+Failing stub (rewrite-links, G24):
+test("should refuse when a found old-site-article link is missing from the answer file", () => { throw new Error("NOT IMPLEMENTED — TDD stub: per-link answer") })
+test("should accept an answer-file entry whose article belongs to another run and ignore it", () => { throw new Error("NOT IMPLEMENTED — TDD stub: V-W3") })
+test("should refuse an answer-file entry that is not in the verified snapshot", () => { throw new Error("NOT IMPLEMENTED — TDD stub: extra entry") })
+test("should accept an answer file outside the repo and refuse one inside it", () => { throw new Error("NOT IMPLEMENTED — TDD stub: E17 file guard") })
+test("should rewrite to /<pillar>/<slug> only when the target is published and created by the same run", () => { throw new Error("NOT IMPLEMENTED — TDD stub: rewrite target") })
+test("should still delete a rewritten row on rollback --apply of its run", () => { throw new Error("NOT IMPLEMENTED — TDD stub: Q11 rollback covers rewrite") })
+Failing stub (timestamps / verify):
+test("should generate timestamps-fix.sql matching the golden file", () => { throw new Error("NOT IMPLEMENTED — TDD stub: B-10") })
+test("should fail verify when an upload node points at a Media outside tenant vowasia", () => { throw new Error("NOT IMPLEMENTED — TDD stub: B-12") })
+Failing stub (G7b and G10c-local, commands, not test files): G7b counts 0 before the 7 lines are added and exactly 7 after; G10c-local must be shown RED (E19) before it is accepted as green.
+
+Legacy line form:
+- libs, CLIs, gates, rollback, redirects, rewrite-links, timestamps, verify: Fully-automated: `npm run test:migrate-vowasia`
+- end-to-end: hybrid: `REHEARSE_MODE=native npm run rehearse:vowasia` + precondition PG16 native at `/usr/lib/postgresql/16/bin`, `runuser`, ports free; alone, background, 7200000 ms
+- GTP unchanged: Fully-automated: `npm run test:migrate-gtp`; `git diff --quiet fe88bc4 -- scripts/migrate ':(exclude)scripts/migrate/vowasia'`; hybrid: `REHEARSE_MODE=native REHEARSE_SKIP_NPM_CI=1 npm run rehearse:gtp` after G19
+- phase A not broken: hybrid: `npm run probe:migrate-vowasia` alone
+- scope: Fully-automated: G7, G7b, G7c, SQL unchanged, G10c, G10c-local, G13 as the table
+- review: agent-probe: `vc-code-reviewer` on B-beta files
+- real data: known-gap: documented (owner OB1, OB5-OB12; backlog stub)
+
+Dimension findings:
+- Infra fit: PASS — guards reused (`assertLocalOrConfirmed`, `central-db-name-guard`, `assertOutsideRepo`), rehearsal ports 54346/54347/3518/3519 distinct from G6 (54331-54339) and G11 (54326/54327), Media prefix hook sets `vowasia` on create, the 11 pinned GTP files import only each other.
+- Test coverage: PASS — every developed behaviour has a Fully-Automated test inside G1 or the Hybrid G19; G10c-local now non-vacuous (V-W4) and must be shown red (E19); real data and R2 upload are a named residual (D), not a proving strategy.
+- Breaking changes: PASS — 7 additive npm scripts; no schema/migration/API change; redirect JSON matches `vowasia-web` @ `da9716c`; GTP byte-identical (G8/G20).
+- Security surface: PASS — owner runs every production write; dry-run default; `--apply` = TTY + `--confirm-host` + `/neondb`; create-only, no taxonomy/author create; R2 names only; journals/answers outside the PUBLIC repo; fake hosts only in fixtures. High-risk pack: required (§4.7).
+- §4.1 measured facts: PASS — 230 + 107 = 337; 337 + 12 = 349; caveat restated correctly.
+- §4.2 consequences: PASS after V-W3 (answer-file scope).
+- §4.3 design: PASS.
+- §4.4 checklist: PASS — mechanically feasible against B-α code and the pinned GTP files; highest-risk edit = import apply path (intent -> media -> create -> outcome), mitigated by G26/G29/G30 red-first + G19 crash case.
+- §4.5 gates: PASS after V-W4.
+- §4.6 owner steps: PASS — O-B5 (OB5 STOP, answer file, no default) and O-B12 (builder STOP, no default) are legitimate open owner items.
+- §4.7 evidence pack / §4.8 out of scope / §4.9 strategy: PASS.
+- §3.x stale text: PASS — superseded markers in place; precedence line governs.
+
+Execute-agent instructions (stage B-beta):
+- E1 Red-first: write the failing stubs above before code; record which tests were red first in the EXECUTE report. Reuse B-α `verifySnapshotInput` for the sha chain (snapshot -> manifest -> `--expect-sha256`, re-hash every image file).
+- E2 R2 preflight (non-local Central, `--apply` only): the 4 variables must be present AND non-empty; print names only, never values.
+- E3 Every Payload write passes `context: { disableRevalidate: true, skipTranslationEnqueue: true }`; rewrite-links additionally `systemWrite: true` (as GTP `rewrite-links-main.ts`, no version bump, `article-workflow.ts:193`).
+- E4 Create Media with `tenant` set so the prefix hook (`src/hooks/upload-integrity.ts:52`) sets `vowasia`; assert `prefix === "vowasia"` in G19, never build the R2 key by hand.
+- E5 Author lookup by tenant + name AND slug; never by name alone; never create.
+- E6 Repo is PUBLIC: fixtures and tests use fake hosts only (`*.invalid`, `localhost`, `127.0.0.1`), no old project ref, no real rows, no DB URL with a real host, no R2 values.
+- E7 Evidence pack: `risk-gate.json`, `context-snippets.json`, `verification.json`, `review-decision.json`, `adversarial-validation.json` in `process/general-plans/active/vowasia-legacy-migration_16-10-26/harness/`; validated by `validate-risk-artifacts.mjs`. Do not report B-beta as finalised without it.
+- E8 Base `9d9e5a4` for G7/G7b/SQL-unchanged/pins; exactly 7 added `package.json` lines, 0 removed; check and record `BASE_BB` at start.
+- E9 G19 runs alone: no other probe, rehearsal, test suite with DB, or `npm ci` at the same time.
+- E10 The rehearsal puts snapshot `--out`, image store and `--runs-dir` under a fresh `mktemp -d /tmp/vowasia-rehearse-XXXXXX` (outside the repo; `assertOutsideRepo` refuses the in-repo `scripts/migrate/out/...` that GTP uses); remove it at the end.
+- E11 `rehearse-bootstrap.ts` creates tenant `vowasia` from `VOWASIA_TENANT_FIELDS` (`scripts/lib/vowasia-taxonomy.ts`), behind `assertLocalDb`; otherwise the taxonomy script's tenant preflight refuses `--apply`.
+- E12 `seed-vowasia-legacy-fixture.ts` gives the fake legacy PG (54346) the schema/view the closed snapshot builders read (follow `fixtures/keyset-probe.sh`), and the image server a fixed port 3519. Write every local Postgres URL in the 3 rehearsal/fixture files with a literal host and literal port (e.g. `postgres://postgres:password@127.0.0.1:54346/vowasia_legacy`); do NOT copy the `keyset-probe.ts` template form (`@127.0.0.1:${PORT}`), it fails G10c-local.
+- E13 (corrected) G11: `REHEARSE_MODE=native REHEARSE_SKIP_NPM_CI=1 npm run rehearse:gtp`, started only after G19 has exited. The "timeout 7200000" in the hard rules is the Bash tool timeout in MILLISECONDS (`run_in_background: true`, `timeout: 7200000`); never prefix a shell `timeout 7200000` (that is 7,200,000 seconds).
+- E14 Every new test file lives in `scripts/migrate/vowasia/lib/*.test.ts` so G1's glob picks it up; no change to existing script lines.
+- E15 Create the G23 backlog stub `process/general-plans/backlog/vowasia-b-beta-owner-import_NOTE_20-10-26.md` (owner steps OB1, OB5-OB12, what each proves, KB-3/KB-6) and gate it with `test -f`.
+- E16 Answer file (§4.2.3 after V-W3): one shared link extractor/classifier used by the import dry-run AND rewrite-links, so the URL string the owner copies is byte-identical to what rewrite-links matches; "missing" = an `old-site-article` link in THIS run's articles that has no line; "extra" = a line whose (slug, URL) is not among the snapshot-wide `old-site-article` links; lines for other runs' articles are accepted and ignored; an empty file is valid only when the snapshot has 0 `old-site-article` links. Rewrite only when the target is in this run's slug-map/outcome as created AND its live Central `workflowStatus` is `published` at rewrite time. The rewrite-links dry-run prints, per link, the article slug, the old URL, the decision and the exact replacement text, so the owner sees the result at OB8 before `--apply`.
+- E17 Answer-file guard: call `assertOutsideRepo(path.dirname(<realpath of file>), repoRoot(), { create: false })` and require an existing regular file. Never pass the file path itself: measured in pass 3, `git -C <file> rev-parse` exits 128 ("Not a directory"), which `assertOutsideRepo` turns into a `gitError` refusal, and a missing path would be created as a directory. Test both: a file outside the repo accepted; a file inside the repo (incl. git-ignored) refused.
+- E18 rewrite-links `--apply` re-baselines each rewritten row like GTP (`rewrite-links-main.ts:79-81`: re-read `version`/`updatedAt`, append to the run's slug journal), so rollback of the run still deletes it (Q11 "rollback covers"). Red-first test: import -> rewrite-links `--apply` -> rollback `--apply` deletes the rewritten row. rewrite-links dry-run writes nothing into the run dir (do NOT copy GTP's `rewrite-links-report-dry.json`; print to stdout).
+- E19 G10c-local must be shown RED during EXECUTE before it counts as green: (a) temporarily append `export X=postgres://u:p@db.example.invalid:5432/x` to `fixtures/rehearse-vowasia.sh`, run the §4.5 command, record exit 1 and the flagged line; revert and record exit 0; (b) run it with one of the 3 files temporarily renamed and record exit 1. Put the evidence in the EXECUTE report.
+- E20 HS2: any file outside §4.4 touchpoints, any GTP file, `lib/gtp-import-pins.ts`, `scripts/seed.ts`, `scripts/migrate/vowasia/sql/**` -> STOP. Importing any unpinned GTP file -> STOP (copy instead).
+- E21 Owner decisions are not coded as defaults: `--old-site-links-file` has no default; O-B12 rows stop the redirect builder; no mode silently picks `rewrite` or `keep`.
+
+Hard stops (EXECUTE and EVL):
+- No production write and no old-DB read by any agent; the owner runs OB1-OB12 on the Mac. No `--apply` against a non-local `DATABASE_URL` by an agent, ever.
+- No secret, DB URL with a real host, R2 value, password or old project ref in any file, log or report.
+- Importer is create-only; never creates authors, tags, pillars or sub-sections; never adopts a row; no `--resume`; every `--apply` uses a NEW run-id; rollback is per run.
+- Dry-run is the default; `--apply` needs TTY + `--confirm-host` + `/neondb` banner (non-local).
+- `rewrite-links` and `timestamps-fix.sql` touch only rows created by the same run (Q11).
+- Rehearsal (G19) once, alone, background, 7200000 ms; G11 only after G19; no parallel `npm ci`.
+- VowAsia stays DARK: no merge of the `vowasia-web` redirect PR, no cutover step.
+- Never rotate `REVALIDATE_SECRET` or `CENTRAL_SIGNING_SECRET`.
+- No orchestrator default for owner decisions (C1-C10, Q9-Q12, O-B5, O-B12).
+- HS2 (E20). Any gate red after 10 EVL fix cycles -> stop and report.
+
+Touchpoints / G-ZONE: allowed = the files of §4.4 items 1-14 under `scripts/migrate/vowasia/` (incl. `fixtures/rehearse-vowasia.sh`, `fixtures/rehearse-assert.ts`, `fixtures/rehearse-bootstrap.ts`, `fixtures/vowasia-legacy/**`, copied GTP logic under `lib/`), `scripts/migrate/vowasia/VOWASIA-LEGACY.md` (part B), `package.json` (7 added lines), the backlog stub of E15, and files in this task folder (reports, `harness/`). Forbidden (G-ZONE): every file under `scripts/migrate/` outside `vowasia/`, `scripts/migrate/vowasia/sql/**`, `scripts/migrate/vowasia/lib/gtp-import-pins.ts`, `scripts/seed.ts`, `scripts/lib/**`, `src/**`, `payload.config.ts`, migrations. Checked by G7, G7b, G7c, G8, SQL-unchanged and the pins diff.
+
+Open gaps:
+- O-B5 (owner answer file at OB5, STOP before OB6) and O-B12 (redirect builder STOP if any such row) — open owner items, hard STOPs, no default.
+- G23 / KB-3 / KB-6: real data and real R2 upload only at the owner run: known-gap: documented as backlog stub `process/general-plans/backlog/vowasia-b-beta-owner-import_NOTE_20-10-26.md` (E15). B-beta stays CONDITIONAL-in-closeout until the owner reports, per §4.5 verdict rule.
+- KB-1 (pooler TLS) and KB-5 (K2-K6) unchanged; not exercised by B-beta.
+
+**What This Coverage Does NOT Prove** (stage B-beta):
+- G1 (all lib tests): runs on fixtures and fake Payload/Central doubles; does not prove behaviour on real Neon (locks, latency, Payload hooks under load), real R2, or the real 370-row snapshot.
+- G19: proves the full flow on PG16 + a local Central with local-disk media; does NOT prove R2 upload, R2 credential errors in the wild, TTY prompts on macOS, or `neondb` banner on the real host (local is exempt by guard design).
+- G11/G8/G20/G4: prove GTP unchanged; say nothing about VowAsia behaviour.
+- G6: proves phase-A probe still green; does not run any B-beta CLI.
+- G7/G7b/G7c/SQL-unchanged/G10c/G10c-local/G13: prove file scope and text hygiene only; G10c-local only checks the 3 named files.
+- G22: reviewer judgement, not machine proof.
+- Evidence-pack validator: checks structure, not truth of the claims.
+- Rewrite of plain-text links: tests prove the string replacement; they do not prove how a bare relative path reads in prose on `vowasia-web` (the owner sees it in the OB8 dry-run before `--apply`).
+- Real counts (358 imported, 349 map entries, 140 fallbacks, the 4 links): only the owner dry-run (OB5) shows them.
+
+Gate: PASS (0 FAIL, 0 open CONCERN for stage B-beta: pass-2 gaps 1-3 closed; two new issues found in pass 3 (answer-file scope vs OB8, G10c-local vacuous pass) fixed by validator wording V-W3/V-W4; implementation details carried as E16-E21; G23 is a named residual, not a proving strategy). Scope of PASS: the orchestrator may offer ENTER EXECUTE MODE for stage B-beta.
+Accepted by: no concern acceptance needed (Gate PASS). The owner still has to say "ENTER EXECUTE MODE" for stage B-beta. Open owner items O-B5 and O-B12 are STOP points, not accepted concerns.
+
+### Autonomous Goal Block (Chặng B-β)
+
+SESSION GOAL: VowAsia legacy migration, stage B-beta: build (no production run) the create-only importer from the verified snapshot, rollback per run, rewrite-links with the owner's per-link answer file, redirect map builder, timestamps SQL, verify, fixture + rehearsal; GTP byte-identical.
+Charter + umbrella plan: N/A — single plan (no `## Stable Program Goal` on disk).
+Autonomy: per feedback_autonomous_phase_execution.md; EXECUTE only after the owner says "ENTER EXECUTE MODE" for stage B-beta of this plan; EXECUTE = 1 vc-execute-agent (opus) sequential; EVL = vc-tester (sonnet) independent re-run; G22 = vc-code-reviewer (sonnet). Autonomy removes approval pauses only, never subagent spawns.
+Hard stops: no agent production write or old-DB read (owner runs OB1-OB12); create-only, no taxonomy/author create, no adopt, no --resume, new run-id per --apply, rollback per run; dry-run default; --apply = TTY + --confirm-host + /neondb; rewrite-links/timestamps-fix only same-run rows; no secrets/DB URLs/R2 values/old project ref in files; G19 once, alone, background, 7200000 ms, G11 after it, no parallel npm ci; VowAsia DARK; never rotate REVALIDATE_SECRET/CENTRAL_SIGNING_SECRET; no defaults for owner decisions (O-B5, O-B12, C1-C10, Q9-Q12); HS2 outside §4.4 touchpoints.
+Next phase: EXECUTE stage B-beta: process/general-plans/active/vowasia-legacy-migration_16-10-26/vowasia-legacy-migration_PLAN_16-10-26.md
+Validate contract: inline (### Validate Contract (Chặng B-β)), Gate: PASS, generated-by: inner-pvl: B-beta, 2026-10-20.
+Execute start: red-first stubs, then B-2..B-14 | G1 `npm run test:migrate-vowasia` | G2 `npm run lint:migrate` | G3 `npm run typecheck` | G4 `npm run test:migrate-gtp` | G5 `npm run test:single-home` | G6 `npm run probe:migrate-vowasia` (alone) | G7/G7b/G7c/SQL-unchanged/pins at 9d9e5a4 | G8 fe88bc4 | G10c + G10c-local (shown red first, E19) | G13 | G19 `REHEARSE_MODE=native npm run rehearse:vowasia` then G11 | G22 review | high-risk pack: yes.
 
 ### Autonomous Goal Block (Chặng B-α)
 
@@ -949,7 +1108,7 @@ Execute start: red-first stubs rồi B-0, B-0b, B-1, fixture | G1 `npm run test:
 
 **Precedence (PVL B-beta pass 2, CONCERN 1): for B-beta, §4.x governs wherever §3.x differs.** The stale §3 passages are marked `[Superseded ...]` in place; they stay as history.
 
-Status: Amendment 4 written; PVL B-beta pass 1 = BLOCKED (report `vowasia-legacy-migration-pvl-b-beta_REPORT_20-10-26.md`); supplement cycle 1 applied 20-10-26 (F1 owner map rule restored, C1-C13 fixed, owner answer Q12 recorded in 3.3, open items O-B5 and O-B12 in 3.9); awaiting inner PVL re-run from V1. Nothing here is executed. B-beta EXECUTE needs `### Validate Contract (Chặng B-β)` to reach `Gate: PASS` (or an owner-accepted CONDITIONAL) after inner PVL from V1.
+Status: Amendment 4 written; PVL B-beta pass 1 = BLOCKED; supplement cycle 1 (F1, C1-C13, Q12, O-B5/O-B12); pass 2 = CONDITIONAL (3 CONCERN); supplement cycle 2 (precedence, kept phase-A gates, per-link answer file); pass 3 (20-10-26) = PASS with validator wording fixes V-W3/V-W4; `### Validate Contract (Chặng B-β)` written (generated-by: inner-pvl: B-beta). Nothing here is executed yet; B-beta EXECUTE still needs the owner's "ENTER EXECUTE MODE".
 
 Bottom line: the measurement closes Q2, Q3 and KB-2 with no surprises (zero unmapped section pairs, all images on the allow-list, 369 images downloaded with 0 failures). B-beta can now be specified fully. It is HIGH RISK (create-only data mutation on production Central `neondb`, plus R2 uploads) and needs the 5-artifact evidence pack before it is treated as closed.
 
@@ -1024,7 +1183,7 @@ Note on 3.2 numbers: the 368 / 229 / 20 from discover are superseded by the snap
 1. Q2: transform reads `title.en` and `excerpt.en`. Anything else (missing `en`, non-string, other shape) -> reject with a report line. No guessing, no fallback to another key.
 2. Body assembly (fixes PVL B-beta C3): elements are processed in array order. Inside ONE element the order is fixed: `heading` (string or `{en}`) -> H2, then the `image` (if any) -> `upload` node, then `body.en` -> paragraphs. `body.en` is TEXT, not HTML, the same semantics as GTP `sectionsToHtml` (`gtp-transform.ts:219-258`): escape with the pinned `escapeHtml`, split on blank lines into paragraphs, never parse it as HTML. `sanitizeLegacyHtml` is used only if a sniff ever finds HTML tags in `body.en` (B-0b found none), and then the row is reported. Body-image Media fields: `alt` = `image.alt` if a non-empty string, else `image.caption` if a non-empty string, else the article title (`title.en`); `credit` = `image.credit` if a non-empty string, else empty. (`featured_image_credit` stays the cover credit, C3 row "Ảnh".) The `upload` node points at the NEW Media id. The Media id is found through the manifest: url -> sha256 -> file in `images/` -> Media created under tenant `vowasia`, R2 prefix `vowasia/`. No `<img>` HTML ever reaches the Lexical converter (U3 stays in force). Post-check: 0 references to the old image hosts remain in the body.
 3. The 4 off-allow-list URLs in body text are links (fixes PVL B-beta C2). The dry-run prints each one with article slug, URL and a class: `old-site-article` (host `vowasia.com` or `www.vowasia.com`, path `/article/<slug>`) or `external` (anything else). Rule: `external` links stay verbatim. What happens to an `old-site-article` link is the OWNER's call (open item O-B5, 3.9); no default. OB5 is a STOP point: OB6 (first apply) does not start until the owner has answered for the 4 links. `rewrite-links` (B-9b) acts on `old-site-article` links only as the owner answered; it never touches `external` links.
-   Answer form (PVL B-beta pass 2, CONCERN 3): a per-link answer file written by the owner after OB5, passed as `--old-site-links-file <path>` (required, no default). One line per link: `<article slug> <URL> rewrite|keep`. The file lives outside the repo (checked with `assertOutsideRepo`) and holds no secrets (slugs and public URLs only). The tool refuses to run if any `old-site-article` link found in the run's articles is missing from the file, if the file lists a link that is not found (extra/unknown entry), if a line is malformed or has another value, or if the same link appears twice. Rewrite target: the relative path `/<pillar>/<slug>` (owner decision C3), and ONLY when the linked old article (by its legacy slug from the URL path) was imported AND is `published` in Central by the SAME run; the lookup is over that run's created rows (its slug-map/outcome lines), not other runs, so a run never rewrites to a row another run may roll back. If the linked article is not in this run, was rejected, is draft/archived, or was not imported, the link stays unchanged and the report gets one line (slug, URL, reason). `keep` = unchanged. `external` links are never changed in any mode.
+   Answer form (PVL B-beta pass 2, CONCERN 3): a per-link answer file written by the owner after OB5, passed as `--old-site-links-file <path>` (required, no default). One line per link: `<article slug> <URL> rewrite|keep`. The file lives outside the repo (checked with `assertOutsideRepo`) and holds no secrets (slugs and public URLs only). The tool refuses to run if any `old-site-article` link found in the run's articles is missing from the file, if the file lists a link that is not found among the `old-site-article` links of the WHOLE verified snapshot (extra/unknown entry; a link that belongs to an article of another run is NOT extra, because OB8 passes the same file to every run; validator wording fix V-W3, PVL B-beta pass 3), if a line is malformed or has another value, or if the same link appears twice. Rewrite target: the relative path `/<pillar>/<slug>` (owner decision C3), and ONLY when the linked old article (by its legacy slug from the URL path) was imported AND is `published` in Central by the SAME run; the lookup is over that run's created rows (its slug-map/outcome lines), not other runs, so a run never rewrites to a row another run may roll back. If the linked article is not in this run, was rejected, is draft/archived, or was not imported, the link stays unchanged and the report gets one line (slug, URL, reason). `keep` = unchanged. `external` links are never changed in any mode.
 4. `venues` with null subsection -> pillar only, no sub-section, no tag (already in the C8 table, now confirmed with real data: 1 row).
 5. Status: no `scheduled` rows exist, so the scheduled branch is tested on the fixture only.
 6. Dates: 140 rows (over all 370) use `created_at` as the publish date (C7). The dry-run prints the count over all rows and over imported rows (C1).
@@ -1079,7 +1238,7 @@ All paths under `scripts/migrate/vowasia/` unless noted. Each "test" is a `node:
    - Uses the CF4 lock too (rollback and import never run at once).
 8. B-9a `build-vowasia-redirects.ts` + `lib/vowasia-redirects.ts` + test: reads snapshot + Central state; keys via the read-only `normalise-path` helper (pinned); rules exactly as 4.2.7 (C3, Q1, Q9; same as 3.4 step 8 and 3.5 item 9): old published imported published -> `/<pillar>/<slug>` (308 by `vowasia-web` middleware); archived -> `/<pillar>`; old published/archived made draft for no cover -> `/<pillar>`; old draft/scheduled -> NO entry, listed in the report; rejected -> `{"status":410}`; old published made draft by a stored-image failure -> STOP and list (O-B12, no default); importer-rejected -> no entry + report line. Output is JSON for `vowasia-web` `src/redirects/redirect-map.json`. Red-first tests: one case per rule; an old draft with no cover still gets no entry; the real-data split on the fixture equivalent gives `12 x 410 + 337 x 308 = 349`-shaped counts.
    - CF1: `--min-coverage` numerator = source rows with status `published` that HAVE a map entry; denominator = source rows with status `published`; ratio can never exceed 1. Report separately: archived entries, draft entries, 410 entries. Red-first test: a fixture with one published row missing and many archived rows must fail coverage.
-9. B-9b `rewrite-links-vowasia.ts` + `lib/rewrite-links-vowasia-main.ts` + test: dry-run default; `--apply` takes the CF4 lock; touches only rows created by the named run (Q11); `external` links are never touched; `old-site-article` links (host `vowasia.com`/`www.vowasia.com`, path `/article/<slug>`) are handled exactly as the owner answered at OB5 (O-B5): the tool reads that answer from the per-link answer file `--old-site-links-file` (format, refusal rules, rewrite target and lookup exactly as §4.2.3); rollback of the run covers these rows. Red-first tests: (1) missing `--old-site-links-file` refused; (2) file inside the repo refused (`assertOutsideRepo`); (3) a found `old-site-article` link missing from the file refused, zero writes; (4) an extra/unknown entry refused; (5) malformed line / value other than `rewrite|keep` / duplicate link refused; (6) `rewrite` + target imported and `published` in the same run -> becomes `/<pillar>/<slug>`; (7) `rewrite` + target draft, archived, rejected, not imported, or created by a different run -> unchanged + one report line; (8) `keep` -> unchanged; (9) `external` links unchanged in dry-run and apply, whatever the file says; (10) dry-run writes nothing.
+9. B-9b `rewrite-links-vowasia.ts` + `lib/rewrite-links-vowasia-main.ts` + test: dry-run default; `--apply` takes the CF4 lock; touches only rows created by the named run (Q11); `external` links are never touched; `old-site-article` links (host `vowasia.com`/`www.vowasia.com`, path `/article/<slug>`) are handled exactly as the owner answered at OB5 (O-B5): the tool reads that answer from the per-link answer file `--old-site-links-file` (format, refusal rules, rewrite target and lookup exactly as §4.2.3); rollback of the run covers these rows. Red-first tests: (1) missing `--old-site-links-file` refused; (2) file inside the repo refused (`assertOutsideRepo`); (3) a found `old-site-article` link missing from the file refused, zero writes; (4) an entry not found anywhere in the verified snapshot refused, while an entry whose article belongs to another run is accepted and ignored for this run (V-W3); (5) malformed line / value other than `rewrite|keep` / duplicate link refused; (6) `rewrite` + target imported and `published` in the same run -> becomes `/<pillar>/<slug>`; (7) `rewrite` + target draft, archived, rejected, not imported, or created by a different run -> unchanged + one report line; (8) `keep` -> unchanged; (9) `external` links unchanged in dry-run and apply, whatever the file says; (10) dry-run writes nothing.
 10. B-10 `lib/vowasia-timestamps.ts` + test: generates `timestamps-fix.sql` per run (header OWNER-RUN, `psql -v ON_ERROR_STOP=1`, WHERE marker + tenant vowasia + id in this run's journal; Q11). Golden-file test.
 11. B-11 fixture extension `fixtures/vowasia-legacy/**`: cases for every real shape in 4.1 (object{en} title, 3-key image section, null subsection, missing cover, missing published_at, off-allow-list links in text of both classes, `<`/`&` in body text, rejected row, an old draft with no cover, no scheduled row in real data but one in the fixture). Entry file (fixes PVL B-beta C6): `fixtures/vowasia-legacy/seed-vowasia-legacy-fixture.ts`. Its job: seed the fake legacy Postgres (port 54346) with the fixture rows so the existing snapshot CLI can produce a fixture snapshot + image store + manifest from it (images served by the fake image server on 3519). Fake hosts only (`*.invalid`, `localhost`), no old project ref (E6). Run by `npm run migrate:vowasia:fixture` and by the rehearsal.
 12. B-12 `verify-vowasia.ts` + `lib/verify-vowasia-main.ts` + test: compares Central to the snapshot plan: counts by status/pillar/tag, every article has author, every upload node resolves to a vowasia Media, 0 old image hosts, slug-map complete.
@@ -1104,7 +1263,7 @@ Keep G1-G8 (re-run; G7/G7b base pinned to the exact commit `9d9e5a4` (Amendment 
 **Phase-A gates kept for B-beta (PVL B-beta pass 2, CONCERN 2; this list replaces the one in 3.7).** Run from the repo root, at EVL by `vc-tester`:
 - SQL unchanged (covers the old G10/G10a, since the owner-run SQL may not change at all): `git diff --quiet 9d9e5a4 -- scripts/migrate/vowasia/sql` exits 0.
 - G10c (no connection-URL scheme in docs or library comments; guards `VOWASIA-LEGACY.md` part B): `! grep -rnEi "postgres(ql)?://" scripts/migrate/vowasia --exclude="*.test.ts" --exclude="keyset-probe.*" --exclude="rehearse-vowasia.sh" --exclude="rehearse-bootstrap.ts" --exclude="seed-vowasia-legacy-fixture.ts"` (empty = pass).
-- G10c-local (the 3 excluded rehearsal/fixture files may hold local URLs only): `! grep -nEi "postgres(ql)?://" scripts/migrate/vowasia/fixtures/rehearse-vowasia.sh scripts/migrate/vowasia/fixtures/rehearse-bootstrap.ts scripts/migrate/vowasia/fixtures/vowasia-legacy/seed-vowasia-legacy-fixture.ts | grep -vEi "postgres(ql)?://([^@/[:space:]]*@)?(127\.0\.0\.1|localhost)(:[0-9]+)?(/|$|[[:space:]\"'])"` (empty = pass; every URL in those files must point at 127.0.0.1 or localhost).
+- G10c-local (the 3 excluded rehearsal/fixture files may hold local URLs only; the 3 `test -f` guards stop a vacuous pass when a file is missing or misplaced, validator fix V-W4, PVL B-beta pass 3): `test -f scripts/migrate/vowasia/fixtures/rehearse-vowasia.sh && test -f scripts/migrate/vowasia/fixtures/rehearse-bootstrap.ts && test -f scripts/migrate/vowasia/fixtures/vowasia-legacy/seed-vowasia-legacy-fixture.ts && ! grep -nEi "postgres(ql)?://" scripts/migrate/vowasia/fixtures/rehearse-vowasia.sh scripts/migrate/vowasia/fixtures/rehearse-bootstrap.ts scripts/migrate/vowasia/fixtures/vowasia-legacy/seed-vowasia-legacy-fixture.ts | grep -vEi "postgres(ql)?://([^@/[:space:]]*@)?(127\.0\.0\.1|localhost)(:[0-9]+)?(/|$|[[:space:]\"'])"` (exit 0 = pass; every URL in those files must point at 127.0.0.1 or localhost, written with a literal host and a literal numeric port: a template such as `@127.0.0.1:${PORT}` fails this check, measured in PVL B-beta pass 3).
 - G13 `test -f process/general-plans/backlog/vowasia-real-db-validation_NOTE_16-10-26.md`.
 - G6 (includes G14a-d) `npm run probe:migrate-vowasia` (= `bash scripts/migrate/vowasia/fixtures/keyset-probe.sh`), alone, never in parallel with G19 or G11.
 - G9 (review of owner-run SQL) is not re-run: the SQL is unchanged (gate above), and its review role for B-beta is taken by G22.
