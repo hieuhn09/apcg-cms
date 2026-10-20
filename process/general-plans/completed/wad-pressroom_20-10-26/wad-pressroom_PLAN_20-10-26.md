@@ -8,7 +8,7 @@ feature: general
 # WAD Pressroom parity with BriefAsia — PLAN (COMPLEX, 2 repos)
 
 Complexity: COMPLEX
-Status: PLANNED — validate-contract written, waiting for "ENTER EXECUTE MODE"
+Status: COMPLETE_WITH_GAPS — executed, merged (apcg-cms#44, wad-web#13), deployed, archived 20-10-26
 
 ## Overview
 WAD already has a CMS `pressroom` pillar in production; make it behave exactly like BriefAsia's and GCV's Pressroom (rules in apcg-cms, byline in wad-web). Precedent: `process/general-plans/completed/gcv-pressroom_05-10-26/`.
@@ -152,7 +152,7 @@ UNION ALL SELECT 'v_pressroom_as_secondary', count(*) FROM _articles_v_version_s
 UNION ALL SELECT 'v_subsection', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_sub_section_id IS NOT NULL
 UNION ALL SELECT 'v_exclusive', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_exclusive;
 ```
-Version-table rows are history only (informational). Unlike GCV, WAD likely HAS Pressroom articles, so this query is NOT optional.
+Version-table rows are history only (informational). Unlike GCV, WAD was expected to have Pressroom articles, so this query was treated as NOT optional. It was run on 20-10-26: all 9 rows returned 0 (see EVL and Closeout).
 
 ## Rollout
 1. Owner runs the violator SQL; fixes or accepts each non-zero row. 2. Deploy wad-web PR (harmless before CMS change) and CMS PR. 3. Check: a WAD Pressroom article shows "Distributed by World Archi Design"; engine 422 for wad pressroom; an ordinary WAD article still shows "By <author>". Rollback: remove `wad` entries from both maps + redeploy; wad-web revert.
@@ -167,12 +167,12 @@ Version-table rows are history only (informational). Unlike GCV, WAD likely HAS 
 - [x] A6 context docs (counts filled from A7 results).
 - [x] A7 gates (below), then disposable-PG probe.
 ### Stream B (wad-web)
-- [ ] B1 `single-home-pillars.ts` + test + `test:single-home` script.
-- [ ] B2 `article-view.ts` `distributed`.
-- [ ] B3 `article-content.tsx` credit.
-- [ ] B4 article `page.tsx` OG + JSON-LD.
-- [ ] B5 `article-result-row.tsx`.
-- [ ] B6 gates.
+- [x] B1 `single-home-pillars.ts` + test + `test:single-home` script.
+- [x] B2 `article-view.ts` `distributed`.
+- [x] B3 `article-content.tsx` credit.
+- [x] B4 article `page.tsx` OG + JSON-LD.
+- [x] B5 `article-result-row.tsx`.
+- [x] B6 gates.
 
 ## Verification Evidence
 | Gate / Scenario | Strategy | Proves SPEC criterion |
@@ -190,8 +190,8 @@ Version-table rows are history only (informational). Unlike GCV, WAD likely HAS 
 - wad-web gains a second scoped `node:test` script (`test:single-home`). No component-render tests exist in wad-web; the byline JSX is verified by build + post-deploy check only.
 
 ## Resume and Execution Handoff
-1. Plan: /home/user/apcg-cms/process/general-plans/active/wad-pressroom_20-10-26/wad-pressroom_PLAN_20-10-26.md
-2. Last completed: PLAN + VALIDATE (fast mode, 20-10-26).
+1. Plan: /home/user/apcg-cms/process/general-plans/completed/wad-pressroom_20-10-26/wad-pressroom_PLAN_20-10-26.md (archived 20-10-26; was in active/)
+2. Last completed: PLAN, VALIDATE, EXECUTE, EVL, UPDATE PROCESS (all 20-10-26).
 3. Validate-contract: written (below).
 4. Context: apcg-cms all-context, integrations/all-integrations §Single-home pillar rule, tests/all-tests; completed plans gcv-pressroom_05-10-26 and pressroom-optional-author_05-10-26; wad-web CLAUDE.md, DESIGN.md.
 5. Next: on "ENTER EXECUTE MODE", run Stream A and Stream B as two parallel opus execute agents (disjoint repos); no commits/pushes.
@@ -235,7 +235,7 @@ Known-gaps (backlog note at UPDATE PROCESS, `process/general-plans/backlog/wad-p
 SESSION GOAL: WAD Pressroom parity (single-home + engine-blocked in apcg-cms; Distributed-by byline in wad-web)
 Charter + umbrella plan: N/A — single plan
 Hard stops: no non-local DB/network writes; no commit/push; never open login.json; no migration.
-Next phase: EXECUTE: /home/user/apcg-cms/process/general-plans/active/wad-pressroom_20-10-26/wad-pressroom_PLAN_20-10-26.md
+Next phase: EXECUTE: /home/user/apcg-cms/process/general-plans/completed/wad-pressroom_20-10-26/wad-pressroom_PLAN_20-10-26.md
 Validate contract: inline in plan (Gate: CONDITIONAL, 2 known-gaps)
 Execute start: test gates above | probe on disposable PG16 | high-risk pack: no
 
@@ -257,3 +257,31 @@ Cluster stopped and deleted; dev server process group killed; `src/app/(payload)
 E4 remaining `wad` hits (justified): tenant-move tests (`brief-asia<->wad`, `wad<->gcv`) still assert "move"; `isSingleHomePillar("wad","press-room")` false (exact slug); fixture tenant/pillar rows (id 2, 12, 20); WAD positive assertions; probe `[WAD]` block and "move WAD's pressroom into brief-asia" (still MOVE).
 
 Deviations (within blast radius): (1) the disposable cluster lived in `/tmp/wadpr-pg.*` instead of the session scratchpad, because the `postgres` user cannot enter the scratchpad (parent `/tmp/claude-0` is root-only; same reason documented in `tests/all-tests.md`). (2) `src/hooks/single-home-pillar.test.ts` filterOptions "unconfigured tenant" case moved from `(tenant 2, pillar 12)` to `(tenant 6, pillar 19)` (not listed in touchpoints; required because wad is now configured). (3) `database/all-database.md` got a one-line WAD mention (it had no WAD control text). (4) the `all-context.md` npm-scripts row for `test:single-home` (stale "3 files, 181") was refreshed to 6 files / 276.
+
+## EVL and Closeout
+Date: 20-10-26. Merged: apcg-cms#44 (merge commit `131e270`, Stream A) and wad-web#13 (squash commit `d05457d`, Stream B). Vercel previews were green before merge. Production deployments are READY: apcg-cms `dpl_4QFzcydFD4uswTisRta3fKZHaeFy` at `131e270`, wad-web `dpl_GEVtzFCcBJKX64ibRgX4vRSBrJ27` at `d05457d`. No migration.
+
+### Independent EVL (vc-tester) — WITH_GAPS
+All gates green: apcg-cms typecheck, lint (20 warnings, 0 errors), `test:single-home` 276, `test:media-redirect` 175, `test:hub-media` 100, `test:hub-live` 27, `test:hub-p56` 127, `test:migrate-gtp` 83, `probe:single-home` 76/76 and 86/86 with `--http`, `git diff --check`; wad-web typecheck, lint (23 warnings, 0 errors), `test:single-home` 10, `test:bot-detect` 31, build exit 0, `git diff --check`.
+
+### Production facts (owner, 20-10-26; agents never touched production)
+- The violator SQL from `docs/11-operations.md` "Enabling WAD Pressroom" was run in the Neon SQL Editor: all 9 rows returned 0. No grandfathered violators.
+- The WAD `pressroom` pillar is id 38, slug `pressroom`, with 0 articles. The rule therefore applies cleanly from the first WAD Pressroom article.
+- Not yet observed live: the "Distributed by / World Archi Design" byline on worldarchidesign.com (no Pressroom articles exist). The owner will check it on the first one. Stream B is CODE DONE and deployed, not VERIFIED.
+
+### SPEC achievement
+- AC1 (CMS rejects V1-V6, rename, move, in-use delete for `(wad, pressroom)`; control unaffected): met, by `test:single-home` and the probe (76/76, 86/86).
+- AC2 (authorless WAD Pressroom saves; authorless ordinary WAD article rejected): met, by hook unit tests and the probe.
+- AC3 (engine 422 on create and refresh, incl. ` PRESSROOM `): met at unit level (intake pre-check and `isEngineBlockedPillar`); no live engine call was made.
+- AC4 (byline on Pressroom articles only): partly met. The helper is unit-tested (10 tests) and the build is green, but the JSX has no render test and the byline has not been seen live. Gap registered in the backlog note.
+- AC5 (all gates green, no regression): met.
+No criterion rests on an Agent-Probe-only residual that blocks archival except AC4's live look, which the owner accepted as a known gap.
+
+### Deviations
+(1) Disposable PG cluster lived in `/tmp/wadpr-pg.*`, not the scratchpad (parent is root-only). (2) A `filterOptions` test case moved to tenant 6 / pillar 19. (3) `database/all-database.md` got a one-line WAD mention. (4) The `all-context.md` npm-scripts row was corrected to 6 files / 276. None changed scope.
+
+### Known gaps
+Registered in `process/general-plans/backlog/wad-pressroom-followups_NOTE_20-10-26.md`.
+
+### Closeout classification
+Ready for UPDATE PROCESS archival (Gate CONDITIONAL, gaps accepted by the owner). Drift: MEDIUM (constants, tests, probe, docs, context; no harness files). Recommend UPDATE PROCESS -- significant changes detected.
