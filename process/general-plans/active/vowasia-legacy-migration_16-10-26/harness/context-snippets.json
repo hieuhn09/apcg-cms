@@ -1,0 +1,14 @@
+{
+  "task": "VowAsia B-beta write paths and guards",
+  "snippets": [
+    { "file": "scripts/migrate/vowasia/lib/import-vowasia-main.ts", "lines": "runImport", "description": "flag gates (no --resume, NEW --run-id, --expect-sha256 on apply), centralTarget (DB name first, host guard, /neondb), assertOutsideRepo on --runs-dir/--snapshot, verifySnapshotInput(checkImages), r2Preflight, acquireLock (apply only), dangling-intent and unjournaled-marker preflights" },
+    { "file": "scripts/migrate/vowasia/lib/import-vowasia-main.ts", "lines": "importBody apply loop", "description": "intent line -> ensureMedia (UploadError = Q12 stop before the article create) -> buildLexical post-check -> port.create(articles, WRITE_CTX) -> outcome -> slug-map; create-only, never adopts" },
+    { "file": "scripts/migrate/vowasia/lib/vowasia-central.ts", "lines": "centralTarget, r2Preflight", "description": "assertLocalOrConfirmed + assertCentralDbName in every mode; R2 names printed, never values" },
+    { "file": "scripts/migrate/vowasia/lib/vowasia-central-state.ts", "lines": "checkTaxonomy", "description": "STOP with the full missing list (5 pillars, 17 sub-sections under their pillar, 4 tags, 6 authors by name AND slug); never creates taxonomy" },
+    { "file": "scripts/migrate/vowasia/lib/vowasia-media.ts", "lines": "MediaStore.check, ensureMedia", "description": "no network path; store failures vs UploadError; prefix asserted vowasia; reuse by stable vowasia- filename in tenant vowasia only" },
+    { "file": "scripts/migrate/vowasia/lib/rollback-vowasia-main.ts", "lines": "body", "description": "deletes only this run's journaled marker rows that are untouched; 5-condition dangling-intent rule; Media kept when referenced as hero or body upload node (full scan); no archive fallback; dry-run writes nothing" },
+    { "file": "scripts/migrate/vowasia/lib/rewrite-links-vowasia-main.ts", "lines": "runRewriteLinks", "description": "answer-file guards (E17, V-W3 missing/extra/malformed/duplicate), same-run published targets only, systemWrite, re-baseline" },
+    { "file": "scripts/migrate/vowasia/lib/vowasia-run.ts", "lines": "acquireLock", "description": "O_EXCL .import.lock with pid/run id/mode/start; release only own lock" },
+    { "file": "scripts/migrate/vowasia/lib/vowasia-timestamps.ts", "lines": "generateVowasiaTimestampsFix", "description": "every block scoped to a.id of this run + marker legacy:vowasia + tenant vowasia; integer id check; OWNER-RUN header with ON_ERROR_STOP" }
+  ]
+}

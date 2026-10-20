@@ -1,0 +1,16 @@
+{
+  "task": "VowAsia B-beta adversarial self-check by the executor (NOT the G22 reviewer verdict)",
+  "scenarios": [
+    { "scenario": "Agent or tool runs --apply against production by accident", "ruled_out": true, "rationale": "non-local DATABASE_URL needs --confirm-host equal to the host and a TTY for --apply; database name must be exactly /neondb (dry-run too); the name is printed first. Tests: import-vowasia-main.test.ts 'Central guards'." },
+    { "scenario": "Wrong database on the same Neon server (gcv_payload_disabled)", "ruled_out": true, "rationale": "assertCentralDbName refuses; tested with a fake host and that name." },
+    { "scenario": "Media stored on the Mac disk instead of R2", "ruled_out": true, "rationale": "r2Preflight refuses --apply on a non-local Central unless the 4 R2 vars are non-empty; created Media prefix must equal vowasia." },
+    { "scenario": "Rollback of run B deletes rows of run A, or a row adopted from another run", "ruled_out": true, "rationale": "importer never adopts (marker rows are skipped, unjournaled marker rows refuse --apply); rollback deletes only its own journal rows; dangling intents need all 5 conditions incl. (c) id not in any other run. Scenario tests 1-3 + rehearsal rollback B then A." },
+    { "scenario": "Concurrent import and rollback", "ruled_out": true, "rationale": "O_EXCL lock for every --apply mode; stale lock blocks rollback until removed by the runbook steps (tested + rehearsed)." },
+    { "scenario": "Private snapshot content written into the PUBLIC repo", "ruled_out": true, "rationale": "assertOutsideRepo on --runs-dir, --snapshot, --out and the answer file directory (git-ignored in-repo dirs refused); dry-run writes only <runs-dir>/dry-<ts>." },
+    { "scenario": "HTML/script injection through legacy body text", "ruled_out": true, "rationale": "body.en becomes Lexical text nodes only (no HTML parsing); test asserts literal <script> stays text and node types are heading/paragraph/text/upload." },
+    { "scenario": "Old image host survives in a body, or a pending upload node is stored", "ruled_out": true, "rationale": "planner rejects rows with an image-host URL in text; buildLexical throws without a Media id; post-check before create; verify re-checks." },
+    { "scenario": "timestamps-fix.sql touches rows of another run or tenant", "ruled_out": true, "rationale": "each block requires a.id = <journaled id of this run> + marker + tenant subselect; integer id check; golden-file test." },
+    { "scenario": "rewrite-links rewrites to a row another run may roll back, or touches external links", "ruled_out": true, "rationale": "target must be in this run's slug map AND live published; external links never in the replacement map; tests 6-9." },
+    { "scenario": "Secret printed (DB URL, password, R2 values)", "ruled_out": false, "rationale": "tools print only host:port/db and R2 variable NAMES; errors pass through the phase-A redact. A Payload/driver error text could still carry unknown sensitive detail; not exhaustively provable by tests (reviewer to judge)." }
+  ]
+}

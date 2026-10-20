@@ -1,0 +1,10 @@
+{
+  "task": "VowAsia legacy migration stage B-beta: create-only importer from the verified snapshot into Central tenant vowasia (production neondb, R2 media), per-run rollback, rewrite-links, redirect map, timestamps SQL, verify",
+  "planPath": "process/general-plans/active/vowasia-legacy-migration_16-10-26/vowasia-legacy-migration_PLAN_16-10-26.md",
+  "riskLevel": "high",
+  "riskClasses": ["schema/data migration or destructive data mutation (create-only import, rollback deletes on production Central)", "deploy/runtime: external object storage (R2 uploads)", "permission, secret, or trust-boundary logic (R2 credentials in env, production DATABASE_URL guards)"],
+  "mustStopBeforeFinalize": true,
+  "humanApprovalRequired": true,
+  "approver": "owner (runs OB1-OB12 on the Mac); G22 reviewer verdict pending",
+  "why": "Every --apply writes to production Central neondb and R2; rollback deletes rows. The code is proven only on fixtures and a local PG16 rehearsal; real data and real R2 are the named residual G23 (backlog note vowasia-b-beta-owner-import_NOTE_20-10-26.md). B-beta must not be treated as finalised until review-decision.json (G22) exists and the owner reports OB5-OB10."
+}

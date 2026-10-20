@@ -1325,3 +1325,18 @@ Risk classes: schema/data mutation on production (create-only import, rollback d
 ### 4.9 Strategy
 
 `vc-agent-strategy-compare` (simple mode): S2, S6, S7 present (3/7, MEDIUM). Inner PVL: 3 parallel sonnet subagents (write safety/rollback/lock; data/mapping/body/media; rehearsal/redirects/gates). EXECUTE: 1 opus agent, sequential (files are tightly coupled). EVL: `vc-tester` sonnet; G19 runs alone.
+
+### 4.10 EXECUTE status (B-beta, 20-10-26)
+
+B-2..B-14 implemented on `claude/vowasia-launch` (commits `a6c6392`, `a45c510`, `7e2825f`, `52f3317` + report commit); EXECUTE gates green (G1 194/194, G2, G3, G4 69/69, G5 267/267, G6, G7/G7b/G7c, SQL-unchanged, pins, G8, G10c, G10c-local shown red twice per E19, G13). Pending: EVL (`vc-tester`: G19 then G11), G22 review (`review-decision.json`), G23 owner run. Report: `vowasia-legacy-migration-exec-b-beta_REPORT_20-10-26.md`.
+
+## Deviations (B-beta EXECUTE, within blast radius)
+
+All changed files stay inside `scripts/migrate/vowasia/`, `package.json` (7 lines) and `process/general-plans/`. No GTP file, pin file, SQL file or `scripts/seed.ts` changed.
+1. Extra helper files under `scripts/migrate/vowasia/lib/` (`vowasia-port.ts`, `vowasia-payload-port.ts`, `vowasia-central.ts`, `vowasia-central-state.ts`, `vowasia-plan.ts`, `vowasia-run.ts`, `vowasia-phase-b-cli.ts`, `redirects-vowasia-main.ts`) and test fixtures under `fixtures/vowasia-legacy/` (`fake-central.ts`, `fixture-rows.ts`, `snapshot-fixture.ts`, `serve-images.ts`). Why: testable pure core behind a Central port; no test boots Payload. The redirect CLI body is `lib/redirects-vowasia-main.ts` (not inside `lib/vowasia-redirects.ts`) to avoid a circular import with the planner. Impact: none on contracts.
+2. The body is built as Lexical JSON directly (heading/paragraph/text/upload nodes) instead of escaped HTML -> `htmlToLexical`. Same semantics (text never parsed as HTML; `<`, `>`, `&` stay literal text). Text that looks like HTML is counted in the dry-run, kept as text; `sanitizeLegacyHtml` is not used.
+3. A broken file in the snapshot image store (missing, size, sha256, magic) refuses the whole run at load (§4.3 step 1, `verifySnapshotInput` checkImages). The media lib still returns `storeFailure` for those cases (unit-tested, G29a); inside the importer the reachable store-level failures are manifest failure entries and URLs missing from the manifest. The 2% budget is computed before any write over the distinct image URLs of the whole importable set.
+4. The rehearsal fixture role reads two site-filtered views in schema `vowasia_ro` (the owner SQL 02 shape); no Central dev server is started on 3518 (port only checked free).
+5. Local-only test hooks `VOWASIA_TEST_KILL_BEFORE_JOURNAL` and `VOWASIA_TEST_FAIL_UPLOAD_AT` (refused against a non-local Central) drive the G19 crash and Q12 cases.
+6. rewrite-links also skips a row edited since the import (untouched check), like GTP. Blank lines in the answer file are ignored. `--expect-sha256` is required on `--apply`, optional on dry-runs (OB5 passes it).
+7. verify plans the expected set from the snapshot alone, so a Central row that lost its marker is reported as missing (found by development rehearsal run 2).
