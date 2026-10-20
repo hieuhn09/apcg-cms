@@ -63,7 +63,9 @@ export LEGACY_FIXTURE_ADMIN_URL=postgres://postgres:password@127.0.0.1:54346/vow
 export REHEARSE_WORK=$WORK
 export MIGRATE_LOAD_TIMEOUT_MS=${MIGRATE_LOAD_TIMEOUT_MS:-90000}
 export NEXT_TELEMETRY_DISABLED=1
-unset R2_BUCKET R2_ENDPOINT R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY || true
+# Empty strings, not unset: dotenv (.env.local/.env) never overrides a variable that is set,
+# so a host .env.local cannot point the rehearsal at real R2. rehearse-assert.ts checks this.
+export R2_BUCKET= R2_ENDPOINT= R2_ACCESS_KEY_ID= R2_SECRET_ACCESS_KEY=
 
 # Bootstrap (1): Central schema + base data with the UNCHANGED scripts/seed.ts (push once on the fresh local DB).
 SEED_LOG="$WORK/seed.log"

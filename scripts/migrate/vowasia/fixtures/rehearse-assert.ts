@@ -8,8 +8,8 @@
  * Flow: snapshot (read + images) -> measure -> import dry-run -> run A --apply
  * --limit 50 -> run B (rest) -> run C (0 new) -> Media prefix -> verify ->
  * redirects -> rewrite-links (per-link answer file) -> timestamps-fix.sql (the ONE
- * place a driver executes it, on the LOCAL Central) -> verify -> mutants (marker,
- * old image host, allow-list off, wrong digest) -> rollback B, rollback A ->
+ * place a driver executes it, on the LOCAL Central) -> verify -> mutants (allow-list
+ * off and wrong digest before the import; marker changed after it) -> rollback B, rollback A ->
  * crash between create and journal + stale lock recovery -> forced upload error
  * (Q12) -> final: 0 marker rows, other tenants untouched.
  * Exits non-zero naming every failing assertion; prints the UNPROVEN list.
@@ -32,6 +32,13 @@ const LEGACY_ADMIN = process.env.LEGACY_FIXTURE_ADMIN_URL as string;
 assertLocalDb(CENTRAL);
 assertLocalDb(LEGACY_ADMIN);
 assertLocalDb(process.env.LEGACY_VOWASIA_DB_URL);
+// F-2: the four R2 names must be set to "" by rehearse-vowasia.sh (dotenv cannot override them).
+const R2_NAMES = ["R2_BUCKET", "R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"] as const;
+const r2Bad = R2_NAMES.filter((k) => process.env[k] === undefined || process.env[k] !== "");
+if (r2Bad.length) {
+  console.error(`[rehearse-assert] ${r2Bad.join(", ")} must be exported as empty strings by rehearse-vowasia.sh (a host .env.local could reach real R2); refusing.`);
+  process.exit(2);
+}
 
 const SNAP = path.join(WORK, "snapshot");
 const RUNS = path.join(WORK, "runs");
