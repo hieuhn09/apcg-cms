@@ -35,12 +35,13 @@ export function resolvePath(p: string): string {
 
 const KNOWN = [CliError, ConfigError, VowasiaSqlError, VowasiaReaderError, OutDirError, DbBannerError];
 
-/** Replace URL-like text and known secret values (legacy URL, its password) in a message. */
+/** Replace URL-like text and known secret values (legacy URL, Central DATABASE_URL, their passwords, the four R2 values) in a message. */
 export function redact(message: string, env: Record<string, string | undefined> = process.env): string {
   let out = message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>");
-  const url = env[LEGACY_URL_ENV];
   const secrets: string[] = [];
-  if (url) {
+  // legacy URL and the Central DATABASE_URL: the whole value and its password
+  for (const url of [env[LEGACY_URL_ENV], env.DATABASE_URL]) {
+    if (!url) continue;
     secrets.push(url);
     try {
       const u = new URL(url);
@@ -49,6 +50,20 @@ export function redact(message: string, env: Record<string, string | undefined> 
       /* unparseable: the whole value is already in the list */
     }
   }
+  // the four R2 values (and the endpoint host) when set
+  for (const k of ["R2_BUCKET", "R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]) {
+    const v = env[k];
+    if (!v) continue;
+    secrets.push(v);
+    if (k === "R2_ENDPOINT") {
+      try {
+        secrets.push(new URL(v).hostname);
+      } catch {
+        /* not a URL: the raw value is in the list */
+      }
+    }
+  }
+  secrets.sort((x, y) => y.length - x.length);
   for (const s of secrets) if (s.length >= 3) out = out.split(s).join("<redacted>");
   // Supabase project ref: pooler login name (vowasia_migrator.<ref>) and direct host (db.<ref>.supabase.co).
   out = out.replace(/\bvowasia_migrator\.[a-z0-9]{20}\b/g, "vowasia_migrator.<ref>");

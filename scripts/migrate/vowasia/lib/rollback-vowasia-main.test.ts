@@ -242,3 +242,34 @@ test("dangling intent: one condition per case must hold before a delete (b, c, d
     done(c);
   }
 });
+
+test("F-4: an outcome `created` line with an id but no slug-map line is still rolled back (same checks)", async () => {
+  const c = setup();
+  try {
+    assert.equal(await imp(c, "A", ["--limit", "3"]), 0);
+    const sm = path.join(c.runs, "A", "slug-map.ndjson");
+    const lines = readFileSync(sm, "utf8").trim().split("\n");
+    writeFileSync(sm, lines.slice(0, 2).join("\n") + "\n");
+    assert.equal(await rb(c, "A", ["--apply"]), 0);
+    assert.equal(marker(c).length, 0, "all 3 rows removed, incl. the one without a slug-map line");
+  } finally {
+    done(c);
+  }
+});
+
+test("F-4: an outcome-only row edited since the import (version != 1) is kept", async () => {
+  const c = setup();
+  try {
+    assert.equal(await imp(c, "A", ["--limit", "2"]), 0);
+    const sm = path.join(c.runs, "A", "slug-map.ndjson");
+    const lines = readFileSync(sm, "utf8").trim().split("\n");
+    const dropped = JSON.parse(lines[1] as string) as { articleId: number };
+    writeFileSync(sm, lines[0] + "\n");
+    const row = c.central.rows("articles").find((x) => String(x.id) === String(dropped.articleId));
+    if (row) row.version = 2;
+    assert.equal(await rb(c, "A", ["--apply"]), 0);
+    assert.equal(marker(c).length, 1);
+  } finally {
+    done(c);
+  }
+});

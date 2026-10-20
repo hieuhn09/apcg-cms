@@ -65,3 +65,10 @@ test("discover flags: the URL is never a flag; defaults point at the repo", () =
   assert.ok(existsSync(DEFAULT_SOURCE));
   assert.ok(DEFAULT_OUT.endsWith("scripts/migrate/out/vowasia"));
 });
+
+test("F-3: redact masks the Central DATABASE_URL password and the four R2 values when set", () => {
+  const env = { DATABASE_URL: "postgres://owner:CentralFakePw123@central.example.invalid:5432/neondb", R2_BUCKET: "fake-bucket-xyz", R2_ENDPOINT: "https://acct.r2.example.invalid", R2_ACCESS_KEY_ID: "R2FAKEACCESSKEYID000", R2_SECRET_ACCESS_KEY: "r2FakeSecret/abc+def" };
+  const out = redact("pw CentralFakePw123 b fake-bucket-xyz e acct.r2.example.invalid k R2FAKEACCESSKEYID000 s r2FakeSecret/abc+def", env);
+  for (const s of ["CentralFakePw123", "fake-bucket-xyz", "acct.r2.example.invalid", "R2FAKEACCESSKEYID000", "r2FakeSecret/abc+def"]) assert.ok(!out.includes(s), out);
+  assert.equal(redact("nothing here", {}), "nothing here");
+});

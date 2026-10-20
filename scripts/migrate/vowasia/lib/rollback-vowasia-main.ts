@@ -8,6 +8,9 @@
  * the run directory, CF2). `--apply` takes the `.import.lock` (CF4), deletes, then
  * writes `rollback-report.json` and one `resolved` outcome line per dangling intent.
  *
+ * Outcome `created` lines with an id but no slug-map line are checked too (conditions
+ * (b)-(e) below, as there is no baseline).
+ *
  * Articles deleted: ONLY rows of THIS run's journal that still carry the marker
  * (`origin=import`, `engineSourceName=legacy:vowasia`) in tenant vowasia AND are
  * untouched since the import (`version` and `updatedAt` equal the baseline, or the
@@ -120,9 +123,37 @@ async function body(apply: boolean, includeEdited: boolean, run: RunDir, runsDir
     del.push({ id: doc.id as Id, slug: e.slug });
   }
 
-  // dangling intents: the five conditions
   const otherIds = new Set<string>();
   for (const r of allRuns(runsDir)) if (r.id !== runId) for (const id of r.articleIds()) otherIds.add(id);
+
+  // F-4: an outcome `created` line with an id but no slug-map line (a crash between the two
+  // journal lines). There is no baseline, so the dangling-intent conditions (b)-(e) apply.
+  const mapped = new Set(entries.map((e) => String(e.articleId)));
+  for (const o of run.outcomes()) {
+    if (o.result !== "created" || o.id === undefined || o.id === null || mapped.has(String(o.id))) continue;
+    mapped.add(String(o.id));
+    rep.entries++;
+    const doc = await findOne(port, "articles", { id: { equals: o.id } }, true);
+    if (!doc) {
+      rep.alreadyGone.push(o.slug);
+      continue;
+    }
+    const why: string[] = [];
+    if (!isMarker(doc) || relId(doc.tenant) !== String(tenantId) || String(doc.slug) !== o.slug) why.push("(b) not this run's marker article");
+    if (otherIds.has(String(doc.id))) why.push("(c) id is journaled by another run");
+    if (!includeEdited && Number(doc.version) !== 1) why.push("(d) version is not 1");
+    if (!state || String(doc.createdAt) < state.startedAt) why.push("(e) created before this run started");
+    if (why.length) {
+      if (why.some((w) => w.startsWith("(d)"))) rep.keptEdited.push(o.slug);
+      else rep.keptNotMarker.push(o.slug);
+      log(`[${TOOL}] outcome-only row ${o.slug} (id ${String(doc.id)}) kept: ${why.join("; ")}`);
+      continue;
+    }
+    rep.toDelete.push(o.slug);
+    del.push({ id: doc.id as Id, slug: o.slug });
+  }
+
+  // dangling intents: the five conditions
   const failed = new Set(run.outcomes().filter((o) => o.result === "failed").map((o) => `${o.legacyId}\u0000${o.slug}`));
   const resolved: { legacyId: string; slug: string; deleted: boolean; id?: Id }[] = [];
   for (const i of run.dangling()) {

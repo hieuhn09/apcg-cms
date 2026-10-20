@@ -32,7 +32,7 @@ import { CliError, intFlag, parseArgs, type FlagSpec } from "./args";
 import { assertOutsideRepo } from "./assert-outside-repo";
 import { writeFileSafe, writeJsonSafe } from "./out-dir";
 import { verifySnapshotInput } from "./snapshot-vowasia-main";
-import { resolvePath } from "./vowasia-cli";
+import { redact, resolvePath } from "./vowasia-cli";
 import { buildLexical, oldHostsLeft, pendingUploadCount } from "./vowasia-body";
 import { centralTarget, r2Preflight } from "./vowasia-central";
 import { checkTaxonomy, isMarker, loadTenantId, markerArticles, tenantArticles } from "./vowasia-central-state";
@@ -182,7 +182,7 @@ async function importBody(
     const journaled = new Set<string>();
     for (const r of allRuns(runsDir)) for (const id of r.articleIds()) journaled.add(id);
     const orphans = (await markerArticles(port, tenantId)).filter((d) => !journaled.has(String(d.id)));
-    if (orphans.length) throw new RunError(`${TOOL}: ${orphans.length} marker article(s) in tenant ${TENANT_SLUG} are not in any run journal of --runs-dir (${orphans.slice(0, 20).map((d) => `${String(d.id)} ${String(d.slug)}`).join(", ")}); use the rollback of their run or remove them by hand; refusing.`);
+    if (orphans.length) throw new RunError(`${TOOL}: ${orphans.length} marker article(s) in tenant ${TENANT_SLUG} are not in any run journal of --runs-dir (${orphans.slice(0, 20).map((d) => `${String(d.id)} ${String(d.slug)}`).join(", ")}); no rollback can remove a row that no journal lists. If their run directory is elsewhere, run again with that --runs-dir and roll that run back; otherwise check each row in /admin (Articles, tenant ${TENANT_SLUG}) and delete it by hand; refusing.`);
   }
   if (!input.manifest) throw new CliError(`${TOOL}: manifest.json is missing in --snapshot; refusing.`);
   const store = new MediaStore(snapDir, input.manifest);
@@ -253,7 +253,7 @@ async function importBody(
         if (err instanceof UploadError) {
           j.outcome({ legacyId: p.legacyId, slug: p.slug, result: "failed", reason: "uploadError", at: at() });
           report.failed.push({ slug: p.slug, reason: "uploadError" });
-          report.stop = `Q12: Media upload failed for ${p.slug}; the run stopped BEFORE creating that article. Fix the cause (R2 credentials / network) and run again with a NEW --run-id. (${err.message})`;
+          report.stop = `Q12: Media upload failed for ${p.slug}; the run stopped BEFORE creating that article. Fix the cause (R2 credentials / network) and run again with a NEW --run-id. (${redact(err.message, deps.env)})`;
           code = 1;
           break;
         }
@@ -290,14 +290,22 @@ async function importBody(
       try {
         created = await port.create("articles", data, { draft: sw.draft, context: { ...WRITE_CTX } });
       } catch (err) {
-        j.outcome({ legacyId: p.legacyId, slug: p.slug, result: "failed", reason: "createError", at: at() });
-        report.failed.push({ slug: p.slug, reason: `createError: ${String((err as Error).message).slice(0, 160)}` });
-        if (++consecutive >= CONSECUTIVE_FAILURE_STOP) {
-          report.stop = `${CONSECUTIVE_FAILURE_STOP} consecutive create failures; stopping.`;
-          code = 2;
-          break;
+        // F-1: the row may be committed although the call failed (a lost reply after COMMIT).
+        // The slug was free right before the create, so a marker row with it now is ours: journal it.
+        const landed = await findOne(port, "articles", { and: [{ tenant: { equals: tenantId } }, { slug: { equals: p.slug } }] }, true).catch(() => undefined);
+        if (landed && isMarker(landed)) {
+          log(`[${TOOL}] ${p.slug}: create reported an error but the row exists (id ${String(landed.id)}); journaled as created`);
+          created = landed;
+        } else {
+          j.outcome({ legacyId: p.legacyId, slug: p.slug, result: "failed", reason: "createError", at: at() });
+          report.failed.push({ slug: p.slug, reason: redact(`createError: ${String((err as Error).message).slice(0, 160)}`, deps.env) });
+          if (++consecutive >= CONSECUTIVE_FAILURE_STOP) {
+            report.stop = `${CONSECUTIVE_FAILURE_STOP} consecutive create failures; stopping.`;
+            code = 2;
+            break;
+          }
+          continue;
         }
-        continue;
       }
       consecutive = 0;
       creates++;

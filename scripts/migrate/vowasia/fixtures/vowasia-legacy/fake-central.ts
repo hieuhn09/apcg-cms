@@ -15,6 +15,8 @@ import { VOWASIA_AUTHORS, VOWASIA_PILLARS, VOWASIA_SUBSECTIONS, VOWASIA_TAGS } f
 
 export interface FakeHooks {
   failCreate?: (collection: string, data: Doc) => Error | undefined;
+  /** The row IS committed, then the call throws (a lost reply: connection reset/timeout after COMMIT). */
+  failCreateAfterCommit?: (collection: string, data: Doc) => Error | undefined;
   failDelete?: (collection: string, id: Id) => Error | undefined;
 }
 
@@ -103,6 +105,8 @@ export class FakeCentral implements CentralPort {
     }
     this.rows(collection).push(doc);
     this.writes.push({ op: "create", collection, id: doc.id as Id, data: structuredClone(data), options: { ...o, file: o.file ? { ...o.file, data: Buffer.alloc(0) } : undefined } });
+    const late = this.hooks.failCreateAfterCommit?.(collection, data);
+    if (late) throw late;
     return structuredClone(doc);
   }
 

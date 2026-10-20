@@ -294,7 +294,11 @@ test("preflight: a dangling intent in any run, or a marker article absent from e
     writeFileSync(path.join(c.runs, "A", "intent.ndjson"), readFileSync(path.join(c.runs, "A", "intent.ndjson"), "utf8") + JSON.stringify({ legacyId: "x", slug: "ghost", runId: "A", at: "2026-10-20T00:00:00Z" }) + "\n");
     await assert.rejects(() => runImport(apply(c, "B"), c.deps), /dangling intent.*A: ghost/);
     rmSync(path.join(c.runs, "A"), { recursive: true });
-    await assert.rejects(() => runImport(apply(c, "B"), c.deps), /not in any run journal/);
+    await assert.rejects(() => runImport(apply(c, "B"), c.deps), (e: unknown) => {
+      const m = (e as Error).message;
+      // F-1: rollback cannot reach a row no journal lists; the advice must give a path that works
+      return /not in any run journal/.test(m) && !/use the rollback of their run/.test(m) && /--runs-dir/.test(m) && /\/admin/.test(m);
+    });
     assert.equal(existsSync(path.join(c.runs, "B")), false);
   } finally {
     done(c);
@@ -357,5 +361,45 @@ test("local test hooks: forced upload error stops the run (Q12); hooks are refus
     assert.equal(r.central.writes.length, 0);
   } finally {
     done(r);
+  }
+});
+
+test("F-1: a create that commits but then errors (lost reply) is journaled as created, so rollback can remove it and the next run is not blocked", async () => {
+  const c = setup();
+  try {
+    let n = 0;
+    c.central.hooks.failCreateAfterCommit = (col) => (col === "articles" && ++n === 2 ? new Error("Connection terminated unexpectedly") : undefined);
+    const code = await runImport(apply(c, "A", ["--limit", "3"]), c.deps);
+    c.central.hooks.failCreateAfterCommit = undefined;
+    const run = new RunDir(path.join(c.runs, "A"));
+    assert.equal(marker(c).length, 3, "3 rows exist in Central");
+    assert.equal(run.outcomes().filter((o) => o.result === "created").length, 3, "the lost-reply row is journaled as created");
+    assert.equal(run.slugMap().length, 3, "and has a slug-map line");
+    assert.equal(code, 0);
+    assert.equal(await runImport(apply(c, "B", ["--limit", "1"]), c.deps), 0, "orphan preflight does not block the next run");
+  } finally {
+    done(c);
+  }
+});
+
+test("F-3: report.failed reasons and report.stop are redacted (Central DATABASE_URL password, R2 values)", async () => {
+  const secretPw = "CentralFakePw123";
+  const r2Key = "R2FAKEACCESSKEYID000";
+  const r2Secret = "r2FakeSecretValue/abc+def";
+  const c = setup({ env: { DATABASE_URL: `postgres://postgres:${secretPw}@127.0.0.1:54399/vowasia_unit`, R2_ACCESS_KEY_ID: r2Key, R2_SECRET_ACCESS_KEY: r2Secret, R2_BUCKET: "fake-bucket-xyz", R2_ENDPOINT: "https://fake.r2.example.invalid" } });
+  try {
+    let n = 0;
+    c.central.hooks.failCreate = (col) => (col === "articles" && ++n === 1 ? new Error(`auth failed pw=${secretPw} key=${r2Key} secret=${r2Secret}`) : undefined);
+    await runImport(apply(c, "A", ["--limit", "2"]), c.deps);
+    n = 0;
+    c.central.hooks.failCreate = (col) => (col === "media" && ++n === 1 ? new Error(`S3 denied ${r2Key} ${r2Secret} bucket fake-bucket-xyz`) : undefined);
+    await runImport(apply(c, "B", ["--limit", "2"]), c.deps);
+    for (const id of ["A", "B"]) {
+      const txt = readFileSync(path.join(c.runs, id, "import-report.json"), "utf8") + readFileSync(path.join(c.runs, id, "import-report.md"), "utf8");
+      for (const s of [secretPw, r2Key, r2Secret, "fake-bucket-xyz"]) assert.ok(!txt.includes(s), `${id} report leaks ${s}`);
+    }
+    assert.ok(!c.logs.join("\n").includes(r2Secret), "log leaks the R2 secret");
+  } finally {
+    done(c);
   }
 });
