@@ -695,10 +695,15 @@ article gets Payload's stock required check ("This field is required.", non-draf
 unresolvable pillar or lookup error = author required (fail closed). REST/GraphQL `author` can be null
 for Pressroom articles only (merged as #27). Known gap: the admin required asterisk on Author is lost for all articles.
 
-A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, `{ "brief-asia": ["pressroom"], gcv: ["pressroom"] }`,
+A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, `{ "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"] }`,
 keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:40`) owns its articles
-exclusively: a code constant, **no schema field, no migration**. WAD also has a `pressroom` pillar and
-is deliberately NOT affected. The rule (`src/lib/single-home-pillars.ts:7-15`): V1 primary = P means no
+exclusively: a code constant, **no schema field, no migration**. **Updated 2026-10-20 (WAD Pressroom
+parity, owner decision, plan `process/general-plans/active/wad-pressroom_20-10-26/`):** WAD `pressroom` is
+now single-home AND engine-blocked exactly like GCV (`wad: ["pressroom"]` in both maps, no migration; the
+owner runs the read-only WAD violator SQL in `docs/11-operations.md` before deploy; hub authoring into WAD
+pressroom now gets `blocked_pillar` via the generic `hub-author-refs.ts` check). The tests' and probe's
+negative control is now a fixture-only `(world-travel-brief, pressroom)` pillar (WTB has no such row in
+production; `dtw` is kept pressroom-free on purpose for the move checks). The rule (`src/lib/single-home-pillars.ts:7-15`): V1 primary = P means no
 secondary rows (a persisted duplicate of the primary counts), V2 no sub-section, V3 a secondary row = P
 is refused whatever the primary is, V4 P cannot have sub-sections, V5 P's `(tenant, slug)` cannot be
 renamed, moved to another tenant, or deleted in use, V6 primary = P cannot be `exclusive`. Keying is by
@@ -742,8 +747,8 @@ content-engine articles).** `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive", "pres
 (`src/lib/constants.ts:40`; GCV `pressroom` added 05-10-26 for GCV Pressroom parity, same 422 on create and refresh); `normalizeEngineBlockedSlug` (trim + lower-case) and `isEngineBlockedPillar`
 make the match case/whitespace-insensitive. Gate 3b in `intake/route.ts:156` runs after auth + tenant/pillar
 resolution and BEFORE 3c and the idempotency lookup, so engine create AND refresh get 422
-`pillar not writable by engine: pressroom` plus an `integration_error` row. WAD's own `pressroom` and other
-tenants are unaffected. Pressroom articles are created by editors only, so "teach the engine Pressroom" and the
+`pillar not writable by engine: pressroom` plus an `integration_error` row. WAD `pressroom` is blocked too
+since 20-10-26; tenants not listed are unaffected. Pressroom articles are created by editors only, so "teach the engine Pressroom" and the
 `autoPublishEngineDrafts`-for-Pressroom concern are moot. Rollback: remove the `brief-asia` entry (engine
 writes re-enabled; the single-home rule still applies). Only `engine/intake` takes a pillar from an engine actor.
 
@@ -769,8 +774,8 @@ these; an authenticated hostile engine can flood 422s (`rateLimitPerMin` unenfor
 (the unchanged-skip persists any violation created while the hook was absent — run the read-only audit of
 articles + versions referencing Pressroom before re-enabling after a rollback); a tunnelled prod DB on
 `localhost` defeats any hostname guard (`scripts/lib/local-db-guard.ts:18`); a brief-asia article can point
-its primary pillar at WAD's `pressroom` (keyed by the referenced doc's `(wad, pressroom)`, so not
-single-home) — needs membership in BOTH tenants; cross-tenant pillar create ignores the access Where, so
+its primary pillar at another tenant's non-single-home pillar (keyed by the referenced doc's own
+`(tenant, slug)`; since 20-10-26 WAD's `pressroom` is single-home, so it no longer qualifies) — needs membership in BOTH tenants; cross-tenant pillar create ignores the access Where, so
 an editor can create a `pressroom` pillar in another tenant early. Known gaps: /admin Save Draft shows only
 Payload's generic "field is invalid: secondarySections" toast (rule text is in the response/field
 description; Console shows it fully).
