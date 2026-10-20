@@ -616,7 +616,7 @@ Execute start: T1 đỏ-trước (out-dir.test.ts: a, b độc lập, c) rồi c
 
 ## Amendment 3 (19-10-26): kết quả Giai đoạn A thật + kế hoạch Giai đoạn B
 
-Status: PLANNED cho B (chưa EXECUTE). HS7 nay ĐƯỢC MỞ cho việc LẬP PLAN B: đã có discover thật + quyết định C8/C3/C10/ảnh. Việc THỰC THI B vẫn cần: PVL của mục này (`### Validate Contract (Chặng B-α)`: PASS 19-10-26; `### Validate Contract (Chặng B-β)`: chờ đo B-0b + PVL riêng), xác nhận A1 (O1), và trả lời các câu hỏi mở ở mục 3.9. `## Validate Contract` ở trên chỉ phủ Giai đoạn A, không phủ B.
+Status: PLANNED cho B (chưa EXECUTE). HS7 nay ĐƯỢC MỞ cho việc LẬP PLAN B: đã có discover thật + quyết định C8/C3/C10/ảnh. Việc THỰC THI B vẫn cần: PVL của mục này (`### Validate Contract (Chặng B-α)`: PASS 19-10-26; `### Validate Contract (Chặng B-β)`: B-0b đã đo 20-10-26, Amendment 4 written; awaiting inner PVL), xác nhận A1 (O1), và trả lời các câu hỏi mở ở mục 3.9. `## Validate Contract` ở trên chỉ phủ Giai đoạn A, không phủ B.
 
 ### 3.1 Sự kiện: chạy thật Giai đoạn A (19-10-26, chủ chạy, một lần ngồi)
 
@@ -918,7 +918,7 @@ Accepted by: không cần chấp nhận concern (Gate PASS). Chủ vẫn phải 
 
 ### Validate Contract (Chặng B-β)
 
-Status: GATED (chưa validate; KHÔNG EXECUTE)
+Status: GATED — Amendment 4 written (20-10-26: B-0b measured, B-beta designed in `## Amendment 4`); awaiting inner PVL; KHÔNG EXECUTE
 date: 2026-10-19
 generated-by: inner-pvl: phase-B (chặng B-β, placeholder)
 
@@ -940,3 +940,186 @@ Hard stops: chỉ tạo mới, không sửa, không xoá, không bao giờ tạo
 Next phase: EXECUTE chặng B-α: process/general-plans/active/vowasia-legacy-migration_16-10-26/vowasia-legacy-migration_PLAN_16-10-26.md
 Validate contract: inline (### Validate Contract (Chặng B-α)), Gate: PASS, generated-by: inner-pvl: phase-B (chặng B-α), 2026-10-19.
 Execute start: red-first stubs rồi B-0, B-0b, B-1, fixture | G1 `npm run test:migrate-vowasia` | G2 `npm run lint:migrate` | G3 `npm run typecheck` | G4 `npm run test:migrate-gtp` | G5 `npm run test:single-home` | G6 `npm run probe:migrate-vowasia` (một mình) | G7/G7b/G7c gốc 84928ca | G8 `git diff --quiet fe88bc4 -- scripts/migrate ':(exclude)scripts/migrate/vowasia'` | SQL không đổi | G22 review | high-risk pack: yes (trust-boundary/secret).
+
+## Amendment 4 (20-10-26): real snapshot measurement (B-0b) and full B-beta design
+
+Status: Amendment 4 written; awaiting inner PVL for B-beta. Nothing here is executed. B-beta EXECUTE needs `### Validate Contract (Chặng B-β)` to reach `Gate: PASS` (or an owner-accepted CONDITIONAL) after inner PVL from V1.
+
+Bottom line: the measurement closes Q2, Q3 and KB-2 with no surprises (zero unmapped section pairs, all images on the allow-list, 369 images downloaded with 0 failures). B-beta can now be specified fully. It is HIGH RISK (create-only data mutation on production Central `neondb`, plus R2 uploads) and needs the 5-artifact evidence pack before it is treated as closed.
+
+### 4.1 Measured facts (owner ran on the Mac, 2026-10-20; counts only, no secrets)
+
+Digests (record these; the manifest digest is the importer's `--expect-sha256`):
+
+| Item | Value |
+|---|---|
+| Snapshot `snapshot.ndjson` sha256 | `95d017cd499d27fe07eaca40dc2a7ccc6b9cb5d11d59332638c34791b104df01` |
+| Image manifest sha256 (`--expect-sha256`) | `50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105` |
+| Articles in snapshot | 370 (discover in 3.2 saw 368: +1 published, +1 draft; cause not verified, most likely new rows on the old site between the two sittings; the snapshot is the source of truth from now on) |
+| Manifest | 369 entries, 0 failures, offAllowlist 0, relative 0, protocol-relative 0; `snapshotSha256` matches the snapshot; 369 files in `images/` |
+| Download | ran once; a second run correctly refused with "manifest exists" |
+
+Status: published 230, archived 107, draft 21, rejected 12. No `scheduled` rows.
+
+Q2 (closed): `title` and `excerpt` are always `object{en}` (370/370). Importer reads `.en`.
+
+Q3 (closed): `body_sections` is an array of `{heading, body}` (1,415 elements) or `{heading, body, image}` (8 elements, in 3 articles).
+- Body images: `[].image.url` = 8, all on the allow-list.
+- URLs inside `[].body.en` text: 4, NOT on the allow-list. These are links, not images, and were not downloaded.
+- Relative / protocol-relative refs: 0.
+
+Cover: 361 on the allow-list, 9 missing (missing -> draft, owner decision). 361 cover + 8 body = 369 = manifest entries.
+
+Dates: 0 rows without `created_at`; 140 rows without `published_at` (C7: use `created_at`).
+
+KB-2 (closed): every (section, subsection) pair maps under C8; ZERO rejects.
+
+| Legacy pair | Count | Central target |
+|---|---|---|
+| wedding-business / industry-news | 125 | same |
+| venues / hotels-resorts | 88 | same |
+| destination-weddings / honeymoons | 32 | same |
+| style / rings-jewelry | 26 | rings-jewellery |
+| wedding-business / people | 19 | people-planners |
+| style / flowers-decor | 18 | same |
+| destination-weddings / guides | 16 | destination-guides |
+| style / trends | 16 | trend-reports |
+| style / beauty | 5 | same |
+| style / gowns-attire | 5 | same |
+| wedding-business / data-insights | 5 | same |
+| venues / by-destination | 4 | same |
+| planning / budgets-costs | 3 | budgets-real-costs |
+| planning / expert-advice | 3 | same |
+| destination-weddings / pre-wedding-shoots | 2 | same |
+| planning / checklists | 1 | checklists-timelines |
+| planning / etiquette-traditions | 1 | same |
+| venues / (null) | 1 | pillar only, no sub-section |
+
+`tags` column: array of strings on 362 rows, empty on 8. Ignored (C4: tags come from the sub-section, Q10).
+
+Incident during the snapshot sitting: pooler password auth failed twice (credential cache), the direct host failed with ENOTFOUND (IPv6-only), and it succeeded after reconnecting on the pooler. Lesson for any future sitting: do not rerun `02p` after an auth failure; space out retries; reconnect on the pooler. Role `vowasia_migrator` was dropped; `03e` printed `CLEANUP OK`.
+
+Expected counts derived from the facts (the dry-run MUST print each of these and the owner compares):
+
+- Rows the importer sees: 370. Dropped (rejected, C2): 12. Imported: **358**.
+- Before the no-cover rule: published 230, archived 107, draft 21.
+- After the no-cover rule: the 9 no-cover rows become draft. How many of the 9 are published, archived, draft or rejected is UNKNOWN until the dry-run. The dry-run must print the 9 split by original status. So: published = 230 - p, archived = 107 - a, draft = 21 + p + a, where p, a are the no-cover counts among published/archived; if some of the 9 are rejected they are dropped, not imported.
+- Any further image failure at import (C6) also moves the row to draft; expected 0 because the manifest has 0 failures. The import stops if failures exceed 2% (8 of 369).
+- Pillar totals (over all 370 rows, before removing the 12 rejected): wedding-business 149, venues 93, style 70, destination-weddings 50, planning 8. After import each pillar is that total minus its rejected rows; the dry-run prints both.
+- Tag totals, UPPER bounds (over 370, before removing rejected): wedding-industry 125, wedding-venues 88, honeymoons 32, bridal-fashion 31 (26 rings-jewellery + 5 gowns-attire), no tag 94.
+- Body images to re-create: 8 in 3 articles. Cover images: 361 (minus any on rejected rows). Media rows created: at most 369, fewer if a file is shared (dedupe by stable filename).
+- Redirect entries (C3/Q9 + orchestrator default): 370 total = 12 x 410 + 358 x 308 (published to `/<pillar>/<slug>`, every non-public imported row to `/<pillar>`).
+
+Note on 3.2 numbers: the 368 / 229 / 20 from discover are superseded by the snapshot (370 / 230 / 21). Plan text that says 368 or 8/818 is historical.
+
+### 4.2 Consequences for the design
+
+1. Q2: transform reads `title.en` and `excerpt.en`. Anything else (missing `en`, non-string, other shape) -> reject with a report line. No guessing, no fallback to another key.
+2. Body assembly: for each element in order, `heading` (string or `{en}`) becomes an H2, `body.en` becomes paragraphs (sanitised, same rules as the neutral GTP helpers), and `image.url` becomes an `upload` node pointing at the NEW Media id. The Media id is found through the manifest: url -> sha256 -> file in `images/` -> Media created under tenant `vowasia`, R2 prefix `vowasia/`. No `<img>` HTML ever reaches the Lexical converter (U3 stays in force). Post-check: 0 references to the old image hosts remain in the body.
+3. The 4 off-allow-list URLs in body text are links. They are left untouched as text and listed in the dry-run report (article slug + URL). OPEN ITEM for the owner: eyeball the 4 links in the dry-run report and say if any must change. No default is chosen by this plan; the import does not wait on it.
+4. `venues` with null subsection -> pillar only, no sub-section, no tag (already in the C8 table, now confirmed with real data: 1 row).
+5. Status: no `scheduled` rows exist, so the scheduled branch is tested on the fixture only.
+6. Dates: 140 rows use `created_at` as the publish date (C7). The dry-run prints this count.
+7. Redirects (corrects the CF5 wording in Q9, row L674): archived rows stay ARCHIVED in Central (C2). Under the orchestrator default (owner informed), EVERY imported row that is not public (archived, any draft, including old drafts and no-cover drafts) gets a 308 to `/<pillar>`. Only the 12 rejected rows get 410. Published rows get `/<pillar>/<slug>`. When an editor later publishes one of the non-public rows, the map is regenerated and that URL goes straight to `/<pillar>/<slug>`. This replaces the earlier sentence "old drafts do NOT go into the map".
+
+### 4.3 B-beta design (mirrors GTP, copies everything tenant-named, edits no GTP file)
+
+Rules kept from 3.4: create-only, never update or delete outside rollback, never create authors, no `--resume`, a second run uses a NEW run-id, journals live outside the repo, dry-run is the default, `--apply` needs an interactive TTY + `--confirm-host=<host>` + database name `/neondb` (`assertLocalOrConfirmed` then `central-db-name-guard`), banner shows `neondb`. GTP code is only imported read-only, and only the files pinned by `lib/gtp-import-pins.ts`; any new import of a GTP file adds a pin first (G20 + pin test).
+
+Data path for one import run:
+1. Load snapshot dir. Verify `sha256(snapshot.ndjson)` equals manifest `snapshotSha256`; verify `sha256(manifest.json)` equals `--expect-sha256`; verify every manifest entry file exists in `images/` named by its sha256 and re-hash it. Any mismatch -> refuse, nothing written.
+2. Plan the whole set deterministically: status (C2 + no-cover), taxonomy (C8), tag (C4/Q10), slug (keep old; `page` reserved -> reject; clash with a non-marker vowasia article -> reject), author (C1 round-robin per pillar by `created_at`, then `id`, over the 6 authors from `scripts/lib/vowasia-taxonomy.ts`; any author missing in Central -> STOP), dates (C7), body (4.2).
+3. Preflight (apply only): R2 env present for non-local Central (4 names, printed as names only); lockfile (CF4); no dangling intent in any run in `--runs-dir`; no marker `legacy:vowasia` article in tenant vowasia that is absent from every journal.
+4. Per article: write intent line (fsync) -> create/reuse Media (cover + body) -> create Article -> write outcome line (fsync) and slug-map line. Image failure -> article becomes draft and the body section with the failed image is dropped (AC-B3). Failures > 2% -> stop.
+5. After the run: write `timestamps-baseline.json`, `timestamps-fix.sql` (owner-run), and the run report.
+
+### 4.4 B-beta Implementation Checklist (each item red-first where it has logic)
+
+All paths under `scripts/migrate/vowasia/` unless noted. Each "test" is a `node:test` file run by `npm run test:migrate-vowasia`. Red-first means: write the named test, see it fail, then implement.
+
+1. B-2 `lib/vowasia-transform.ts` + `lib/vowasia-transform.test.ts`.
+   - Red-first tests: `title`/`excerpt` `{en}` -> string; missing `en` -> reject `titleShape`; status table (published/archived kept, draft/scheduled -> draft, rejected -> skip); no cover -> draft with reason `noCover`; `published_at` null -> `created_at`; tag table (honeymoons->honeymoons, hotels-resorts->wedding-venues, gowns-attire->bridal-fashion, rings-jewellery->bridal-fashion, industry-news->wedding-industry, every other sub-section -> none, null sub-section -> none); old SEO fields ignored (C5).
+2. B-3 `lib/vowasia-body.ts` + test.
+   - Red-first tests: real shapes `{heading, body}` and `{heading, body, image}`; image -> `upload` node with the given Media id; 0 pending upload nodes; post-check "no old image host left"; failed image -> section dropped + flag `draft`; off-allow-list URL in text -> kept verbatim and returned in `offAllowlistLinks`.
+3. B-4 `lib/vowasia-author-distribution.ts` + test: order by (`created_at`, `id`) inside each pillar; spread differs by at most 1; computed on the full set so two runs agree; missing author -> throw.
+4. B-5 `lib/vowasia-slug-plan.ts` + test: keep slug; `page` -> reject; clash with non-marker article -> reject; deterministic `--limit` order.
+5. B-6 `lib/vowasia-media.ts` + test: manifest lookup by exact URL; sha256 + magic bytes + size (<= 20 MB) re-check; stable filename with `vowasia-` prefix (`lib/vowasia-stable-filename.ts`); reuse existing Media with the same filename in tenant vowasia; no network code path (test asserts no `fetch` import); R2 prefix asserted `vowasia`.
+6. B-7 `lib/import-vowasia-main.ts` + `import-vowasia.ts` + test.
+   - Gates (red-first): no TTY; missing/wrong `--confirm-host`; DB name not `/neondb` (dry-run included, guard prints the name first); `--run-id` missing on apply; run dir exists; `--resume` given; dry-run with `--run-id`; `--runs-dir` inside the repo incl. git-ignored dirs (`assertOutsideRepo`); missing R2 env on non-local Central; wrong `--expect-sha256`; snapshot sha chain broken; lockfile present (CF4); dangling intent in any run; marker article not in any journal.
+   - Behaviour: dry-run writes only to `dry-<timestamp>`, never a named run dir; dry-run prints the expected-count block of 4.1 (status before/after, the 9 no-cover rows by original status, pillar totals before/after removing rejected, tag totals, 140 date fallbacks, image totals, the 4 off-allow-list links, rejects by reason); create-only; never adopts an existing row into the current run.
+   - CF4 lock: `--apply` creates `<runs-dir>/.import.lock` with `O_EXCL` holding pid + run-id + start time; refuses if it exists (prints holder); removes it on normal exit and on handled errors. A stale lock is removed by hand by the owner after checking no import is running (documented in `VOWASIA-LEGACY.md`); there is no override flag.
+7. B-8 `lib/rollback-vowasia-main.ts` + `rollback-vowasia.ts` + test.
+   - Deletes only articles with marker `legacy:vowasia` + tenant vowasia + listed in that run's journal; untouched check against the run's `timestamps-baseline.json` (edited rows kept unless `--include-edited`); deletes Media created by that run only if no other article references it.
+   - Dangling intent resolved only when ALL five conditions of 3.4 step 6 hold (copied verbatim into the code comment and tested one condition per case); unchanged by this amendment.
+   - CF2: dry-run (default) writes NO `resolved` lines and nothing else; only `--apply` writes `resolved`. Test: dry-run leaves the run dir byte-identical.
+   - CF3: `--runs-dir` goes through `assertOutsideRepo` (same guard as import). Test: in-repo and git-ignored dirs refused.
+   - Required scenario tests (from 3.5 item 8): crash before create then run B same slug then rollback A -> B's article untouched; failed create then run B then rollback A -> untouched; crash after create before journal -> rollback A deletes it.
+   - Uses the CF4 lock too (rollback and import never run at once).
+8. B-9a `build-vowasia-redirects.ts` + `lib/vowasia-redirects.ts` + test: reads snapshot + Central state; keys via the read-only `normalise-path` helper (pinned); published -> `/<pillar>/<slug>` (308 by `vowasia-web` middleware), any imported non-public row -> `/<pillar>`, rejected -> `{"status":410}`; output is JSON for `vowasia-web` `src/redirects/redirect-map.json`.
+   - CF1: `--min-coverage` numerator = source rows with status `published` that HAVE a map entry; denominator = source rows with status `published`; ratio can never exceed 1. Report separately: archived entries, draft entries, 410 entries. Red-first test: a fixture with one published row missing and many archived rows must fail coverage.
+9. B-9b `rewrite-links-vowasia.ts` + `lib/rewrite-links-vowasia-main.ts` + test: dry-run default; touches only rows created by the named run (Q11); rewrites internal `/article/<slug>` links to the new path; the 4 off-allow-list links are NOT rewritten; rollback of the run covers these rows.
+10. B-10 `lib/vowasia-timestamps.ts` + test: generates `timestamps-fix.sql` per run (header OWNER-RUN, `psql -v ON_ERROR_STOP=1`, WHERE marker + tenant vowasia + id in this run's journal; Q11). Golden-file test.
+11. B-11 fixture extension `fixtures/vowasia-legacy/**`: cases for every real shape in 4.1 (object{en} title, 3-key image section, null subsection, missing cover, missing published_at, off-allow-list link in text, rejected row, no scheduled row in real data but one in the fixture).
+12. B-12 `verify-vowasia.ts` + `lib/verify-vowasia-main.ts` + test: compares Central to the snapshot plan: counts by status/pillar/tag, every article has author, every upload node resolves to a vowasia Media, 0 old image hosts, slug-map complete.
+13. B-13 `rehearse-vowasia.sh` + `rehearse-assert.ts`: native PG16, ports 54346/54347/3518/3519, one run, alone, in the background, timeout 7200000, no parallel `npm ci`; runs A then B, a crash case, rollback, and the redirect build; asserts Media `prefix === "vowasia"`.
+14. B-14 `VOWASIA-LEGACY.md` part B (owner steps, Vietnamese, OB steps of 4.6) and `package.json` (exactly 7 new lines, all contain `vowasia`: `migrate:vowasia:import`, `:rollback`, `:rewrite-links`, `:redirects`, `:verify`, `:fixture`, `rehearse:vowasia`).
+15. B-15 EVL by `vc-tester`; G22 review by `vc-code-reviewer`; high-risk evidence pack (4.7).
+
+Touchpoints (B-beta): only the files listed in items 1-14, `package.json` (7 lines), and the B-beta report files in the task folder. Any other file -> HS2 stop. GTP files are read-only (G20).
+
+Public contracts (new, additive): 7 npm scripts; run journal format (`intent.ndjson`, `outcome.ndjson`, `slug-map.ndjson`, `timestamps-baseline.json`, `.import.lock`), outside the repo; redirect JSON for `vowasia-web`.
+
+Blast radius: Central tenant `vowasia` articles + Media + R2 objects under `vowasia/`, only when the owner runs `--apply`. No other tenant. Tenant stays DARK, so no reader impact. Old DB: not read at all by B-beta.
+
+### 4.5 Gates and acceptance criteria (B-beta)
+
+Keep G1-G8 (re-run; G7/G7b base = last B-alpha commit `9fe7f5c` or later, exactly 7 new `package.json` lines, each contains `vowasia`), G16-G22 as written in 3.7, plus:
+
+| Gate / Scenario | Strategy | Proves SPEC criterion |
+|---|---|---|
+| G24 transform/body tests on real shapes (B-2, B-3) incl. 0 pending upload nodes and 4 off-allow-list links kept | Fully-Automated | AC-B2, AC-B3, AC-B14 |
+| G25 dry-run prints the 4.1 expected-count block; fixture run asserts every number | Fully-Automated | AC-B15 |
+| G26 CF4 lock: second concurrent `--apply` refused; rollback while import holds lock refused | Fully-Automated | AC-B5 |
+| G27 CF2/CF3: rollback dry-run leaves run dir byte-identical; rollback `--runs-dir` in repo refused | Fully-Automated | AC-B6 |
+| G28 CF1: coverage numerator counts only published rows; ratio never above 1; missing published entry fails | Fully-Automated | AC-B13 |
+| G19 rehearsal (one run, alone, background) | Hybrid | AC-B6, AC-B7 |
+| G22 code review on import/rollback/redirects/timestamps SQL | Agent-Probe | AC-B5, AC-B9 |
+| G23 owner dry-run + apply + verify on `neondb` (OB steps 4.6) | Known-Gap (backlog stub; B stays CONDITIONAL until the owner runs it) | AC-B10 |
+
+New ACs:
+- AC-B14 The 4 off-allow-list body links are unchanged in Central and listed in the dry-run report.
+- AC-B15 Dry-run numbers match 4.1: 358 imported, 12 rejected dropped, 0 C8 rejects, 140 date fallbacks, 9 no-cover drafts split by original status, image entries 369 (or fewer, explained).
+- AC-B13 (revised by CF1) Every published imported row has exactly one map entry; coverage = published-with-entry / published = 1.0.
+
+Gate verdict rule: B-beta cannot be PASS-closed on G23 alone (Known-Gap is never a proving strategy); code gates G24-G28, G16-G22 must be green, and G23 stays a named residual until the owner reports.
+
+### 4.6 Owner steps for B-beta (in order; all on the Mac; only after B-beta `Gate: PASS` and EVL green)
+
+1. OB1 Taxonomy dry-run on Central first: `npm run audit:add-vowasia-taxonomy -- --confirm-host=<host>`. Banner must show `neondb`. Expect tenant `vowasia` and 49 rows present (incl. 6 authors). Anything missing -> STOP.
+2. OB-R Rehearsal: `npm run rehearse:vowasia` (agent or owner, one run, alone, background). Must end green.
+3. OB5 Import dry-run: `npm run migrate:vowasia:import -- --snapshot <dir> --expect-sha256 50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105 --confirm-host=<host>`. Print R2 variable NAMES only. Send the count block; compare with 4.1; eyeball the 4 links (open item 4.2.3).
+4. OB6 Apply part A: add `--apply --limit 50 --run-id <A> --runs-dir ~/vowasia-private/runs`. Back up `~/vowasia-private/`. Check 50 rows in /admin (tenant vowasia: cover, body images, author, pillar).
+5. OB7 Apply the rest with a NEW `--run-id <B>` (never `--resume`; A's rows are skipped).
+6. OB8 `rewrite-links` dry-run, then `--apply`, per run. OB9 run `timestamps-fix.sql` per run on Neon with `ON_ERROR_STOP`.
+7. OB10 `npm run migrate:vowasia:verify -- ...`; send the result.
+8. OB11 `npm run migrate:vowasia:redirects -- ...`; open a PR to `vowasia-web` adding the entries to `src/redirects/redirect-map.json`. Do not merge before a cutover date (C10: none yet; VowAsia stays DARK).
+9. OB12 Keep the journals until rollback is surely not needed; then delete or encrypt snapshot + images + journals.
+
+Rollback at any time: `npm run migrate:vowasia:rollback -- --run-id <id> --runs-dir ~/vowasia-private/runs` (dry-run first, then `--apply`).
+
+### 4.7 High-risk classification and evidence pack
+
+Risk classes: schema/data mutation on production (create-only import, rollback deletes), external object storage (R2). Required before B-beta is closed: the 5-artifact evidence pack (`vc-risk-evidence-pack`) in the task folder, including `review-decision.json` and `adversarial-validation.json` for B-beta. The orchestrator must not treat B-beta as finalised until the pack exists and G23 is reported by the owner.
+
+### 4.8 Out of scope (follow-ups, backlog; not done in B-beta)
+
+- `out-dir.ts` `..` handling flaw, present in both the phase-A vowasia copy and GTP `scripts/migrate/lib/out-dir.ts` (B-beta uses `assertOutsideRepo` instead; fixing GTP would break G20).
+- Review follow-ups N2, N4, N6, N7 from the B-alpha review report.
+- Missing `review-decision.json` / `adversarial-validation.json` for earlier high-risk work (phase A / B-alpha).
+- GTP importer has no R2 preflight (same gap as U8; note only, GTP is frozen).
+- The old project ref appears in pushed history `f6ad3b9..e29c7da`; owner decides whether it matters (no history rewrite in this plan).
+- `CENTRAL_SIGNING_SECRET` / revalidate webhook for vowasia-web (not a migration concern).
+
+### 4.9 Strategy
+
+`vc-agent-strategy-compare` (simple mode): S2, S6, S7 present (3/7, MEDIUM). Inner PVL: 3 parallel sonnet subagents (write safety/rollback/lock; data/mapping/body/media; rehearsal/redirects/gates). EXECUTE: 1 opus agent, sequential (files are tightly coupled). EVL: `vc-tester` sonnet; G19 runs alone.
