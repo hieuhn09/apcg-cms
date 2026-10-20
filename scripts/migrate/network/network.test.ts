@@ -55,13 +55,21 @@ test("profile: aer parses; gtp tenant and non-pillar single-home refused", () =>
   assert.throws(() => parseProfile({ ...readJ("profiles/aer.json"), tenant: "gtp" }), /gtp/);
   assert.throws(() => parseProfile({ ...readJ("profiles/aer.json"), singleHomePillars: ["press-room"] }), /singleHome/);
 });
-test("mapping: committed aer mapping is valid but PROVISIONAL; --require-final refuses it; the fixture mapping is final", () => {
+test("mapping: committed aer mapping is FINAL (owner 20-10-26) and passes --require-final; the fixture mapping is final", () => {
   setProfile(AER);
   const m = readJ("mappings/aer.mapping.json");
-  const v = validateMapping(m, FIX_OVERLAY);
-  assert.ok(v.provisional.some((p) => p.key === "categories.map" && p.decision === "AER-section-map"));
-  assert.throws(() => validateMapping(m, FIX_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.deepEqual(validateMapping(m, FIX_OVERLAY, { requireFinal: true }).provisional, []);
+  assert.throws(() => validateMapping({ ...m, _provisional: ["categories.map"] }, FIX_OVERLAY, { requireFinal: true }), /require-final/);
   assert.doesNotThrow(() => validateMapping(readJ("fixtures/aer-legacy/aer.mapping.fixture.json"), FIX_OVERLAY, { requireFinal: true }));
+  // Published only; old sub-sections survive (briefings/corporate-asia pass through, essays -> asia-watch keeps its sub).
+  assert.deepEqual(Object.entries(m.status.map).filter(([, v]) => v !== "SKIP").map(([k]) => k), ["published"]);
+  const tx = (sec: string, sub: string) => resolveTaxonomy(sec, sub, m);
+  assert.deepEqual(tx("briefings", "policy"), { ok: true, t: { pillar: "briefings", subSection: "policy", rehomed: false, oldSection: "briefings", oldSub: "policy" } });
+  assert.deepEqual(tx("corporate-asia", "capital"), { ok: true, t: { pillar: "corporate-asia", subSection: "capital", rehomed: false, oldSection: "corporate-asia", oldSub: "capital" } });
+  assert.deepEqual(tx("briefings", ""), { ok: true, t: { pillar: "briefings", rehomed: false, oldSection: "briefings", oldSub: "" } });
+  for (const sub of ["growth-policy", "money-finance", "technology-industry"]) {
+    assert.deepEqual(tx("essays", sub), { ok: true, t: { pillar: "asia-watch", subSection: sub, rehomed: true, oldSection: "essays", oldSub: sub } });
+  }
   assert.throws(() => validateMapping({ ...m, categories: { map: { "x/*": { pillar: "news" } } } }, FIX_OVERLAY), /pillar "news" is not one of the 6 aer pillars/);
   assert.throws(() => validateMapping({ ...m, authors: { ...m.authors, bySection: { essays: "Nobody" } } }, FIX_OVERLAY), /not in authors.staff/);
 });

@@ -33,25 +33,23 @@ Test: `npm run test:migrate-network`.
 - Slug Central: **`aer`** (chủ dự án chốt 19-10-26). Role DB cũ: `aer_migrator`; schema
   view: `aer_ro`; overlay riêng: `~/aer-private/overlay.json`; run-id: `aer-real-1`,
   `aer-real-2`, ...
-- Slug của dòng site cũ CHƯA BIẾT (bảng `sites` từng có gtp, theasiaspotlight, vowasia,
-  worldarchidesign). File 01 tự tìm dòng có chữ `asiaeconomicreview` hoặc
-  `asia economic review` ở bất kỳ cột nào.
-- Mapping `mappings/aer.mapping.json` còn các **quyết định của chủ dự án** (danh sách
-  `_provisional`). Giá trị trong đó chỉ là gợi ý. `validate-mapping --require-final` (tự bật
-  khi ghi vào Central thật) sẽ từ chối cho tới khi các quyết định được chốt và
-  `_provisional` rỗng.
+- Dòng site cũ: slug `asiaeconomicreview`, id `211bbbba-cfa2-435c-ba67-f680d48ee1a2` (khám phá 20-10-26: 644 bài = 276 published, 311 archived chưa từng đăng, 53 draft, 4 rejected; 624 ảnh đại diện ở `mbolvnwkmkeroqmvbvmt.supabase.co`, 0 ảnh trong thân).
+- Mapping `mappings/aer.mapping.json` **đã chốt** (chủ dự án 20-10-26, `_provisional` rỗng):
+  - chỉ chuyển bài `published`; `archived`/`draft`/`scheduled`/`rejected` bỏ qua. Lượt chạy
+    bù trước khi chuyển tên miền lấy thêm bài site cũ đăng sau lần chạy đầu;
+  - `briefings` và `corporate-asia` giữ nguyên mục con (policy, markets, industry, companies;
+    capital, strategy); `essays` vào `asia-watch`, giữ mục con growth-policy,
+    money-finance, technology-industry;
+  - tác giả chia đều 4 người (`mode: even`, không giữ byline cũ; Lena Ho từng đứng tên
+    247/276 bài đã đăng);
+  - chỉ giữ 6 tag đã duyệt (`tags.keepOnly`), không nhập 1:1. SEO cũ bỏ.
 - Ảnh: ảnh đại diện của từng bài được tải về và tạo thành ảnh của tenant trên R2
   (tối đa 20 MB, dừng nếu hỏng quá 2%). Overlay PHẢI có host Storage cũ
-  `mbolvnwkmkeroqmvbvmt.supabase.co` trong `hostAllowlist`. Ảnh trong thân bài
-  (`body_sections[].image`): mặc định bỏ và đếm trong báo cáo (`media.bodyImages`). Kho
-  ảnh cũ `media_assets`: không chuyển lần này (Q6).
-- Tag: chỉ giữ 6 tag đã duyệt (`tags.keepOnly`), không nhập 1:1. SEO cũ bỏ. `published`
-  và `archived` chuyển; `draft`/`scheduled` thành nháp; `rejected` bỏ. Bài thiếu ngày đăng
-  lấy ngày tạo. Chỉ chuyển bài.
-- Tác giả: `authors.distribute.mode` = `bySection` (theo chuyên mục cũ, như trang Team
-  cũ: Lena Ho briefings, Arjun Menon corporate asia, Mei Fong Chua the long view, Rahul
-  Sethi essays; chuyên mục không có tên thì chia theo slug) hoặc `slugHash` (chia đều theo
-  slug, D7).
+  `mbolvnwkmkeroqmvbvmt.supabase.co` trong `hostAllowlist`. Kho ảnh cũ `media_assets`:
+  không chuyển lần này (Q6).
+- Các trang cũ không có bài (`/team`, `/the-long-view`, `/the-review-interview`,
+  `/data-annual`, `/partner-insights`) không sinh redirect từ mapping: viết tay vào
+  `aer-web/src/redirects/redirect-rules.json` lúc cutover.
 
 ### Các bước của chủ dự án (B5), mỗi lần một bước
 
