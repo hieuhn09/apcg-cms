@@ -11,6 +11,7 @@ import * as migration_20260915_000000_add_podcast_youtube_fields from './2026091
 import * as migration_20260924_000000_add_content_engines_hub_read from './20260924_000000_add_content_engines_hub_read';
 import * as migration_20260925_000000_add_content_engines_hub_write from './20260925_000000_add_content_engines_hub_write';
 import * as migration_20260930_000000_add_content_engines_hub_author from './20260930_000000_add_content_engines_hub_author';
+import * as migration_20261021_000000_add_podcast_series from './20261021_000000_add_podcast_series';
 
 export const migrations = [
   {
@@ -77,5 +78,10 @@ export const migrations = [
     up: migration_20260930_000000_add_content_engines_hub_author.up,
     down: migration_20260930_000000_add_content_engines_hub_author.down,
     name: '20260930_000000_add_content_engines_hub_author'
+  },
+  {
+    up: migration_20261021_000000_add_podcast_series.up,
+    down: migration_20261021_000000_add_podcast_series.down,
+    name: '20261021_000000_add_podcast_series'
   },
 ];
