@@ -238,7 +238,7 @@ export type ActivityEvent = (typeof ACTIVITY_EVENTS)[number];
 export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   articles: ["articles", "subsections"],
   newsletters: ["newsletters"],
-  podcasts: ["podcasts"],
+  podcasts: ["podcasts", "podcastSeries"],
   marketData: ["marketSnapshots", "fxRates", "trendingBlocks"],
   sponsorSlots: ["sponsorSlots"],
   wireDrops: ["wireDrops"],
