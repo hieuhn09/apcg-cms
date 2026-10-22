@@ -8,7 +8,8 @@ feature: vowasia-launch (lưu ở general-plans; repo này không có process/fe
 # VowAsia legacy migration — PLAN (COMPLEX, 2 giai đoạn)
 
 Date: 16-10-26
-Status: PLANNED (chưa EXECUTE). PVL cycle 1 (S1-S8) và cycle 2 (T1-T7) đã áp dụng; validate pass 3 (16-10-26) đã ghi lại `## Validate Contract` (Gate PASS cho EXECUTE Giai đoạn A; AC-A9 là Known-Gap có tên giữ cổng A -> B ở CONDITIONAL). Amendment 1 (16-10-26, chủ duyệt phạm vi: đường SQL Editor của Supabase, +3 file SQL, xem `## Owner-approved scope amendment 1 (16-10-26)`) KHÔNG được validate lại bằng vòng PVL đầy đủ; phủ bằng EVL độc lập + G9.
+Status (22-10-26): Stage A done; stage B (B-alpha + B-beta) EXECUTED and VERIFIED on production Central for the import itself (G23 satisfied by the owner's real run 20-10-26). Plan stays in active/ for cutover items. See `## Stage B closeout (22-10-26)` at the end.
+Status (historical, 16-10-26): PLANNED (chưa EXECUTE). PVL cycle 1 (S1-S8) và cycle 2 (T1-T7) đã áp dụng; validate pass 3 (16-10-26) đã ghi lại `## Validate Contract` (Gate PASS cho EXECUTE Giai đoạn A; AC-A9 là Known-Gap có tên giữ cổng A -> B ở CONDITIONAL). Amendment 1 (16-10-26, chủ duyệt phạm vi: đường SQL Editor của Supabase, +3 file SQL, xem `## Owner-approved scope amendment 1 (16-10-26)`) KHÔNG được validate lại bằng vòng PVL đầy đủ; phủ bằng EVL độc lập + G9.
 
 ## TL;DR
 
@@ -1353,3 +1354,11 @@ All changed files stay inside `scripts/migrate/vowasia/`, `package.json` (7 line
 5. Local-only test hooks `VOWASIA_TEST_KILL_BEFORE_JOURNAL` and `VOWASIA_TEST_FAIL_UPLOAD_AT` (refused against a non-local Central) drive the G19 crash and Q12 cases.
 6. rewrite-links also skips a row edited since the import (untouched check), like GTP. Blank lines in the answer file are ignored. `--expect-sha256` is required on `--apply`, optional on dry-runs (OB5 passes it).
 7. verify plans the expected set from the snapshot alone, so a Central row that lost its marker is reported as missing (found by development rehearsal run 2).
+
+## Stage B closeout (22-10-26)
+
+Classification: Keep in active/testing. Report: `vowasia-legacy-migration-closeout_REPORT_22-10-26.md`.
+
+G23 (owner run on production Central `neondb`, 20-10-26) is satisfied: 358 articles imported in two runs (A 50, B 308), media 358 created, 0 failed, timestamps-fix COMMIT for both runs, `migrate:vowasia:verify` VERIFY OK (status archived 100 / draft 28 / published 230), rewrite-links skipped (0 old-site-article links), redirect map 349 entries committed to vowasia-web draft PR #3 (not merged). B-beta is VERIFIED on production for the import. The accidental re-run of run B was refused by the new-run-id guard (nothing written).
+
+Still open in this plan (cutover-bound): merge vowasia-web PR #3 at cutover (C10: no date); OB12 data cleanup after cutover (rollback needs the journals); named residuals KB-3/KB-6 are now covered by the real run for the measured shapes only. Other follow-ups are in the backlog note `vowasia-b-beta-owner-import_NOTE_20-10-26.md`.

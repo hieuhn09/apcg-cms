@@ -7,7 +7,9 @@ feature: general-plans
 
 # VowAsia B-beta: owner import on neondb (residual G23)
 
-TL;DR: The B-beta code is built and rehearsed locally; nothing proves it on the real 370-row snapshot, real Neon `neondb` or real R2 until the owner runs these steps. B-beta stays CONDITIONAL in closeout until the owner reports them.
+UPDATE 22-10-26: G23 DONE. The owner ran OB1-OB11 on production Central (`neondb`) on 20-10-26: 358 imported, 0 failed, VERIFY OK, redirect map 349 entries in vowasia-web draft PR #3. OB12 deferred. Remaining follow-ups are listed at the end of this note.
+
+TL;DR (historical, before the run): The B-beta code is built and rehearsed locally; nothing proves it on the real 370-row snapshot, real Neon `neondb` or real R2 until the owner runs these steps. B-beta stays CONDITIONAL in closeout until the owner reports them.
 
 Plan: `process/general-plans/active/vowasia-legacy-migration_16-10-26/vowasia-legacy-migration_PLAN_16-10-26.md` (Amendment 4 §4.6). Runbook (Vietnamese): `scripts/migrate/vowasia/VOWASIA-LEGACY.md` part B.
 
@@ -24,3 +26,22 @@ Plan: `process/general-plans/active/vowasia-legacy-migration_16-10-26/vowasia-le
 | OB12 | keep journals, then delete/encrypt private files | data hygiene |
 
 Known gaps carried: KB-3 (real R2 upload and credential errors), KB-6 (real data shapes beyond the measured facts), TTY prompts on macOS, Neon latency/locks. Open owner items: O-B5 (answer file, hard STOP before OB6), O-B12 (redirect builder STOP, no default).
+
+## Follow-ups after the real run (22-10-26)
+
+Cutover-bound:
+- Merge vowasia-web draft PR #3 (https://github.com/hieuhn09/vowasia-web/pull/3) only at cutover (C10: no date; VowAsia stays dark).
+- OB12: delete or encrypt snapshot + images + journals only after cutover; owner keeps `~/vowasia-private` and backups (`vowasia-private-backup-after-A/B`) until then, because rollback needs the journals.
+- Do not pause the old Supabase project until the GTP images are copied.
+- Owner: delete saved SQL Editor queries that contain the site id and empty Notes "Recently Deleted".
+
+Optional / cleanup:
+- Junk archived articles in Central (old content-engine refusal slugs such as `content-not-asia-relevant`) can be cleaned.
+
+Out-of-scope code follow-ups carried from earlier:
+- `out-dir.ts` `..` handling flaw (phase-A vowasia copy and GTP `scripts/migrate/lib/out-dir.ts`).
+- B-alpha review items N2, N4, N6, N7.
+- GTP importer has no R2 preflight.
+- Old project ref appears in pushed history `f6ad3b9..e29c7da` (owner decides).
+- G22 B-beta residuals F-5, F-9, F-10; rollback delete-error redaction residual.
+- Missing `review-decision.json` / `adversarial-validation.json` for phase A / B-alpha.

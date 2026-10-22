@@ -5,6 +5,8 @@ date: 16-10-26
 feature: vowasia-launch
 ---
 
+Status 22-10-26: addressed in practice. The owner ran phase A for real on 19-10-26 (plan Amendment 3 §3.1) and stage B on production on 20-10-26 (see `vowasia-b-beta-owner-import_NOTE_20-10-26.md`).
+
 # Known-Gap AC-A9: discover trên DB cũ THẬT (VowAsia, Giai đoạn A)
 
 Plan: `process/general-plans/active/vowasia-legacy-migration_16-10-26/vowasia-legacy-migration_PLAN_16-10-26.md` (AC-A9, G12).

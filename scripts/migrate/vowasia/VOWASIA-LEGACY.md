@@ -481,6 +481,8 @@ Chủ KHÔNG chạy rehearsal (cần Linux, PG16 native, `runuser`). Agent chạ
 
 ## OB5: chạy thử import (ĐIỂM DỪNG)
 
+> Ghi chú: thư mục snapshot thật có tên kèm ngày, không phải đúng chữ `snapshot`; thay `~/vowasia-private/snapshot` trong các lệnh bên dưới bằng tên thư mục thật.
+
 ```bash
 npm run migrate:vowasia:import -- --snapshot ~/vowasia-private/snapshot --expect-sha256 50c431a1993799c60d6fae6614da3cf5ee82cad9c0bfacd340a75fcafde0c105 --confirm-host=<host Central> --runs-dir ~/vowasia-private/runs
 ```
