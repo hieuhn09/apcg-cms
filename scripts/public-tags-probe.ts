@@ -164,7 +164,7 @@ async function main() {
   const { default: config } = await import("../payload.config");
   const { pCreate, pDelete } = await import("./lib/payload-loose");
   const { hashToken } = await import("../src/lib/crypto");
-  const { parseMinCount, parseLimit } = await import("../src/lib/public-tags");
+  const { parseMinCount, parseLimit, rowsOrThrow } = await import("../src/lib/public-tags");
   console.log(`[probe] database ${banner} — run tag ${RUN} — base ${COMPARE ? COMPARE.join(" vs ") : BASE}`);
   const payload: Payload = await getPayload({ config });
   const db = (payload.db as unknown as { drizzle: Exec }).drizzle;
@@ -435,6 +435,8 @@ async function main() {
       console.log("[G6] parameters");
       const minPins: Array<[string | null, number]> = [[null, 1], ["", 1], ["0", 1], ["-3", 1], ["abc", 1], ["1.5", 1], ["2.7", 2], ["Infinity", 1], ["1e3", 1000], ["5000", 1000]];
       const limPins: Array<[string | null, number]> = [[null, 500], ["", 500], ["0", 500], ["-5", 500], ["0.5", 500], ["abc", 500], ["2.5", 2], ["1", 1], ["99999", 2000]];
+      const throws = (v: unknown) => { try { rowsOrThrow(v); return false; } catch { return true; } };
+      check("G6 N1 result without a rows array throws (500 path, not an empty 200)", throws(undefined) && throws(null) && throws({}) && throws({ rows: "x" }) && !throws({ rows: [] }), "rowsOrThrow guard");
       for (const [raw, exp] of minPins) check(`G6 parseMinCount(${JSON.stringify(raw)}) = ${exp}`, parseMinCount(raw) === exp, `got ${parseMinCount(raw)}`);
       for (const [raw, exp] of limPins) check(`G6 parseLimit(${JSON.stringify(raw)}) = ${exp}`, parseLimit(raw) === exp, `got ${parseLimit(raw)}`);
       // HTTP: minCount on tenant A (counts 1 and 2)

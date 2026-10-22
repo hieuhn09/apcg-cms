@@ -133,3 +133,21 @@ Cross-tenant: repeat the first call with another tenant's token read the same wa
 - Blast Radius Changes: none beyond the plan.
 - Commands to Stay Green: `npm run typecheck`, `npm run lint`, `npx tsx scripts/public-tags-probe.ts --preflight`, `npm run probe:public-tags`.
 - Dependency Changes: none.
+
+## Review fixes (22-10-26, review APPROVE_WITH_CONCERNS)
+
+- M1: verified `src/migrations/20260801_082303_migration_hardening.ts:84` creates `CREATE UNIQUE INDEX "tags_tenant_slug_idx" ON "tags" ("tenant_id","slug")`. Docs bullet reworded (unique per tenant by hook + index; the id tiebreaker is defensive only). Plan body corrected in two places. Correction of this report: the earlier "duplicate slug appears as two rows" note in the docs row above is superseded.
+- M2: `docs/09-website-integration.md` — blank line + `| Endpoint | Returns |` header restored before the `/site`, `/menus`, `/podcasts`, `/preview` rows so they render as a table again; `/tags` row unchanged.
+- M3: route `catch` now logs `{ name, code }` only (error name + Postgres `code`/`cause.code` via `pgErrorCode`, mirrored into `src/lib/public-tags.ts` from `hub-article-lock.ts`). Body still 500 `internal_error`.
+- N1: new `rowsOrThrow(res)` in `src/lib/public-tags.ts`; the route throws (500 path) when the `drizzle.execute` result has no `rows` array. `mapTagRows` unchanged (still tolerant per E12). Probe G6 gained one check.
+
+Gates (disposable PG16 `127.0.0.1:54411/ptags`, `log_statement=all`, data dir `/tmp/rfpg.*` because `/tmp/claude-0` is root-only and postgres cannot run there):
+
+| Gate | Exit | Key output |
+|---|---|---|
+| `npm run typecheck` | 0 | no errors |
+| loose tsc (payload-types moved out/back) | 0 | file restored |
+| `npm run lint` | 0 | 0 errors |
+| preflight / db:seed | 0 / 0 | `local database 127.0.0.1:54411/ptags — OK`, `[seed] done` |
+| `npm run probe:public-tags` | 0 | `[probe] 71/71 checks passed` (was 70) |
+| N1 mutation (guard line removed) | 1 | `FAIL G6 N1 result without a rows array throws`, 43/44; restored, sha256 match, 44/44 |

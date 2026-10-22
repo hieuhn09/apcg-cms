@@ -80,6 +80,25 @@ export interface PublicTag {
   count: number;
 }
 
+/** Postgres error code (err.code, then one level of `cause`); mirrors `pgErrorCode` in hub-article-lock.ts. */
+export function pgErrorCode(err: unknown): string | undefined {
+  const o = (typeof err === "object" && err !== null ? err : {}) as { code?: unknown; cause?: unknown };
+  if (typeof o.code === "string") return o.code;
+  const c = (typeof o.cause === "object" && o.cause !== null ? o.cause : {}) as { code?: unknown };
+  return typeof c.code === "string" ? c.code : undefined;
+}
+
+/**
+ * The `drizzle.execute` result must be an object with a `rows` array. Anything
+ * else is an unexpected driver shape: throw so the route answers 500 instead of
+ * a silent empty 200 (review N1).
+ */
+export function rowsOrThrow(res: unknown): Record<string, unknown>[] {
+  const rows = typeof res === "object" && res !== null ? (res as { rows?: unknown }).rows : undefined;
+  if (!Array.isArray(rows)) throw new Error("public-tags: unexpected query result shape");
+  return rows as Record<string, unknown>[];
+}
+
 /** Map raw rows to the response body. Missing `rows` = empty result. */
 export function mapTagRows(rows: Record<string, unknown>[] | undefined | null): { docs: PublicTag[]; totalDocs: number } {
   const list = rows ?? [];

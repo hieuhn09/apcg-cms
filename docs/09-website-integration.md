@@ -68,11 +68,16 @@ whole article list.
 - Growth margin: gtp at `minCount=2` was about 1,673 tags (21-10-26), about 84% of
   the 2,000 cap. Pass `limit=2000` and re-check `totalDocs` from time to time; a
   higher cap is a separate decision.
-- A duplicate tag slug inside one tenant (possible after imports; slug uniqueness
-  is enforced by a hook, not the database) appears as two rows.
+- Tag slugs are unique per tenant: the `Tags` hook checks it and the database
+  has the unique index `tags_tenant_slug_idx` on `(tenant_id, slug)` (migration
+  `20260801_082303_migration_hardening`). The final id tiebreaker in the order is
+  defensive only.
 - Gated on `features.articles` (404 when off). No `Cache-Control`; fetch it once
   with ISR (for example `revalidate: 300`), not per page view. A failed fetch
   should mean "no chips", never an error page.
+
+| Endpoint | Returns |
+|---|---|
 | `GET /api/public/site?locale=` | `{ site:{name,brand,seo,contact,socials,features,…}, pillars:[…] }` |
 | `GET /api/public/menus?type=header\|footer&locale=` | `{ menus:[…] }` |
 | `GET /api/public/podcasts\|newsletters\|corrections\|wire\|market?locale=` | `{ data:{ … } }` (feature-gated) |

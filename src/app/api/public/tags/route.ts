@@ -28,9 +28,9 @@ import config from "@payload-config";
 import { resolveReadToken, jsonPublic, preflight } from "@/lib/public";
 import { featureEnabled, supportedLanguages } from "@/lib/tenant";
 import { clampLocale } from "@/lib/locales";
-import { buildTagCountQuery, mapTagRows, parseLimit, parseMinCount } from "@/lib/public-tags";
+import { buildTagCountQuery, mapTagRows, parseLimit, parseMinCount, pgErrorCode, rowsOrThrow } from "@/lib/public-tags";
 
-type RawDb = { drizzle: { execute: (q: unknown) => Promise<{ rows?: Record<string, unknown>[] }> } };
+type RawDb = { drizzle: { execute: (q: unknown) => Promise<unknown> } };
 
 export function OPTIONS(request: Request) {
   return preflight(request);
@@ -52,9 +52,11 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const db = (payload.db as unknown as RawDb).drizzle;
     const res = await db.execute(buildTagCountQuery({ tenantId: tenant.id, minCount, limit, locale, defaultLocale }));
-    return jsonPublic(request, mapTagRows(res?.rows), 200);
-  } catch {
-    console.error("[public/tags] tag count query failed");
+    return jsonPublic(request, mapTagRows(rowsOrThrow(res)), 200);
+  } catch (err) {
+    // Error name + Postgres code only: never the message, SQL, params, tenant or token.
+    const name = err instanceof Error ? err.name : typeof err;
+    console.error("[public/tags] tag count query failed", { name, code: pgErrorCode(err) ?? null });
     return jsonPublic(request, { ok: false, status: "internal_error" }, 500);
   }
 }
