@@ -28,6 +28,7 @@ default). Disabled features return **404**.
 | `GET /api/public/articles?q=&locale=` | search (title/dek) |
 | `GET /api/public/articles?flag=deepDive\|sponsored\|pinnedToLatest\|breaking` | one-flag feed; `pinnedToLatest` excludes articles whose `pinnedUntil` has passed (empty `pinnedUntil` = pinned until manually unticked; the hourly `cron/unpin-expired` sweep clears the stale checkbox) |
 | `GET /api/public/articles/:slug?locale=` | single `{ doc }` |
+| `GET /api/public/tags?locale=&minCount=&limit=` | `{ docs:[{ slug, title, count }], totalDocs }` — tags used by at least `minCount` **published** articles, see below |
 
 #### `content_type` — keeping daily briefs out of news feeds
 
@@ -48,6 +49,35 @@ A site opts into filtering per call site:
 Filtering is a positive match. Never invert it client-side: ordinary articles
 carry `"article"` and briefs carry `"daily-brief"`, so `equals` is always
 sufficient and never risks dropping rows.
+
+#### `/api/public/tags` — tag usage counts (tag chips)
+
+Returns the token tenant's tags with how many **published** articles
+(`workflowStatus = published`, same rule as the article list) use each one, so a
+site can show a tag chip only when a tag has enough articles, without paging the
+whole article list.
+
+- `minCount`: default `1`, clamped to `1..1000`. `limit`: default `500`, hard cap
+  `2000`. Bad values fall back to the default (never a 400). Repeated params: the
+  first value wins.
+- Order: `count` desc, then `slug` asc, then id. `title` is the requested locale,
+  then the tenant's default locale, then the slug (never null).
+- `totalDocs` is the number of matching tags **before** the `limit` cap. If
+  `docs.length < totalDocs` the list was truncated: treat it as degraded (log it)
+  and hide all tag chips rather than show a partial list. No paging in v1.
+- Growth margin: gtp at `minCount=2` was about 1,673 tags (21-10-26), about 84% of
+  the 2,000 cap. Pass `limit=2000` and re-check `totalDocs` from time to time; a
+  higher cap is a separate decision.
+- Tag slugs are unique per tenant: the `Tags` hook checks it and the database
+  has the unique index `tags_tenant_slug_idx` on `(tenant_id, slug)` (migration
+  `20260801_082303_migration_hardening`). The final id tiebreaker in the order is
+  defensive only.
+- Gated on `features.articles` (404 when off). No `Cache-Control`; fetch it once
+  with ISR (for example `revalidate: 300`), not per page view. A failed fetch
+  should mean "no chips", never an error page.
+
+| Endpoint | Returns |
+|---|---|
 | `GET /api/public/site?locale=` | `{ site:{name,brand,seo,contact,socials,features,…}, pillars:[…] }` |
 | `GET /api/public/menus?type=header\|footer&locale=` | `{ menus:[…] }` |
 | `GET /api/public/podcasts\|newsletters\|corrections\|wire\|market?locale=` | `{ data:{ … } }` (feature-gated) |
