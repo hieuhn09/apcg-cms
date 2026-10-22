@@ -1,0 +1,14 @@
+{
+  "source": {
+    "siteFilter": "00000000-0000-0000-0000-0000000ab001"
+  },
+  "media": {
+    "hostAllowlist": [
+      "legacy-storage.fixture.invalid",
+      "mbolvnwkmkeroqmvbvmt.supabase.co"
+    ],
+    "hostRewrite": {
+      "legacy-storage.fixture.invalid": "127.0.0.1:55438"
+    }
+  }
+}

@@ -266,3 +266,86 @@ test("r2 guard: all four R2 vars required (blank counts as missing); message nam
   assert.match(r2GuardMessage(["R2_BUCKET"]), /R2_BUCKET is not set; images would be saved to this machine's disk/);
   assert.match(r2GuardMessage(["R2_BUCKET", "R2_ENDPOINT"]), /R2_BUCKET, R2_ENDPOINT are not set/);
 });
+
+/* ── abb (AsiaBeautyBrief, second network tenant) ── */
+const ABB: NetworkProfile = parseProfile(readJ("profiles/abb.json"));
+const ABB_OVERLAY = readJ("fixtures/abb-legacy/overlay.fixture.json");
+const ABB_TAGS = [...readFileSync(path.join(HERE, "../../lib/abb-taxonomy.ts"), "utf8").matchAll(/\{ slug: "([a-z0-9-]+)", title: "[^"]*", pillar:/g)].map((x) => x[1]);
+test("abb profile: tenant abb, legacy slug asiabeautybrief, pressroom single-home, /section prefix; entry accepts --tenant abb", () => {
+  assert.equal(ABB.tenant, "abb");
+  assert.deepEqual([...ABB.legacySiteSlugs], ["asiabeautybrief"]);
+  assert.deepEqual([...ABB.singleHomePillars], ["pressroom"]);
+  assert.equal(ABB.sectionPathPrefix, "/section");
+  assert.deepEqual([...ABB.requiredImageHosts!], ["mbolvnwkmkeroqmvbvmt.supabase.co"]);
+  for (const r of ["section", "directory", "get-listed", "pressroom", "press-submit", "standards"]) assert.ok(ABB.reservedSlugs!.includes(r), r);
+  const p = planEntry(["import", "--tenant", "abb", "--site", "asiabeautybrief", "--run-id", "abb-real-1"]);
+  assert.equal(p.profile.markerSourceName, "legacy:asiabeautybrief");
+  assert.deepEqual(planEntry(["validate-mapping", "--tenant", "abb"]).argv, ["--mapping", ABB.mappingPath]);
+  assert.throws(() => parseProfile({ ...readJ("profiles/abb.json"), sectionPathPrefix: "section" }), /sectionPathPrefix/);
+});
+test("abb mapping: provisional only status.map + media.bodyImages; --require-final refuses; fixture is final", () => {
+  setProfile(ABB);
+  const m = readJ("mappings/abb.mapping.json");
+  const v = validateMapping(m, ABB_OVERLAY);
+  assert.deepEqual(v.provisional.map((x) => x.key), ["status.map", "media.bodyImages"]);
+  assert.throws(() => validateMapping(m, ABB_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.doesNotThrow(() => validateMapping(readJ("fixtures/abb-legacy/abb.mapping.fixture.json"), ABB_OVERLAY, { requireFinal: true }));
+  assert.deepEqual(m.status.map, { published: "published", archived: "published", draft: "draft", scheduled: "draft", rejected: "SKIP" });
+  assert.deepEqual(m.authors.distribute.pool, ["Joanne Lau", "Kim Seo-yeon", "Kavita Rao", "Emi Fujita", "Nathan Leong"]);
+  assert.equal(m.authors.distribute.mode, "slugHash");
+  assert.equal(m.authors.distribute.keepLegacy, false);
+  assert.ok(!JSON.stringify(m.authors).includes("Newsroom"));
+  assert.equal(ABB_TAGS.length, 57);
+  assert.deepEqual(m.tags.keepOnly, ABB_TAGS);
+  // the same mapping is refused under the AER profile (pillars are per tenant)
+  setProfile(AER);
+  assert.throws(() => validateMapping(m, ABB_OVERLAY), /aer pillars|_provisional/);
+});
+test("abb taxonomy: supply-side -> supply keeps the sub-section; other old slugs pass through; briefing without sub", () => {
+  setProfile(ABB);
+  const m = readJ("mappings/abb.mapping.json");
+  for (const sub of ["ingredients-actives", "manufacturing-oem-odm", "packaging", "beauty-tech", "sustainability"]) {
+    assert.deepEqual(resolveTaxonomy("supply-side", sub, m), { ok: true, t: { pillar: "supply", subSection: sub, rehomed: true, oldSection: "supply-side", oldSub: sub } });
+  }
+  assert.deepEqual(resolveTaxonomy("supply-side", "", m), { ok: true, t: { pillar: "supply", rehomed: true, oldSection: "supply-side", oldSub: "" } });
+  assert.deepEqual(resolveTaxonomy("briefing", "market-moves", m), { ok: true, t: { pillar: "briefing", subSection: "market-moves", rehomed: false, oldSection: "briefing", oldSub: "market-moves" } });
+  assert.deepEqual(resolveTaxonomy("briefing", "", m), { ok: true, t: { pillar: "briefing", rehomed: false, oldSection: "briefing", oldSub: "" } });
+  assert.deepEqual(resolveTaxonomy("professional", "medical-aesthetics", m).ok, true);
+  assert.deepEqual(resolveTaxonomy("press-room", "", m), { ok: true, t: { pillar: "pressroom", rehomed: true, oldSection: "press-room", oldSub: "" } });
+});
+test("abb tags: legacy text[] slugified then only the 57 approved tags kept", () => {
+  const m = readJ("mappings/abb.mapping.json");
+  const got = legacyTags(["Indonesia", "K-beauty Culture", "skincare", "Devices", " serum ", "M&A"], { tags: { normalize: "lowercase-trim-dedupe", maxPerArticle: 12, drop: [], renames: {}, keepOnly: m.tags.keepOnly } } as never).map((t) => t.slug);
+  assert.deepEqual(got, ["indonesia", "k-beauty-culture", "devices"]);
+});
+test("abb authors slugHash: every author in the pool, stable, legacy byline ignored", () => {
+  const pool = ["Joanne Lau", "Kim Seo-yeon", "Kavita Rao", "Emi Fujita", "Nathan Leong"];
+  const seen = new Set<string>();
+  for (let i = 0; i < 200; i++) seen.add(slugHashAuthor(`abb-${i}`, pool));
+  assert.deepEqual([...seen].sort(), [...pool].sort());
+  assert.equal(slugHashAuthor("same-slug", pool), slugHashAuthor("same-slug", pool));
+});
+test("abb redirects: old pillar pages go to /section/<pillar>; supply-side to /section/supply; GTP/AER unprefixed unchanged", () => {
+  setProfile(ABB);
+  const kr = readJ("fixtures/abb-legacy/known-routes.json");
+  const m = readJ("mappings/abb.mapping.json");
+  const entries = [
+    { legacyId: "1", kind: "article", slug: "s1", status: "published", oldUrl: "/article/s1", oldSection: "supply-side", oldSub: "packaging", pillar: "supply", subSection: "packaging" },
+    { legacyId: "2", kind: "article", slug: "s2", status: "published", oldUrl: "/article/s2", oldSection: "briefing", oldSub: "", pillar: "briefing" },
+  ] as never;
+  const b = buildRedirects(entries, m, kr);
+  assert.deepEqual(b.errors, []);
+  const to = (from: string) => b.rules.find((r) => r.from === from)?.to;
+  assert.equal(to("/supply-side"), "/section/supply");
+  assert.equal(to("/supply-side/packaging"), "/section/supply/packaging");
+  assert.equal(to("/briefing"), "/section/briefing");
+  for (const g of ["/events-awards", "/pro", "/studio"]) assert.ok(b.rules.some((r) => r.from === g && r.status === 410), g);
+  setProfile(AER);
+  const a = buildRedirects([{ legacyId: "1", kind: "article", slug: "s1", status: "published", oldUrl: "/article/s1", oldSection: "essays", oldSub: "", pillar: "asia-watch" }] as never, { archivedAs: "section", urls: { oldOrigin: "https://x", articlePathTemplate: "/article/{slug}", sectionPaths: { essays: "/essays" }, extraLegacyPaths: [], gonePaths: [] } }, readJ("fixtures/aer-legacy/known-routes.json"));
+  assert.ok(a.rules.some((r) => r.from === "/essays" && r.to === "/asia-watch"));
+});
+test("abb image hosts: overlay without the legacy storage host is refused", () => {
+  setProfile(ABB);
+  const m = readJ("fixtures/abb-legacy/abb.mapping.fixture.json");
+  assert.throws(() => validateMapping(m, { ...ABB_OVERLAY, media: { hostAllowlist: ["other.example.com"], hostRewrite: {} } }), /mbolvnwkmkeroqmvbvmt/);
+});

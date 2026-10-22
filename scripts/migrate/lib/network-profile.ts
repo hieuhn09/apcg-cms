@@ -39,6 +39,8 @@ export interface NetworkProfile {
   redirectNonPillarSectionsToMappedPillar?: boolean;
   /** Legacy image hosts the effective media.hostAllowlist MUST contain (validate-mapping / import --apply refuse otherwise). Absent = no check (GTP). */
   requiredImageHosts?: readonly string[];
+  /** Path prefix of the NEW site's section pages (ABB: "/section" -> /section/<pillar>[/<sub>]). Absent = "" (/<pillar>, GTP/AER behaviour). */
+  sectionPathPrefix?: string;
 }
 
 export const GTP_PROFILE: NetworkProfile = Object.freeze({
@@ -85,6 +87,7 @@ const ProfileSchema = z
     mediaPrefix: z.string().regex(SLUG),
     redirectNonPillarSectionsToMappedPillar: z.boolean().optional(),
     requiredImageHosts: z.array(z.string().regex(/^[a-z0-9.-]+$/)).optional(),
+    sectionPathPrefix: z.string().regex(/^\/[a-z0-9][a-z0-9-]*$/).optional(),
   })
   .strict();
 

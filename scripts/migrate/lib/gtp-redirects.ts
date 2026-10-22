@@ -35,7 +35,8 @@ const STATIC_LEGACY: Record<string, string> = {
 const FEEDS = ["/feed", "/rss", "/rss.xml", "/feed.xml"];
 
 function sectionTarget(pillar: string, sub?: string): string {
-  return sub ? `/${pillar}/${sub}` : `/${pillar}`;
+  const pre = profile().sectionPathPrefix ?? "";
+  return sub ? `${pre}/${pillar}/${sub}` : `${pre}/${pillar}`;
 }
 
 export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping, "archivedAs"> & { urls: Omit<Mapping["urls"], "gonePaths"> & { gonePaths?: readonly string[] } }, kr: KnownRoutes): RedirectBuild {
@@ -102,7 +103,7 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
     add(p, null, 410, "static", "rule", `gone:${p}`);
     out.counts.gone = (out.counts.gone ?? 0) + 1;
   }
-  const feedTarget = kr.static.find((s) => FEEDS.includes(s)) ?? `/${profile().pillarSlugs[0] as string}`;
+  const feedTarget = kr.static.find((s) => FEEDS.includes(s)) ?? sectionTarget(profile().pillarSlugs[0] as string);
   for (const f of FEEDS) {
     add(f, feedTarget, 301, "feed", "rule", `feed:${f}`);
     out.counts.feeds = (out.counts.feeds ?? 0) + 1;

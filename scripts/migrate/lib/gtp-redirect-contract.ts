@@ -4,6 +4,7 @@
  * `build-gtp-redirects.ts --emit-gtp-web`.
  */
 import { normaliseKey } from "./normalise-path";
+import { profile } from "./network-profile";
 
 export interface KnownRoutes {
   static: string[];
@@ -26,7 +27,10 @@ export function isKnownDestination(dest: string, kr: KnownRoutes): boolean {
   if (!dest.startsWith("/")) return false;
   if (dest.startsWith(kr.articlePrefix)) return ARTICLE_SLUG.test(dest.slice(kr.articlePrefix.length));
   if (kr.static.includes(dest)) return true;
-  const parts = dest.split("/").filter(Boolean);
+  // Section pages live under the tenant profile's sectionPathPrefix (ABB: /section/<pillar>[/<sub>]); "" = /<pillar> (GTP/AER).
+  const pre = profile().sectionPathPrefix ?? "";
+  if (pre && !dest.startsWith(`${pre}/`)) return false;
+  const parts = dest.slice(pre.length).split("/").filter(Boolean);
   if (parts.length === 1) return kr.sections.includes(parts[0] as string);
   if (parts.length === 2) return (kr.subsections[parts[0] as string] ?? []).includes(parts[1] as string);
   return false;

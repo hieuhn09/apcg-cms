@@ -54,6 +54,7 @@
     "migrate:network": "tsx scripts/migrate/network/network-legacy.ts",
     "test:migrate-network": "tsx --test scripts/migrate/network/*.test.ts",
     "rehearse:network-aer": "bash scripts/migrate/network/fixtures/aer-legacy/rehearse-aer.sh",
+    "rehearse:network-abb": "bash scripts/migrate/network/fixtures/abb-legacy/rehearse-abb.sh",
     "audit:gcv-export": "tsx scripts/audit/gcv-audit-export.ts",
     "audit:apply-luxury": "tsx scripts/audit/apply-luxury-decisions.ts",
     "audit:migrate-lifestyle": "tsx scripts/audit/migrate-lifestyle-subsections.ts",

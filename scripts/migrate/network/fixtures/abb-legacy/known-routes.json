@@ -1,0 +1,48 @@
+{
+  "static": [
+    "/about",
+    "/team",
+    "/contact",
+    "/privacy",
+    "/terms",
+    "/newsletters",
+    "/search",
+    "/standards",
+    "/advertise",
+    "/licensing",
+    "/directory",
+    "/get-listed",
+    "/pressroom",
+    "/press-submit",
+    "/feed.xml"
+  ],
+  "sections": [
+    "briefing",
+    "markets",
+    "supply",
+    "trends",
+    "professional",
+    "pressroom"
+  ],
+  "subsections": {
+    "briefing": [
+      "market-moves",
+      "deals-money"
+    ],
+    "markets": [
+      "korea"
+    ],
+    "supply": [
+      "ingredients-actives",
+      "packaging"
+    ],
+    "trends": [
+      "trend-radar"
+    ],
+    "professional": [
+      "medical-aesthetics"
+    ],
+    "pressroom": []
+  },
+  "articlePrefix": "/article/"
+}

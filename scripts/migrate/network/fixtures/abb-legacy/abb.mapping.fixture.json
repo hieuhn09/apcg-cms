@@ -1,0 +1,222 @@
+{
+  "version": 1,
+  "_provisional": [],
+  "_evidence": "REHEARSAL fixture mapping for tenant abb (synthetic data). Same as mappings/abb.mapping.json with every provisional owner decision taken at its suggested value (archived -> published, body images dropped); never use for a real run.",
+  "source": {
+    "schema": "abb_ro",
+    "tableAllowList": [
+      "articles",
+      "sites",
+      "site_authors"
+    ],
+    "columns": {
+      "id": "id",
+      "slug": "slug",
+      "title": "title",
+      "dek": "excerpt",
+      "kicker": "kicker",
+      "body": "body_sections",
+      "status": "status",
+      "section": "section",
+      "subsection": "subsection",
+      "tags": "tags",
+      "format": "format",
+      "featured": "featured",
+      "isHero": "is_hero",
+      "readMinutes": "read_minutes",
+      "heroImage": "featured_image",
+      "heroCredit": "featured_image_credit",
+      "seo": "seo",
+      "sourceUrl": "source_url",
+      "byline": "byline",
+      "takeaways": "takeaways",
+      "countries": "countries",
+      "publishedAt": "published_at",
+      "createdAt": "created_at",
+      "updatedAt": "updated_at"
+    }
+  },
+  "body": {
+    "format": "sections",
+    "converter": "html-to-lexical",
+    "lineBreaks": "space"
+  },
+  "status": {
+    "map": {
+      "published": "published",
+      "archived": "published",
+      "draft": "draft",
+      "scheduled": "draft",
+      "rejected": "SKIP"
+    },
+    "unknown": "reject"
+  },
+  "categories": {
+    "map": {
+      "supply-side/ingredients-actives": {
+        "pillar": "supply",
+        "subSection": "ingredients-actives"
+      },
+      "supply-side/manufacturing-oem-odm": {
+        "pillar": "supply",
+        "subSection": "manufacturing-oem-odm"
+      },
+      "supply-side/packaging": {
+        "pillar": "supply",
+        "subSection": "packaging"
+      },
+      "supply-side/beauty-tech": {
+        "pillar": "supply",
+        "subSection": "beauty-tech"
+      },
+      "supply-side/sustainability": {
+        "pillar": "supply",
+        "subSection": "sustainability"
+      },
+      "supply-side/*": {
+        "pillar": "supply"
+      },
+      "press-room/*": {
+        "pillar": "pressroom"
+      }
+    },
+    "fallback": null,
+    "unmapped": "reject"
+  },
+  "authors": {
+    "resolve": "byColumn",
+    "map": {},
+    "staff": [
+      "Joanne Lau",
+      "Kim Seo-yeon",
+      "Kavita Rao",
+      "Emi Fujita",
+      "Nathan Leong"
+    ],
+    "distribute": {
+      "pool": [
+        "Joanne Lau",
+        "Kim Seo-yeon",
+        "Kavita Rao",
+        "Emi Fujita",
+        "Nathan Leong"
+      ],
+      "keepLegacy": false,
+      "groupBy": "none",
+      "maxSpread": 1,
+      "mode": "slugHash"
+    },
+    "createMissing": false
+  },
+  "tags": {
+    "keepOnly": [
+      "brands-launches",
+      "retail-e-commerce",
+      "travel-retail-duty-free",
+      "mergers-acquisitions",
+      "funding-ipo",
+      "earnings",
+      "regulatory-radar-by-market",
+      "safety-recalls",
+      "trade-tariffs",
+      "appointments",
+      "the-founder-brief",
+      "k-beauty-export-watch",
+      "seoul-innovation",
+      "c-beauty-goes-global",
+      "regulations-nmpa",
+      "douyin-tmall-watch",
+      "j-beauty-heritage-brands",
+      "drugstore-economy",
+      "indonesia",
+      "thailand",
+      "vietnam",
+      "philippines",
+      "singapore-malaysia-halal-beauty",
+      "india-d2c-boom",
+      "ayurveda-modernized",
+      "asia-brands-abroad",
+      "global-brands-in-asia",
+      "ingredient-spotlight",
+      "fragrance-sensorial",
+      "naturals-fermentation",
+      "inside-the-factory",
+      "formulation-trends",
+      "quality-certification",
+      "sustainable-packaging",
+      "design-decoration",
+      "ai-personalization",
+      "devices",
+      "beauty-retail-tech",
+      "esg-compliance",
+      "refill-recycle-economy",
+      "social-beauty-watch",
+      "seasonal-cultural-trends",
+      "ingredient-decoder",
+      "derm-approved",
+      "product-radar",
+      "editors-picks",
+      "k-beauty-culture",
+      "mens-grooming",
+      "clean-wellness-crossover",
+      "devices-injectables",
+      "clinic-business",
+      "regulation-safety",
+      "hotel-resort-spas",
+      "wellness-retreats",
+      "spa-product-brands",
+      "hair-nail-industry",
+      "distribution-education"
+    ],
+    "renames": {}
+  },
+  "formatTags": {
+    "enabled": false,
+    "include": []
+  },
+  "countries": {
+    "match": "either"
+  },
+  "readMin": {
+    "wpm": 230
+  },
+  "pin": {
+    "fromFlags": false,
+    "maxPinned": 0
+  },
+  "archivedAs": "section",
+  "events": {
+    "enabled": false
+  },
+  "slug": {
+    "preserve": true,
+    "dedupe": "numeric-suffix",
+    "reservedSlugs": []
+  },
+  "urls": {
+    "oldOrigin": "https://asiabeautybrief.com",
+    "articlePathTemplate": "/article/{slug}",
+    "sectionPaths": {
+      "briefing": "/briefing",
+      "markets": "/markets",
+      "supply-side": "/supply-side",
+      "trends": "/trends",
+      "professional": "/professional",
+      "press-room": "/press-room"
+    },
+    "extraLegacyPaths": [],
+    "gonePaths": [
+      "/events-awards",
+      "/pro",
+      "/studio"
+    ]
+  },
+  "media": {
+    "maxBytes": 20971520,
+    "failureBudgetPercent": 2,
+    "fetchTimeoutMs": 30000,
+    "concurrency": 3,
+    "hotlinkPolicy": "download",
+    "bodyImages": "drop"
+  }
+}

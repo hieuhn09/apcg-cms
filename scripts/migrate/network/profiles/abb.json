@@ -1,0 +1,28 @@
+{
+  "id": "abb",
+  "tenant": "abb",
+  "legacySiteSlugs": ["asiabeautybrief"],
+  "markerSourceName": "legacy:asiabeautybrief",
+  "legacyDbEnv": "LEGACY_DB_URL",
+  "readTokenEnv": "CENTRAL_READ_TOKEN",
+  "mappingPath": "scripts/migrate/network/mappings/abb.mapping.json",
+  "fixtureSiteId": "00000000-0000-0000-0000-0000000ab001",
+  "pillarSlugs": ["briefing", "markets", "supply", "trends", "professional", "pressroom"],
+  "singleHomePillars": ["pressroom"],
+  "extraOwnerDecisionKeys": {
+    "status.map": "ABB-archived",
+    "categories.map": "ABB-section-map",
+    "authors.distribute": "ABB-bylines",
+    "tags.keepOnly": "ABB-tags",
+    "media.bodyImages": "ABB-body-images"
+  },
+  "reservedSlugs": [
+    "briefing", "markets", "supply", "trends", "professional", "pressroom",
+    "section", "article", "directory", "get-listed", "press-submit", "newsletters", "about", "standards", "team", "contact",
+    "advertise", "licensing", "privacy", "terms", "search", "preview", "api", "sitemap", "robots", "feed"
+  ],
+  "mediaPrefix": "abb",
+  "redirectNonPillarSectionsToMappedPillar": true,
+  "requiredImageHosts": ["mbolvnwkmkeroqmvbvmt.supabase.co"],
+  "sectionPathPrefix": "/section"
+}

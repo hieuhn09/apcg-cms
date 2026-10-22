@@ -11,6 +11,9 @@ npm run migrate:network -- <lệnh> --tenant <slug Central> --site <slug site c�
 - Lệnh: `discover`, `export`, `validate-mapping`, `import`, `rewrite-links`,
   `timestamps-fix`, `rollback`, `redirects`, `verify`. Cờ của từng lệnh giống hệt bản GTP
   (`scripts/migrate/lib/cli-spec.ts`).
+- Trang chuyên mục của web mới: mặc định `/<pillar>` (GTP, AER). Hồ sơ có thể đặt
+  `sectionPathPrefix` (ABB: `/section`, tức `/section/<pillar>/<mục con>`); redirect và
+  kiểm đích redirect theo tiền tố này.
 - Mỗi tựa có một hồ sơ trong repo: `network/profiles/<tenant>.json` (tenant, các pillar,
   pillar một nhà, nhãn nguồn `legacy:<domain>`, tên biến môi trường) và một mapping
   `network/mappings/<tenant>.mapping.json`. GTP KHÔNG dùng bộ này (GTP vẫn chạy
@@ -25,7 +28,8 @@ npm run migrate:network -- <lệnh> --tenant <slug Central> --site <slug site c�
 - Lệnh nạp Payload đôi khi kẹt lúc khởi động (thoát mã 75, chưa làm gì). Bộ này tự chạy
   lại đúng lệnh đó tối đa 3 lần. Nếu vẫn 75: chạy lại y nguyên lệnh.
 
-Diễn tập trên dữ liệu giả (máy dev, không đụng DB thật): `npm run rehearse:network-aer`.
+Diễn tập trên dữ liệu giả (máy dev, không đụng DB thật): `npm run rehearse:network-aer`,
+`npm run rehearse:network-abb`.
 Test: `npm run test:migrate-network`.
 
 ## Asia Economic Review (`--tenant aer`)
@@ -173,3 +177,130 @@ Rủi ro phải nói rõ (giống VowAsia Amendment 2): role `aer_migrator` đ�
 pg_net `net._http_response`, `net.http_request_queue` (Supabase cấp cho mọi role), và nếu
 tự tắt chế độ chỉ-đọc thì ghi được hàng đợi HTTP, nên lộ mật khẩu là lộ nhiều hơn dữ liệu
 AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role tự hết hạn sau 14 ngày.
+
+## AsiaBeautyBrief (`--tenant abb`)
+
+- Slug Central: **`abb`**. Role DB cũ: `abb_migrator`; schema view: `abb_ro`; overlay riêng:
+  `~/abb-private/overlay.json`; run-id: `abb-real-1`, `abb-real-2`, ...
+- File SQL riêng của ABB (không sửa gì trong file): `sql/01-discover-abb.sql`,
+  `sql/02-create-readonly-role-views-abb.sql`, `sql/02p-set-password-abb.sql`,
+  `sql/03-drop-role-and-views-abb.sql`. Không dùng file 02/02p/03 không hậu tố (đó là của AER).
+- Dòng site cũ: slug `asiabeautybrief` (khám phá 22-10-26: 415 bài = 322 published, 75 archived,
+  18 draft, 0 rejected; 398 ảnh đại diện ở `mbolvnwkmkeroqmvbvmt.supabase.co`; `media_assets` 0 dòng).
+- Mapping `mappings/abb.mapping.json`:
+  - `supply-side` thành pillar `supply`, giữ mục con; mọi pillar và mục con cũ khác giữ nguyên
+    slug; `briefing` không mục con vào pillar;
+  - tác giả chia cho 5 người theo băm slug (`mode: slugHash`, ổn định qua các lượt chạy bù);
+    byline cũ "ABB Newsroom" không giữ;
+  - chỉ giữ 57 tag đã duyệt của `scripts/lib/abb-taxonomy.ts` (so theo slug của tag cũ); SEO bỏ;
+  - draft thành nháp, published thành bài đã đăng; ảnh đại diện lên R2 của tenant, credit lấy
+    từ `featured_image_credit`;
+  - **còn chờ chủ dự án** (`_provisional`): bài `archived` (đang để nhập là bài đã đăng theo D7;
+    có thể chọn nhập nháp hoặc bỏ qua như AER), và ảnh trong thân bài (đang `drop`, chốt sau
+    khi bước 1 cho số ảnh). Bước 8 (`--require-final`) chỉ qua khi hai mục này đã chốt.
+- Redirect: trang chuyên mục mới là `/section/<pillar>` (`sectionPathPrefix`); `/supply-side`
+  thành `/section/supply`; `/events-awards`, `/pro`, `/studio` trả 410. Dạng cũ `?sub=<Tên>` và
+  các trang tĩnh (`/exhibition`, `/press-room`, `/editorial-standards`, ...) viết tay trong
+  `abb-web` lúc cutover. URL bài `/article/<slug>` giống site cũ.
+
+### Các bước của chủ dự án (B5), mỗi lần một bước
+
+Điều kiện trước, chỗ giữ chỗ `ID_SITE` / `HOST_CENTRAL`, và rủi ro pg_net: như phần AER ở trên.
+Tenant `abb` và taxonomy phải có trên Central trước bước 9.
+
+Bước 1 đến 4 làm trong SQL Editor của project **globaltravelpost**: chép TOÀN BỘ file, dán,
+bấm Run một lần.
+
+1. **Khám phá**: chạy `scripts/migrate/network/sql/01-discover-abb.sql`, bấm "Download CSV" và
+   gửi file. Cần thấy hàng `1 site match | rows matching asiabeautybrief | 1`. Khác 1: dừng và báo.
+2. **Chủ dự án chốt** bài `archived` và ảnh trong thân bài (agent soạn từ mục `4b archived posts`
+   và `7 body_sections images` của bước 1).
+3. **Tạo role chỉ-đọc**: chạy `sql/02-create-readonly-role-views-abb.sql`. Ô kết quả phải là
+   `SELF-CHECK OK` kèm số bài.
+4. **Đặt mật khẩu**: chạy `sql/02p-set-password-abb.sql`, bấm nút copy của ô `new_secret`.
+5. **Overlay riêng** trên Mac (Terminal mới):
+   ```
+   mkdir -p ~/abb-private
+   ```
+   ```
+   chmod 700 ~/abb-private
+   ```
+   Agent gửi nội dung `overlay.json` để lưu bằng `nano`.
+6. **URL DB cũ** (không hiện lên màn hình):
+   ```
+   cd ~/apcg-cms
+   ```
+   ```
+   read -s LEGACY_PW
+   ```
+   Dán mật khẩu, Enter. Rồi (agent gửi đúng host Session pooler, cổng 5432):
+   ```
+   export LEGACY_DB_URL="postgresql://abb_migrator.mbolvnwkmkeroqmvbvmt:$LEGACY_PW@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+   ```
+7. **Khám phá bằng công cụ**:
+   ```
+   npm run migrate:network -- discover --tenant abb --site ID_SITE --mapping-overlay ~/abb-private/overlay.json
+   ```
+8. **Kiểm mapping đã chốt**:
+   ```
+   npm run migrate:network -- validate-mapping --tenant abb --mapping-overlay ~/abb-private/overlay.json --require-final
+   ```
+9. **URL Central** rồi chạy khô:
+   ```
+   read -s DATABASE_URL
+   ```
+   ```
+   export DATABASE_URL
+   ```
+   ```
+   node -e 'console.log(new URL(process.env.DATABASE_URL).pathname)'
+   ```
+   Phải in đúng `/neondb`. Rồi:
+   ```
+   npm run migrate:network -- import --tenant abb --site ID_SITE --mapping-overlay ~/abb-private/overlay.json --confirm-host=HOST_CENTRAL
+   ```
+10. **Ghi thử 50 bài**:
+    ```
+    npm run migrate:network -- import --tenant abb --site ID_SITE --mapping-overlay ~/abb-private/overlay.json --apply --limit 50 --run-id abb-real-1 --confirm-host=HOST_CENTRAL
+    ```
+11. **Chạy toàn bộ**:
+    ```
+    caffeinate -i npm run migrate:network -- import --tenant abb --site ID_SITE --mapping-overlay ~/abb-private/overlay.json --apply --resume --run-id abb-real-1 --confirm-host=HOST_CENTRAL
+    ```
+12. **Sửa link trong bài**:
+    ```
+    npm run migrate:network -- rewrite-links --tenant abb --run-id abb-real-1 --apply --confirm-host=HOST_CENTRAL
+    ```
+13. **Sửa ngày tạo/sửa** (URL direct của Neon, như AER bước 13):
+    ```
+    read -s DIRECT_URL
+    ```
+    ```
+    export DIRECT_URL
+    ```
+    ```
+    node -e 'console.log(new URL(process.env.DIRECT_URL).pathname)'
+    ```
+    ```
+    npm run migrate:network -- timestamps-fix --tenant abb --run-id abb-real-1
+    ```
+    ```
+    psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f scripts/migrate/out/abb-real-1/timestamps-fix.sql
+    ```
+14. **Kiểm 12 phép**:
+    ```
+    npm run migrate:network -- verify --tenant abb --site ID_SITE --run-id abb-real-1 --mapping-overlay ~/abb-private/overlay.json --confirm-host=HOST_CENTRAL
+    ```
+15. **Chạy bù trước cutover** (site cũ còn đăng bài): run-id MỚI `abb-real-2`, chạy khô trước:
+    ```
+    npm run migrate:network -- import --tenant abb --site ID_SITE --mapping-overlay ~/abb-private/overlay.json --run-id abb-real-2 --confirm-host=HOST_CENTRAL
+    ```
+    ```
+    npm run migrate:network -- import --tenant abb --site ID_SITE --mapping-overlay ~/abb-private/overlay.json --apply --run-id abb-real-2 --confirm-host=HOST_CENTRAL
+    ```
+    Rồi bước 12 đến 14 với `abb-real-2`.
+16. **Lúc cutover**: dựng redirect, rồi chạy `sql/03-drop-role-and-views-abb.sql` (ô kết quả
+    `CLEANUP OK`):
+    ```
+    npm run migrate:network -- redirects --tenant abb --run-id abb-real-1 --known-routes ~/abb-private/known-routes.json --mapping-overlay ~/abb-private/overlay.json
+    ```
