@@ -1,0 +1,212 @@
+-- OWNER-RUN. KHÔNG tự chạy. Đọc scripts/migrate/vowasia/VOWASIA-LEGACY.md trước.
+--
+-- 02-create-readonly-role-views.sql.template: PHƯƠNG ÁN 2 (khuyên dùng).
+-- Tạo role chỉ-đọc RIÊNG vowasia_migrator và schema RIÊNG vowasia_ro chứa hai
+-- view (articles, sites) lọc cứng theo id site VowAsia. KHÔNG đổi bảng gốc,
+-- KHÔNG bật RLS, KHÔNG đụng role/policy/grant của site khác (kể cả gtp_migrator).
+--
+-- Cách dùng (chi tiết từng lệnh: VOWASIA-LEGACY.md, bước O3):
+--   1. Chép file này ra NGOÀI repo, điền các chỗ giữ chỗ (thay HẾT mọi lần xuất hiện):
+--        __VOWASIA_SITE_ID__     id site VowAsia (lấy từ file 01, mục 6)
+--        __VOWASIA_SITE_SLUG__   slug của dòng site đó (công cụ discover chỉ nhận vowasia;
+--                                nếu slug thật khác: DỪNG và báo, cần amendment)
+--        __ARTICLE_COLUMNS__     danh sách cột TƯỜNG MINH của bảng articles, có
+--                                cột site_id, KHÔNG có cột cá nhân (email, IP,
+--                                ghi chú nội bộ...). Lấy tên cột từ file 01 mục 6b.
+--                                Ví dụ: "id", "site_id", "title"
+--        __LEGACY_DB_NAME__      tên database CŨ (dòng database_name của file 01).
+--                                File tự dừng nếu đang nối vào database khác tên này
+--                                hoặc vào 'neondb' (Central).
+--        (tên bảng gốc public.articles / public.sites: sửa nếu file 01 cho thấy khác)
+--   2. Chạy file đã điền đúng như VOWASIA-LEGACY.md:
+--        psql "$LEGACY_ADMIN_URL" -X -q -t -A -v ON_ERROR_STOP=1 -f <file đã điền>
+--      (-t -A: chỉ in giá trị, không khung bảng, không dòng '(1 row)').
+--   3. TỰ KIỂM chạy BÊN TRONG giao dịch, TRƯỚC COMMIT. Ba kết cục:
+--      - dòng cuối là đúng 'SELF-CHECK OK': role, schema, hai view và quyền SELECT
+--        của role trên hai view đều thật sự tồn tại (tính lại sau COMMIT);
+--      - dòng cuối là 'SELF-CHECK FAILED: nothing created': không lệnh nào báo lỗi
+--        nhưng kết quả không đủ (ví dụ chạy thiếu ON_ERROR_STOP): DỪNG, chạy 03 rồi báo;
+--      - có dòng 'ERROR: ... STOP: ...' (psql dừng ngay): cả giao dịch tự huỷ, không
+--        role, không schema nào được tạo. DỪNG (HS5) và báo lại nguyên văn.
+--   4. CHỈ SAU 'SELF-CHECK OK' mới đặt mật khẩu (bằng \password, KHÔNG ghi vào file này).
+--
+-- Ghi chú (nói thật về giới hạn):
+--   - Role không đọc/ghi được bảng gốc, nhưng vẫn thừa hưởng quyền của PUBLIC:
+--     CONNECT, TEMP (bảng tạm), EXECUTE các hàm PUBLIC gọi được. Tự kiểm DỪNG nếu
+--     role gọi được BẤT KỲ hàm SECURITY DEFINER nào ngoài pg_catalog /
+--     information_schema (hàm đó chạy bằng quyền chủ hàm, có thể đọc/ghi bảng gốc).
+--     Hàm trả kiểu trigger / event_trigger KHÔNG tính (không gọi trực tiếp được;
+--     Supabase hay có hàm kiểu handle_new_user).
+--     Hàm SECURITY DEFINER trả trigger/event_trigger KHÔNG bị chặn: về lý thuyết role
+--     (có TEMP thừa hưởng từ PUBLIC) có thể kích hoạt chúng qua bảng tạm nếu tự tắt
+--     default_transaction_read_only; công cụ discover không làm được (BEGIN READ ONLY,
+--     chỉ SELECT), và chính file này không gây hại gì từ đó.
+--     Chỉ nới khi chủ đã xem file 01 mục 5d và chấp nhận: đổi allow_definer_outside_public
+--     trong khối TỰ KIỂM từ 'no' thành 'yes' (vẫn chặn hàm trong schema public).
+--   - PostgreSQL <= 14: PUBLIC mặc định có CREATE trên schema public, nên tự kiểm
+--     LUÔN dừng ở đó. Đó là hành vi đúng: dừng và báo, KHÔNG tự REVOKE.
+--   - default_transaction_read_only chỉ là MẶC ĐỊNH của phiên (role tự tắt được);
+--     hàng rào thật là: role chỉ có SELECT trên hai view. Tự kiểm DỪNG nếu dòng
+--     ALTER ROLE ... default_transaction_read_only = on bị xoá/gõ sai
+--     (đọc lại pg_db_role_setting trong cùng giao dịch).
+--   - Amendment 2 (19-10-26): allow_public_relations cho qua ĐÚNG hai bảng tiện ích
+--     mở rộng pg_net của Supabase, net._http_response và net.http_request_queue
+--     (khớp chính xác schema.tên VÀ relkind 'r'). Mặc định Supabase cấp quyền cho
+--     PUBLIC trên hai bảng này (mọi role, kể cả anon/authenticated, đều có), nên role
+--     mới thừa hưởng; file này KHÔNG REVOKE/GRANT gì trong schema net. Mọi quan hệ
+--     khác mà PUBLIC với tới (kể cả bảng khác trong net, hay cùng tên ở schema khác)
+--     vẫn DỪNG. Giới hạn (nói thẳng): role ĐỌC được hai bảng này VÔ ĐIỀU KIỆN
+--     (chỉ-đọc không chặn SELECT): net._http_response chứa nội dung phản hồi HTTP
+--     của các tích hợp khác của site cũ (khoảng 28 dòng), cùng net.http_request_queue.
+--     Nếu role tự tắt default_transaction_read_only (đó chỉ là MẶC ĐỊNH), nó GHI được:
+--     ghi vào net.http_request_queue, theo thiết kế pg_net, có thể khiến máy chủ DB
+--     gửi yêu cầu HTTP ra ngoài (chưa kiểm trên pg_net thật); và sửa giả/xoá dòng
+--     net._http_response. Vậy lộ mật khẩu migrator làm lộ NHIỀU HƠN dữ liệu VowAsia.
+--     Giảm thiểu: làm B3 tới B6 trong MỘT lần ngồi (tạo role, chạy discover, xoá role);
+--     nên rút hạn VALID UNTIL ngắn hơn 14 ngày nếu được (khuyến nghị, file này không
+--     đổi giá trị); mật khẩu chỉ chủ giữ, chỉ ở clipboard/Notes rồi xoá cả Recently
+--     Deleted; xoá role khi xong (03 / 03e). Project khác có bảng tiện ích khác: vẫn
+--     DỪNG, cần amendment mới.
+--   - Role có hạn dùng (VALID UNTIL, 14 ngày). Đổi mật khẩu KHÔNG gia hạn. Nếu
+--     Giai đoạn B bị hoãn lâu hơn: chạy 03 rồi chạy lại file này, HOẶC
+--     ALTER ROLE vowasia_migrator VALID UNTIL với mốc mới (xem VOWASIA-LEGACY.md).
+--   - KHÔNG chạy REVOKE ... FROM PUBLIC trên bảng/schema public: có thể làm hỏng site cũ.
+--   - Role là cấp CỤM (cluster-wide), không riêng một database.
+--   - View chạy bằng quyền của chủ view (người chạy file này), nên chủ cần SELECT
+--     trên bảng gốc; nếu người chạy là chủ bảng thì RLS của bảng gốc không lọc view.
+--   - View khoá cột của bảng articles/sites: KHÔNG chạy migration đổi cột các bảng
+--     đó của site cũ giữa lúc chạy file này và lúc chạy 03 (migration có thể lỗi).
+
+-- Đang nối vào đâu, bằng ai (chỉ để ghi lại; chốt thật là khối DO ngay dưới).
+SELECT current_database() AS database_name, current_user AS running_as;
+
+BEGIN;
+-- Nếu bảng gốc đang bận (khoá), chờ tối đa 3 giây rồi báo lỗi thay vì chặn site cũ lâu.
+SET LOCAL lock_timeout = '3s';
+
+-- Chặn chạy khi chưa điền chỗ giữ chỗ, hoặc khi nối nhầm database.
+DO $$
+BEGIN
+  IF '__VOWASIA_SITE_ID__' LIKE '\_\_VOWASIA%' OR '__VOWASIA_SITE_SLUG__' LIKE '\_\_VOWASIA%' THEN
+    RAISE EXCEPTION 'vowasia: placeholder __VOWASIA_SITE_ID__ / __VOWASIA_SITE_SLUG__ not filled; nothing was created.';
+  END IF;
+  IF '__LEGACY_DB_NAME__' LIKE '\_\_LEGACY%' THEN
+    RAISE EXCEPTION 'vowasia: placeholder __LEGACY_DB_NAME__ not filled; nothing was created.';
+  END IF;
+  IF current_database() = 'neondb' THEN
+    RAISE EXCEPTION 'DB NAME STOP: connected to neondb (Central), not the old database; nothing was created.';
+  END IF;
+  IF current_database() <> '__LEGACY_DB_NAME__' THEN
+    RAISE EXCEPTION 'DB NAME STOP: connected database is not the filled old database name; nothing was created.';
+  END IF;
+END $$;
+
+CREATE ROLE vowasia_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT 3;
+DO $$
+BEGIN
+  EXECUTE format('ALTER ROLE vowasia_migrator VALID UNTIL %L', (now() + interval '14 days')::text);
+END $$;
+ALTER ROLE vowasia_migrator SET default_transaction_read_only = on;
+ALTER ROLE vowasia_migrator SET statement_timeout = '30s';
+ALTER ROLE vowasia_migrator SET idle_in_transaction_session_timeout = '60s';
+
+CREATE SCHEMA vowasia_ro;
+REVOKE ALL ON SCHEMA vowasia_ro FROM PUBLIC;
+
+CREATE VIEW vowasia_ro.sites WITH (security_barrier = true) AS
+  SELECT "id", "slug", "name" FROM public.sites WHERE "id" = '__VOWASIA_SITE_ID__';
+
+CREATE VIEW vowasia_ro.articles WITH (security_barrier = true) AS
+  SELECT __ARTICLE_COLUMNS__ FROM public.articles WHERE "site_id" = '__VOWASIA_SITE_ID__';
+
+REVOKE ALL ON vowasia_ro.sites, vowasia_ro.articles FROM PUBLIC;
+GRANT USAGE ON SCHEMA vowasia_ro TO vowasia_migrator;
+GRANT SELECT ON vowasia_ro.sites, vowasia_ro.articles TO vowasia_migrator;
+
+-- TỰ KIỂM, TRONG giao dịch: RAISE EXCEPTION => cả giao dịch huỷ, không tạo gì.
+DO $$
+DECLARE
+  bad text;
+  n_definer int;
+  -- Đổi thành 'yes' CHỈ sau khi đã xem file 01 mục 5d và chấp nhận các hàm đó.
+  allow_definer_outside_public constant text := 'no';
+  -- Amendment 2: ĐÚNG hai bảng pg_net của Supabase (schema.tên, relkind 'r'). KHÔNG thêm tên.
+  allow_public_relations constant text[] := ARRAY['net._http_response', 'net.http_request_queue'];
+  allowed_seen text;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
+    WHERE r.rolname = 'vowasia_migrator' AND s.setdatabase = 0
+      AND 'default_transaction_read_only=on' = ANY (s.setconfig)) THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator default_transaction_read_only is not set to on; nothing was created (HS5)';
+  END IF;
+  IF (SELECT count(*) FROM vowasia_ro.sites) <> 1 THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: view sites does not return exactly 1 row (wrong site id?); nothing was created (HS5)';
+  END IF;
+  IF (SELECT count(*) FROM vowasia_ro.sites WHERE "slug" = '__VOWASIA_SITE_SLUG__') <> 1 THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: the site row slug is not the expected slug; nothing was created (HS5)';
+  END IF;
+  IF (SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = 'vowasia_migrator') THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator bypasses RLS or is superuser; nothing was created (HS5)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = 'vowasia_migrator') THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator is a member of another role; nothing was created (HS5)';
+  END IF;
+  IF has_database_privilege('vowasia_migrator', current_database(), 'CREATE') THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can CREATE in this database (PUBLIC grant?); nothing was created (HS5)';
+  END IF;
+  SELECT string_agg(n.nspname, ', ') INTO bad FROM pg_namespace n
+  WHERE has_schema_privilege('vowasia_migrator', n.oid, 'CREATE');
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can CREATE in a schema (PUBLIC grant?); nothing was created (HS5)';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname NOT IN ('vowasia_ro', 'pg_catalog', 'information_schema', 'pg_toast')
+      AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
+      AND (has_table_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+           OR has_any_column_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))
+      AND NOT (c.relkind = 'r' AND n.nspname || '.' || c.relname = ANY (allow_public_relations))) THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator has a privilege on a table outside vowasia_ro (PUBLIC grant?); nothing was created (HS5)';
+  END IF;
+  SELECT string_agg(n.nspname || '.' || c.relname, ', ' ORDER BY n.nspname, c.relname) INTO allowed_seen
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE c.relkind = 'r' AND n.nspname || '.' || c.relname = ANY (allow_public_relations)
+    AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
+    AND (has_table_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+         OR has_any_column_privilege('vowasia_migrator', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'));
+  RAISE NOTICE 'vowasia: allow-listed relations reachable by the role (Amendment 2): %', coalesce(allowed_seen, '(none)');
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prosecdef
+      AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)
+      AND has_function_privilege('vowasia_migrator', p.oid, 'EXECUTE')) THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can EXECUTE a SECURITY DEFINER function in schema public; nothing was created (HS5)';
+  END IF;
+  SELECT count(*) INTO n_definer FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'public') AND p.prosecdef
+    AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)
+    AND has_schema_privilege('vowasia_migrator', n.oid, 'USAGE')
+    AND has_function_privilege('vowasia_migrator', p.oid, 'EXECUTE');
+  IF n_definer > 0 AND allow_definer_outside_public <> 'yes' THEN
+    RAISE EXCEPTION 'SELF-CHECK STOP: vowasia_migrator can EXECUTE % SECURITY DEFINER function(s) outside public (see file 01, 5d); nothing was created (HS5)', n_definer;
+  END IF;
+  RAISE NOTICE 'vowasia: SECURITY DEFINER functions in other schemas callable by the role: % (allowed: %)', n_definer, allow_definer_outside_public;
+  RAISE NOTICE 'vowasia: inherited from PUBLIC: CONNECT=%, TEMP=%',
+    has_database_privilege('vowasia_migrator', current_database(), 'CONNECT'),
+    has_database_privilege('vowasia_migrator', current_database(), 'TEMP');
+END $$;
+
+COMMIT;
+
+-- Dòng trạng thái cuối: chỉ OK khi role, schema, hai view và quyền SELECT của role
+-- trên hai view thật sự tồn tại (to_regclass trả NULL thay vì lỗi khi view thiếu).
+SELECT CASE
+  WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vowasia_migrator') THEN 'SELF-CHECK FAILED: nothing created'
+  WHEN NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'vowasia_ro') THEN 'SELF-CHECK FAILED: nothing created'
+  WHEN to_regclass('vowasia_ro.articles') IS NULL OR to_regclass('vowasia_ro.sites') IS NULL THEN 'SELF-CHECK FAILED: nothing created'
+  WHEN has_table_privilege('vowasia_migrator', to_regclass('vowasia_ro.articles'), 'SELECT')
+   AND has_table_privilege('vowasia_migrator', to_regclass('vowasia_ro.sites'), 'SELECT') THEN 'SELF-CHECK OK'
+  ELSE 'SELF-CHECK FAILED: nothing created'
+END AS vowasia_self_check;

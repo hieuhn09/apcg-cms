@@ -1,0 +1,22 @@
+{
+  "task": "VowAsia B-beta EXECUTE self-verification (EVL by vc-tester still required)",
+  "commands": [
+    { "gate": "G1", "command": "npm run test:migrate-vowasia", "result": "PASS", "detail": "194 tests, 194 pass, 0 fail (baseline 113)" },
+    { "gate": "G2", "command": "npm run lint:migrate", "result": "PASS", "detail": "0 errors, 1 known warning seed-gtp-legacy-fixture.ts:179" },
+    { "gate": "G3", "command": "npm run typecheck", "result": "PASS", "detail": "exit 0" },
+    { "gate": "G4", "command": "npm run test:migrate-gtp", "result": "PASS", "detail": "69/69" },
+    { "gate": "G5", "command": "npm run test:single-home", "result": "PASS", "detail": "267/267" },
+    { "gate": "G6", "command": "npm run probe:migrate-vowasia", "result": "PASS", "detail": "ALL PROBE CHECKS PASSED, run alone" },
+    { "gate": "G7/G7b/G7c", "command": "git diff --name-only 9d9e5a4 ...; package.json +7/-0; untracked only under scripts/migrate/vowasia and process/general-plans", "result": "PASS" },
+    { "gate": "SQL-unchanged / pins / G8", "command": "git diff --quiet 9d9e5a4 -- scripts/migrate/vowasia/sql; ... gtp-import-pins.ts; git diff --quiet fe88bc4 -- scripts/migrate ':(exclude)scripts/migrate/vowasia'", "result": "PASS" },
+    { "gate": "G10c / G10c-local (E19)", "command": "as plan §4.5", "result": "PASS", "detail": "G10c-local shown red twice (non-local URL appended: exit 1, flagged line 97; one file missing: exit 1) then green (exit 0)" },
+    { "gate": "G13 / E15", "command": "test -f backlog notes", "result": "PASS" },
+    { "gate": "G19 (development run, NOT the EVL gate)", "command": "REHEARSE_MODE=native npm run rehearse:vowasia", "result": "PASS", "detail": "development run 3: 56/56 assertions in 124 s; runs 1-2 found and fixed: fixture role needed views (permission), verify ignored a row that lost its marker. EVL must re-run G19 then G11." }
+  ],
+  "manualChecks": [
+    "G11 rehearse:gtp: not run by EXECUTE (EVL gate, after G19)",
+    "G22 code review: pending (vc-code-reviewer)",
+    "G23 owner OB1, OB5-OB12 on neondb with R2: pending (backlog note)"
+  ],
+  "result": "EXECUTE gates green; EVL, G22 and G23 pending"
+}

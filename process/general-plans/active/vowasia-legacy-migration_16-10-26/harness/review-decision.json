@@ -1,0 +1,103 @@
+{
+  "task": "G22 production-readiness and security review of VowAsia legacy migration stage B-beta (diff 68b048f..7390d6c: import, rollback, rewrite-links, redirects, timestamps SQL, verify, rehearsal fixtures, runbook part B, 7 npm scripts)",
+  "reviewer": "vc-code-reviewer (read-only static review; no test, rehearsal or DB was run)",
+  "verdict": "APPROVE_WITH_CONCERNS",
+  "decision": "approved-with-concerns",
+  "rationale": "No blocking finding. Create-only is structurally true (only articles and media are ever created; the only update is rewrite-links on same-run rows; deletes exist only in rollback). Guards run in every mode before any Payload connection (DB name printed first, host guard, /neondb name guard, TTY and --confirm-host for --apply, R2 names preflight, assertOutsideRepo on runs-dir, snapshot, redirects out dir and the answer-file folder). The sha chain reuses verifySnapshotInput. Rollback is per run, marker + tenant + journal + untouched, five-condition dangling rule implemented, dry-run writes nothing, media deletion scans every tenant article body, delete errors are report-only. The two local-only test hooks are refused unless the DATABASE_URL host is on the local allow-list, in every mode, before they take effect. GTP files are byte-identical and only the 11 pinned GTP files are imported. Concerns are operational hardening items, none of which can write outside the run's own rows.",
+  "timestamp": "2026-10-20",
+  "scope": {
+    "range": "68b048f..7390d6c",
+    "filesReviewed": "scripts/migrate/vowasia/lib/{import,rollback,rewrite-links,verify,redirects}-vowasia-main.ts, vowasia-{run,plan,media,body,transform,redirects,timestamps,central,central-state,port,payload-port,phase-b-cli,slug-plan,author-distribution,stable-filename}.ts, assert-outside-repo.ts, args.ts, CLI entry files, fixtures/rehearse-vowasia.sh, rehearse-assert.ts, rehearse-bootstrap.ts, vowasia-legacy/seed-vowasia-legacy-fixture.ts, serve-images.ts, VOWASIA-LEGACY.md part B, package.json diff, scripts/lib/{local-db-guard,central-db-name-guard,env}.ts, scripts/migrate/lib/{load-guard,rollback-rules}.ts, Payload sort fallback in node_modules",
+    "notVerified": [
+      "unit tests, the G19 rehearsal and G11 were not run (separate tester owns them); pass counts quoted by the executor are taken as reported",
+      "vowasia-web redirect-map contract (308 for strings, 410 for objects) not re-read here; relied on PVL B-beta pass 3",
+      "real Neon, real R2 server-side upload with clientUploads:true, TTY prompts on macOS (named residual G23, KB-3, KB-6)"
+    ]
+  },
+  "blockingFindings": [],
+  "nonBlockingFindings": [
+    {
+      "id": "F-1",
+      "severity": "MINOR",
+      "where": "scripts/migrate/vowasia/lib/import-vowasia-main.ts:290-301 (createError branch), :186-189 (orphan preflight message), rollback-vowasia-main.ts:107-134",
+      "finding": "A create that throws AFTER the row was committed (network reset or timeout on Neon) is journaled as outcome failed/createError. Rollback only deletes slug-map rows and dangling intents (an intent with any outcome is never dangling), so that row is a marker article in no journal that rollback will never delete, while the import preflight refuses every later --apply and tells the owner to 'use the rollback of their run'. Fail-closed, no corruption, but an operational dead end with a misleading instruction.",
+      "suggestedFix": "On createError re-query the tenant slug; if a marker row now exists, journal it as created (id) so the slug map and rollback cover it. Also change the preflight text to say the row must be removed by hand in /admin if its run journal shows failed/createError."
+    },
+    {
+      "id": "F-2",
+      "severity": "MINOR",
+      "where": "scripts/migrate/vowasia/fixtures/rehearse-vowasia.sh:60 and rehearse-assert.ts",
+      "finding": "The rehearsal uses 'unset R2_*' to keep media on local disk, but every tool starts with import '../../lib/env', which loads .env.local and .env from the cwd. Dotenv fills any variable that is unset, so on a machine that has a .env.local with the R2 credentials the local Central would upload fixture images to the real bucket (the R2 preflight is skipped for a local DB). Not triggered here (no .env* file in this checkout) and the rehearse-assert has no check that R2 is off.",
+      "suggestedFix": "export the four R2 names as EMPTY strings (dotenv does not override an existing key, and payload.config.ts treats '' as unset), and make rehearse-assert fail when any R2_* is non-empty."
+    },
+    {
+      "id": "F-3",
+      "severity": "MINOR",
+      "where": "import-vowasia-main.ts:271-276 and :336-341 (report.stop, failed[].reason logged and written without redact); vowasia-cli.ts redact()",
+      "finding": "Upload and create error text (up to 200 chars of the S3 or pg message) is printed and stored without redact(), and redact() knows only the legacy URL secrets. The owner is asked to paste output back, so an SDK message that echoes an endpoint or key id would travel. Executor's own adversarial scenario 11 is correctly left open.",
+      "suggestedFix": "Run those strings through redact() and add the Central DATABASE_URL password and the four R2 values to its secret list (only for values of length 3 or more, as today)."
+    },
+    {
+      "id": "F-4",
+      "severity": "MINOR",
+      "where": "rollback-vowasia-main.ts:107-134 (iterates run.slugMap() only), vowasia-run.ts articleIds()",
+      "finding": "A crash after the outcome line but before the slug-map line (a very small window) leaves a created article that is neither in the slug map nor dangling, so rollback ignores it. Same dead end as F-1.",
+      "suggestedFix": "Also iterate outcome lines with result created and an id that is not in the slug map, applying the same marker, tenant and untouched checks."
+    },
+    {
+      "id": "F-5",
+      "severity": "MINOR",
+      "where": "rollback-vowasia-main.ts:143-151 (referenced scan)",
+      "finding": "The Media reference scan looks only at tenant articles (latest draft version, draft:true). A Media created by the run and later reused by another collection (author photo, pillar or tenant image, newsletter) or only by the live published version of an article that has a newer draft would be deleted, and Payload also deletes the R2 object. Needs a human to have reused an imported Media before rolling back; low likelihood.",
+      "suggestedFix": "Document in the runbook that a rollback after editors reuse imported images can break those references, or extend the scan to the other collections that relate to media."
+    },
+    {
+      "id": "F-6",
+      "severity": "NIT",
+      "where": "VOWASIA-LEGACY.md part B, 'Quy tắc chung'",
+      "finding": "local-db-guard.ts documents the accepted residual that a tunnelled production DB on localhost looks local (no --confirm-host, no TTY, no /neondb check, no R2 preflight, and the test hooks would be allowed). Part B does not tell the owner to close any SSH or port-forward before running. The hooks cannot corrupt data (a crash or a forced upload stop), but the skipped R2 preflight would store media on the Mac disk.",
+      "suggestedFix": "Add one line to part B: no tunnel or port-forward to production may be open, and DATABASE_URL must show the Neon host in the banner."
+    },
+    {
+      "id": "F-7",
+      "severity": "NIT",
+      "where": "rewrite-links-vowasia-main.ts:182-186 with the run split A (50) / B (rest)",
+      "finding": "By design (4.2.3) a rewrite is applied only when source and target are in the same run. With a 50/rest split most old-site links will report 'target not created by this run' and stay unchanged, so an owner answer of rewrite is silently unfulfilled for cross-run pairs (the OB8 dry-run prints it, but the runbook does not say so).",
+      "suggestedFix": "Say so in OB8, or put both articles of each of the 4 links in the same run."
+    },
+    {
+      "id": "F-8",
+      "severity": "NIT",
+      "where": "rehearse-assert.ts header vs code; import-vowasia-main.ts catch for media errors",
+      "finding": "The header lists an 'old image host' mutant that the code does not contain (marker, allow-list-off and wrong-digest are present). Any Media create failure, including a data-validation error, is reported as UploadError and stops the run with an R2/network message. Rollback of a Q12-stopped run is needed to remove its orphan Media, which the runbook does not say.",
+      "suggestedFix": "Align the header, add the mutant or drop the claim; add one runbook sentence for the Q12 orphan Media."
+    },
+    {
+      "id": "F-9",
+      "severity": "NIT",
+      "where": "vowasia-run.ts:170-190 and import-vowasia-main.ts (no SIGINT handler); snapshot-meta.json not covered by the digest chain; findAll() has no explicit sort",
+      "finding": "Ctrl-C during --apply leaves the lock (recovery documented). snapshot-meta.json (column roles) is not covered by the sha chain. findAll() relies on Payload's implicit fallback sort; checked: with draft:true the order is -version.createdAt then -createdAt of the version row, which the timestamps SQL does not modify, so pagination is stable.",
+      "suggestedFix": "Optional: pass sort id (maps to parent for drafts) in findAll; hash the meta file into the manifest in a later stage."
+    },
+    {
+      "id": "F-10",
+      "severity": "NIT",
+      "where": "fixtures/vowasia-legacy/seed-vowasia-legacy-fixture.ts:36-40",
+      "finding": "The fixture seeder runs DROP TABLE IF EXISTS public.articles and public.sites against a hard-coded 127.0.0.1:54346/vowasia_legacy. It cannot reach production, but would drop those tables in any unrelated local database that happens to use that port and name. npm run migrate:vowasia:fixture is an owner-visible script.",
+      "suggestedFix": "Refuse if the database already holds a table named articles that lacks the fixture marker column, or say in the docs that the script is rehearsal-only."
+    }
+  ],
+  "answersToReviewQuestions": {
+    "createOnly": "Confirmed by grep of every .create(, .update( and .delete( call outside tests: create is articles (import) and media (ensureMedia) only; update is rewrite-links body on rows of the named run that are marker, tenant, untouched and whose answer is rewrite; delete is rollback only. No taxonomy or author create anywhere; checkTaxonomy throws TaxonomyStop before any write, in dry-run too.",
+    "guards": "centralTarget runs first in all five tools: name banner, assertLocalOrConfirmed (host, TTY for apply), assertCentralDbName (/neondb by URL path and driver parse). Import adds required --runs-dir, new run-id, no --resume, --expect-sha256 on apply, R2 names preflight. CF4 lock is taken only by --apply of import, rollback, rewrite-links, O_EXCL, released only by its owner, no override flag.",
+    "rollback": "Five conditions (a-e) are implemented as in the plan; dry-run writes nothing (Journals is opened only on apply, no report file in dry-run); Media deleted only if unreferenced by hero or upload node across every tenant article; delete error is reported, no archive path exists.",
+    "shaChain": "import and rewrite-links, verify, redirects all call verifySnapshotInput (snapshot sha vs meta, manifest.snapshotSha256, --expect-sha256 vs manifest bytes, every image re-hashed and magic-sniffed on import). Optional --expect-sha256 on dry-runs of rewrite-links, verify and redirects is a recorded deviation, apply requires it.",
+    "q12VsC6": "Store-level failures (manifest failure, missing from manifest) make the article draft and drop the section, with a 2% budget checked before any write; broken store files refuse the whole run at load (deviation 3). Upload exceptions become UploadError and the loop breaks before port.create('articles') with outcome failed/uploadError.",
+    "redirects": "Rules match 4.2.7: published->/pillar/slug, archived->/pillar, no-cover->/pillar, old draft and scheduled get no entry, rejected->410, stored-image failure on a published row stops with exit 3 and writes nothing, importer rejects get no entry. Coverage numerator is published rows with an entry. Not independently checked: the vowasia-web consumer contract.",
+    "answerFile": "No default; required flag; extra means not in the whole-snapshot old-site-article set (V-W3); missing means a link of this run's articles without a line; malformed, wrong value and duplicate refused; folder checked with assertOutsideRepo on the realpath directory; rewrite target is /<pillar>/<slug> only when the target is in this run's slug map and live workflowStatus is published. The OB5 STOP before OB6 is procedural (import has no flag for the file).",
+    "testHooks": "VOWASIA_TEST_KILL_BEFORE_JOURNAL and VOWASIA_TEST_FAIL_UPLOAD_AT are read only in import. importHooks() throws a CliError unless target.local is true, in dry-run and apply, right after centralTarget and before the lock or any write. target.local comes from the same parse that the guards use (pg-connection-string, exact host allow-list, ?host= folded in), and payload.config.ts connects with the same process.env.DATABASE_URL. They cannot be active against a non-local DB; only the documented tunnel-on-localhost residual could make a production DB look local (see F-6), and then they only crash the run or force an upload stop.",
+    "secretsAndPins": "No DB URL with a real host, R2 value, password or old project ref in any added line (grep of the whole diff for URL schemes, supabase, neon, key patterns and 20-char refs; only fake .invalid hosts and 127.0.0.1 fixtures). git diff fe88bc4 -- scripts/migrate excluding vowasia, the sql dir and gtp-import-pins.ts against 9d9e5a4 are empty; changed files outside scripts/migrate/vowasia are package.json (7 added script lines) and process/ files. Imports from GTP are limited to gtp-transform, rollback-rules, normalise-path, load-guard, media-fetch, all in the 11 pins."
+  },
+  "evidencePackStatus": "risk-gate, context-snippets, verification, adversarial-validation (executor self-check) and this review-decision are present. The decision field uses the lowercase vocabulary of validate-risk-artifacts.mjs (the gate named in the validate contract); validate-evidence-pack.mjs would want APPROVE or REJECT, so run only the first. B-beta is still not finalised: G19/G11 EVL results and the owner run G23 (OB1, OB5-OB12) remain open.",
+  "notes": "Recommended before OB6 (first --apply): F-1, F-3 and the F-6 sentence. F-2 before G19 is run on any host that has an .env.local. None blocks OB1 or the OB5 dry-run, which writes nothing to Central."
+}
