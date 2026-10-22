@@ -1,0 +1,5 @@
+iteration	timestamp	gaps_found	fail_count	concern_count	applied	saturation_status	loop_status	notes
+0	2026-10-22T00:00:00Z	11	0	11	0	n/a	baseline	first-pass validate Gate CONDITIONAL; 11 plan-fixable concerns (stale base, locale default, param rules, tiebreaker, G3/G9/G10 method, mutation table, token/probe safety, decisions not recorded, consumer truncation)
+1	2026-10-22T00:00:00Z	11	0	11	11	n/a	CONTINUE	cycle 1: single plan-fix agent applied all 11 gaps; SUPPLEMENT_APPLIED; re-validate from V1
+2	2026-10-22T00:00:00Z	4	0	4	4	improving	CONTINUE	cycle 2: single plan-fix agent applied gaps A-D; SUPPLEMENT_APPLIED; re-validate from V1
+3	2026-10-22T00:00:00Z	0	0	0	0	saturated	HALTED_SUCCESS	cycle 3: re-validate from V1 returned Gate: PASS (0 FAIL, 0 CONCERN); E10-E13 recorded as execute instructions
