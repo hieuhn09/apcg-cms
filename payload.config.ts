@@ -30,6 +30,8 @@ import { Tags } from "@/collections/Tags";
 import { Articles } from "@/collections/Articles";
 import { Newsletters } from "@/collections/Newsletters";
 import { Podcasts } from "@/collections/Podcasts";
+import { PodcastSeries } from "@/collections/PodcastSeries";
+import { Booths } from "@/collections/Booths";
 import { Corrections } from "@/collections/Corrections";
 import { Subscribers } from "@/collections/Subscribers";
 import { SponsorSlots } from "@/collections/SponsorSlots";
@@ -121,6 +123,8 @@ export default buildConfig({
     Articles,
     Newsletters,
     Podcasts,
+    PodcastSeries,
+    Booths,
     Corrections,
     Subscribers,
     SponsorSlots,
@@ -197,6 +201,8 @@ export default buildConfig({
         articles: {},
         newsletters: {},
         podcasts: {},
+        podcastSeries: {},
+        booths: {},
         corrections: {},
         subscribers: {},
         sponsorSlots: {},

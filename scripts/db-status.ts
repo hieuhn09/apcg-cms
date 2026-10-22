@@ -30,6 +30,7 @@ const INTEREST = [
   "newsletter_subscriptions",
   "subscribers",
   "podcasts",
+  "podcast_series",
   "corrections",
   "sponsor_slots",
   "sponsorslots",

@@ -77,7 +77,7 @@ and status.
   no secondary sections, no sub-section, no `exclusive` flag; no article may add GCV
   Pressroom as a secondary section; the pillar can have no sub-sections; author is
   optional; the content engine gets 422 `pillar not writable by engine: pressroom` on
-  create and refresh. WAD's `pressroom` is unaffected. Steps: (1) the violator query below
+  create and refresh. Steps: (1) the violator query below
   is OPTIONAL when the tenant has no Pressroom articles (true for GCV at merge); otherwise,
   BEFORE deploying the CMS, the owner runs it READ-ONLY (never by agents against prod)
   and fixes or accepts the hits — existing violators are grandfathered until their
@@ -88,6 +88,37 @@ and status.
 
   ```sql
   WITH t AS (SELECT id FROM tenants WHERE slug='gcv'),
+  p AS (SELECT id FROM pillars WHERE slug='pressroom' AND tenant_id=(SELECT id FROM t))
+  SELECT 'secondary_on_pressroom_article' k, count(*) FROM articles_secondary_sections s JOIN articles a ON a.id=s._parent_id WHERE a.pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'subsection_on_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND sub_section_id IS NOT NULL
+  UNION ALL SELECT 'exclusive_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND exclusive
+  UNION ALL SELECT 'pressroom_as_secondary_elsewhere (V3)', count(*) FROM articles_secondary_sections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'subsections_under_pressroom', count(*) FROM subsections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_secondary_on_pressroom', count(*) FROM _articles_v_version_secondary_sections s JOIN _articles_v v ON v.id=s._parent_id WHERE v.version_pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_pressroom_as_secondary', count(*) FROM _articles_v_version_secondary_sections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_subsection', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_sub_section_id IS NOT NULL
+  UNION ALL SELECT 'v_exclusive', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_exclusive;
+  ```
+
+- **Enabling WAD Pressroom (single-home pillar, WAD Pressroom parity, owner decision
+  20-10-26):** the WAD `pressroom` pillar row already exists in production, so there is
+  NO `audit:add-pressroom` step. The rule ships in code (`wad` entries in
+  `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS`), with exactly the GCV rules above:
+  no secondary sections, no sub-section, no `exclusive` flag on WAD Pressroom articles; no
+  article may add WAD Pressroom as a secondary section; the pillar can have no
+  sub-sections; author optional for WAD Pressroom only (every other WAD pillar still needs
+  one); the content engine gets 422 `pillar not writable by engine: pressroom` on create
+  and refresh (hub authoring gets `blocked_pillar`). Steps: (1) BEFORE deploying the CMS
+  the owner runs the violator query below READ-ONLY (never by agents against prod) — it
+  is NOT optional for WAD, which likely has Pressroom articles — and fixes or accepts each
+  non-zero row; existing violators are grandfathered until their taxonomy is next saved,
+  when the hook rejects the save; `v_*` rows are history only; (2) deploy the CMS and
+  wad-web (any order; the wad-web "Distributed by" byline is harmless before the CMS
+  change). Rollback: remove the two `wad` `pressroom` entries from the constants and
+  redeploy (re-run the query before re-enabling).
+
+  ```sql
+  WITH t AS (SELECT id FROM tenants WHERE slug='wad'),
   p AS (SELECT id FROM pillars WHERE slug='pressroom' AND tenant_id=(SELECT id FROM t))
   SELECT 'secondary_on_pressroom_article' k, count(*) FROM articles_secondary_sections s JOIN articles a ON a.id=s._parent_id WHERE a.pillar_id IN (SELECT id FROM p)
   UNION ALL SELECT 'subsection_on_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND sub_section_id IS NOT NULL
@@ -176,6 +207,25 @@ and status.
   `aer`, actions only `create_article` + `update_article`, hub flags off; (9) add the aer-web
   origin to `PUBLIC_API_ALLOWED_ORIGINS`. Same guards, never-overwrite and refuse
   behaviour as the vowasia script. Author bios and the tag set are PENDING OWNER wording.
+
+- **AsiaBeautyBrief rollout (owner-run; tenant `abb`):** code adds `abb: ["pressroom"]` to
+  `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS`, the `exhibition` feature and the
+  `booths` collection. **This one HAS a migration** (`20261022_000000_add_booths_exhibition`:
+  creates `booths`, `booths_capabilities`, `booths_rels`, two enums and indexes; adds
+  `tenants.features_exhibition boolean DEFAULT false` and
+  `payload_locked_documents_rels.booths_id`; nothing dropped/altered otherwise). It runs at
+  the production build once merged (`payload migrate` reads the folder); Preview shares the
+  DB and does not migrate, so a Preview of the branch errors on tenant reads until then.
+  **Status 22-10-26: code only, nothing applied.** Steps: (1) owner approves the migration
+  SQL verbatim, merge + deploy; (2) create tenant `abb` by hand in /admin
+  (`docs/07-website-management.md`: `autoPublishEngineDrafts` OFF, features Articles +
+  Newsletters + Corrections + Exhibition); (3) print host + database name (must be
+  `/neondb`); (4) dry run `npm run audit:add-abb-taxonomy -- --confirm-host=<hostname>`
+  (expect 93 `create`); (5) `--apply` from a TTY; (6) re-run dry run, expect 93 `exists`;
+  (7) mint a read token, create the engine record in the Console, add the abb-web origin
+  to `PUBLIC_API_ALLOWED_ORIGINS`. Same guards, never-overwrite and refuse behaviour as
+  the vowasia script. Rollback of the schema: revert the PR AND run the migration `down`
+  (drops the three booths tables, enums and the two columns) only after the owner agrees.
 
 ## Token rotation
 

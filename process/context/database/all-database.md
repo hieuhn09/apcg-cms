@@ -10,7 +10,7 @@ metadata:
 
 # Database Context
 
-Last updated: 2026-10-15 (APCGHub P5.1b–P5.6: NO new migration or column after P5.1's `hub_author`; P5.3 media, P5.4 live edit and P5.6 preview / pen-name / tag routes write only through existing collections, and the SEO title/meta migration is NOT in this repo (it is a patch kept in the content-engine repo; it would add `articles.seo_title`, `articles.seo_description`, `_articles_v.version_seo_title`, `_articles_v.version_seo_description`). **Hazard for §Migrations:** `payload migrate` and `scripts/migrate-prod.mjs` read `src/migrations/` BY FILE (not `index.ts`, per `node_modules/payload/dist/database/migrations/readMigrationFiles.js`); production builds run them, Preview builds skip them but share the DB, so a migration file merged to `main` runs as DDL at the next production deploy and a PR carrying one breaks Preview reads until the columns exist. Details: `all-context.md` §Open Questions) Previously: 2026-10-06 (APCGHub P5.1: new `content_engines.hub_author` boolean column, migration `20260930_000000_add_content_engines_hub_author`, flag `ContentEngines.hubAuthor`; see §ContentEngines and §Migrations). Previously: 2026-10-05 (taxonomy hook + FK facts section for the single-home pillar rule). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
+Last updated: 2026-10-22 (AsiaBeautyBrief: NEW collection `booths` (feature `exhibition`, tenant-scoped, tables `booths`, `booths_capabilities`, `booths_rels`) and column `tenants.features_exhibition`, migration `20261022_000000_add_booths_exhibition` (hand-trimmed from `migrate:create`: the json snapshot is stale since 20260824, so the generator re-emits earlier hand-written migrations; never ship its raw output). Branch only, not merged/applied) Previously: 2026-10-15 (APCGHub P5.1b–P5.6: NO new migration or column after P5.1's `hub_author`; P5.3 media, P5.4 live edit and P5.6 preview / pen-name / tag routes write only through existing collections, and the SEO title/meta migration is NOT in this repo (it is a patch kept in the content-engine repo; it would add `articles.seo_title`, `articles.seo_description`, `_articles_v.version_seo_title`, `_articles_v.version_seo_description`). **Hazard for §Migrations:** `payload migrate` and `scripts/migrate-prod.mjs` read `src/migrations/` BY FILE (not `index.ts`, per `node_modules/payload/dist/database/migrations/readMigrationFiles.js`); production builds run them, Preview builds skip them but share the DB, so a migration file merged to `main` runs as DDL at the next production deploy and a PR carrying one breaks Preview reads until the columns exist. Details: `all-context.md` §Open Questions) Previously: 2026-10-06 (APCGHub P5.1: new `content_engines.hub_author` boolean column, migration `20260930_000000_add_content_engines_hub_author`, flag `ContentEngines.hubAuthor`; see §ContentEngines and §Migrations). Previously: 2026-10-05 (taxonomy hook + FK facts section for the single-home pillar rule). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
 
 Previously: 2026-10-12 (gtp tenant `gtp` groundwork on branch `claude/clever-gates-h5xyd8`: NO migration and no schema change; `SINGLE_HOME_PILLARS`/`ENGINE_BLOCKED_PILLARS` gain `gtp` entries in code only; production rows come from the owner script `audit:add-gtp-taxonomy`; see `integrations/all-integrations.md` §GTP tenant rules). Previously: 2026-10-06 (APCGHub P5.1: new `content_engines.hub_author` boolean column, migration `20260930_000000_add_content_engines_hub_author`, flag `ContentEngines.hubAuthor`; see §ContentEngines and §Migrations). Previously: 2026-10-05 (taxonomy hook + FK facts section for the single-home pillar rule). Previously: 2026-09-24 (APCGHub P4 / CMS-1 — `ContentEngines.hubRead` field + migration, and five migration-writing pitfalls found while adding it, see §Migrations)
 
@@ -196,6 +196,16 @@ where that is correct, not a bug).
 
 ---
 
+## Booths (AsiaBeautyBrief, 2026-10-22, branch only)
+
+`src/collections/Booths.ts`, slug `booths`, feature `exhibition`, admin group Exhibition. Fields:
+name, slug (unique per tenant: hook + `booths_tenant_slug_idx`), published (checkbox, public
+gate), hall (enum, 6 values = `ABB_EXHIBITION_HALLS`), typeLine, city, country, verified, tier
+(basic|verified|premium), summary, about (Lexical), capabilities[] (category, formats, moq,
+leadTime), atAGlance group, logo/catalog (upload media; media is image-only today), website,
+inquiryEmail, articles (hasMany, same tenant; the link lives on the booth, Articles unchanged).
+The Console Drizzle schema has `featuresExhibition`.
+
 ## The dual article-status model (read this before touching Articles visibility)
 
 `Articles` carries **two independent status fields** that are easy to confuse:
@@ -348,7 +358,7 @@ Postgres instance in deployed environments.
   (`src/collections/Articles.ts:123`); `Pillars.hooks.beforeChange/beforeDelete` row guards
   (`src/collections/Pillars.ts:28-29`); `SubSections.pillar` field `validate` (`SubSections.ts:51`).
   No schema field and no migration: the rule key is the code constant `SINGLE_HOME_PILLARS`
-  (`src/lib/constants.ts:68`; brief-asia and gcv `pressroom`, 05-10-26). The GCV Pressroom read-only
+  (`src/lib/constants.ts:68`; brief-asia and gcv `pressroom`, 05-10-26; wad `pressroom`, 20-10-26 — its read-only violator SQL is in `docs/11-operations.md`). The GCV Pressroom read-only
   violator query lives in `docs/11-operations.md` (optional: GCV had no Pressroom articles at merge).
 - **Every pillar reference is `ON DELETE set null`** (`src/migrations/20260702_231336_initial_schema.ts`):
   `articles.pillar_id` (`:867`), `articles_secondary_sections.pillar_id` (`:858`),

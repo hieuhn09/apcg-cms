@@ -64,8 +64,8 @@ Content-Type: application/json
 | 401 | `{ ok:false, status:"unauthorized" }` | bad/suspended token |
 | 403 | `{ ok:false, status:"forbidden", reason }` | tenant/action not allowed |
 | 422 | `{ ok:false, status:"unprocessable", reason }` | feature disabled / unknown pillar |
-| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom`, GlobalTravelPost (`gtp`) `press-room` and `events-awards`, VowAsia (`vowasia`) `press-room`, `real-weddings` and `directory`, Asia Economic Review (`aer`) `long-view`, `interviews` and `in-focus`, Pressroom / Press Room / Events & Awards articles come only from editors; WAD's own `pressroom` is not blocked); the check is on the PRIMARY `pillarSlug` only (a gtp `news` primary with `sections:["events-awards"]` is not blocked by it); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
-| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom`, GCV `pressroom`, GlobalTravelPost `gtp` `press-room` and VowAsia `vowasia` `press-room`; WAD's `pressroom` and gtp `events-awards` are not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom`, WAD `pressroom` (since 20-10-26), GlobalTravelPost (`gtp`) `press-room` and `events-awards`, VowAsia (`vowasia`) `press-room`, `real-weddings` and `directory`, Asia Economic Review (`aer`) `long-view`, `interviews` and `in-focus`, Pressroom / Press Room / Events & Awards articles come only from editors); the check is on the PRIMARY `pillarSlug` only (a gtp `news` primary with `sections:["events-awards"]` is not blocked by it); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom`, GCV `pressroom`, WAD `pressroom` (since 20-10-26), GlobalTravelPost `gtp` `press-room` and VowAsia `vowasia` `press-room`; gtp `events-awards` is not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
 | 5xx | `{ ok:false, status:"error" }` | transient — safe to retry |
 
 ### GlobalTravelPost (`gtp`) notes
@@ -114,6 +114,20 @@ Content-Type: application/json
   `Mei Fong Chua`, `Rahul Sethi`); no shared "editorial team" byline.
 - Status 19-10-26: code only; intake for `aer` answers 4xx until the owner creates the
   tenant, taxonomy and engine record.
+
+### AsiaBeautyBrief (`abb`) notes
+
+- Tenant slug / `publicationId` `abb`. Engine-writable pillars: `briefing`, `markets`,
+  `supply`, `trends`, `professional`; `pressroom` is single-home AND editor-only (422).
+  `press-room` is not a pillar on abb and is not blocked. Taxonomy source of truth:
+  `scripts/lib/abb-taxonomy.ts` (from the canonical `abb-taxonomy_22-10-26.json`).
+- `byline` must equal an abb `authors.name` exactly: `Joanne Lau`, `Kim Seo-yeon`,
+  `Kavita Rao`, `Emi Fujita`, `Nathan Leong`.
+- **Booths (The Beauty Exhibition) are editor-only.** The engine has no write path: intake
+  only creates/refreshes articles, there is no booths engine action, and an engine token
+  does not authenticate Payload REST (`/api/booths` answers 403; probe
+  `npm run probe:abb-booths`). The booth-to-article link is stored on the booth.
+- Status 22-10-26: code only; tenant, taxonomy and engine record do not exist yet.
 
 ### `contentType` — what the document is
 

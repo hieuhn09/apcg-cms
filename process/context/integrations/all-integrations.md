@@ -10,7 +10,7 @@ metadata:
 
 # Integrations Context
 
-Last updated: 2026-10-15 (APCGHub P5.1b–P5.6 reconciled: P5.1b + P5.2 publish/schedule routes are on `main`; P5.3 `POST /api/hub/media`, P5.4 `PATCH /api/hub/articles/{id}/live` (env switch `HUB_LIVE_EDIT_TENANTS`), P5.6 `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` exist ONLY on the unmerged draft PR apcg-cms#36 (head `5d5b28c`); none is VERIFIED; see §Cross-tenant reads → HUB AUTHORING P5.1b–P5.6) Previously: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+Last updated: 2026-10-22 (AsiaBeautyBrief `abb`, branch only, not merged: `abb: ["pressroom"]` in SINGLE_HOME_PILLARS + ENGINE_BLOCKED_PILLARS; new public read routes `GET /api/public/booths` + `/api/public/booths/{slug}` gated on the new `exhibition` feature; see §AsiaBeautyBrief booths API) Previously: 2026-10-20 (`Articles.exclusive` checkbox description and comment made tenant-neutral, apcg-cms#46 `aa0e692`, copy only, no migration; used by brief-asia and by dtw/Opentechwire (dtw-web#60); unrelated to GCV's `exclusive` pillar; see §Exclusive flag) Previously: 2026-10-15 (APCGHub P5.1b–P5.6 reconciled: P5.1b + P5.2 publish/schedule routes are on `main`; P5.3 `POST /api/hub/media`, P5.4 `PATCH /api/hub/articles/{id}/live` (env switch `HUB_LIVE_EDIT_TENANTS`), P5.6 `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` exist ONLY on the unmerged draft PR apcg-cms#36 (head `5d5b28c`); none is VERIFIED; see §Cross-tenant reads → HUB AUTHORING P5.1b–P5.6) Previously: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
 hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
 Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
 new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
@@ -695,10 +695,15 @@ article gets Payload's stock required check ("This field is required.", non-draf
 unresolvable pillar or lookup error = author required (fail closed). REST/GraphQL `author` can be null
 for Pressroom articles only (merged as #27). Known gap: the admin required asterisk on Author is lost for all articles.
 
-A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, `{ "brief-asia": ["pressroom"], gcv: ["pressroom"] }`,
+A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, `{ "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"] }`,
 keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:40`) owns its articles
-exclusively: a code constant, **no schema field, no migration**. WAD also has a `pressroom` pillar and
-is deliberately NOT affected. The rule (`src/lib/single-home-pillars.ts:7-15`): V1 primary = P means no
+exclusively: a code constant, **no schema field, no migration**. **Updated 2026-10-20 (WAD Pressroom
+parity, owner decision, plan `process/general-plans/active/wad-pressroom_20-10-26/`):** WAD `pressroom` is
+now single-home AND engine-blocked exactly like GCV (`wad: ["pressroom"]` in both maps, no migration; the
+owner runs the read-only WAD violator SQL in `docs/11-operations.md` before deploy; hub authoring into WAD
+pressroom now gets `blocked_pillar` via the generic `hub-author-refs.ts` check). The tests' and probe's
+negative control is now a fixture-only `(world-travel-brief, pressroom)` pillar (WTB has no such row in
+production; `dtw` is kept pressroom-free on purpose for the move checks). The rule (`src/lib/single-home-pillars.ts:7-15`): V1 primary = P means no
 secondary rows (a persisted duplicate of the primary counts), V2 no sub-section, V3 a secondary row = P
 is refused whatever the primary is, V4 P cannot have sub-sections, V5 P's `(tenant, slug)` cannot be
 renamed, moved to another tenant, or deleted in use, V6 primary = P cannot be `exclusive`. Keying is by
@@ -742,8 +747,8 @@ content-engine articles).** `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive", "pres
 (`src/lib/constants.ts:40`; GCV `pressroom` added 05-10-26 for GCV Pressroom parity, same 422 on create and refresh); `normalizeEngineBlockedSlug` (trim + lower-case) and `isEngineBlockedPillar`
 make the match case/whitespace-insensitive. Gate 3b in `intake/route.ts:156` runs after auth + tenant/pillar
 resolution and BEFORE 3c and the idempotency lookup, so engine create AND refresh get 422
-`pillar not writable by engine: pressroom` plus an `integration_error` row. WAD's own `pressroom` and other
-tenants are unaffected. Pressroom articles are created by editors only, so "teach the engine Pressroom" and the
+`pillar not writable by engine: pressroom` plus an `integration_error` row. WAD `pressroom` is blocked too
+since 20-10-26; tenants not listed are unaffected. Pressroom articles are created by editors only, so "teach the engine Pressroom" and the
 `autoPublishEngineDrafts`-for-Pressroom concern are moot. Rollback: remove the `brief-asia` entry (engine
 writes re-enabled; the single-home rule still applies). Only `engine/intake` takes a pillar from an engine actor.
 
@@ -769,8 +774,8 @@ these; an authenticated hostile engine can flood 422s (`rateLimitPerMin` unenfor
 (the unchanged-skip persists any violation created while the hook was absent — run the read-only audit of
 articles + versions referencing Pressroom before re-enabling after a rollback); a tunnelled prod DB on
 `localhost` defeats any hostname guard (`scripts/lib/local-db-guard.ts:18`); a brief-asia article can point
-its primary pillar at WAD's `pressroom` (keyed by the referenced doc's `(wad, pressroom)`, so not
-single-home) — needs membership in BOTH tenants; cross-tenant pillar create ignores the access Where, so
+its primary pillar at another tenant's non-single-home pillar (keyed by the referenced doc's own
+`(tenant, slug)`; since 20-10-26 WAD's `pressroom` is single-home, so it no longer qualifies) — needs membership in BOTH tenants; cross-tenant pillar create ignores the access Where, so
 an editor can create a `pressroom` pillar in another tenant early. Known gaps: /admin Save Draft shows only
 Payload's generic "field is invalid: secondarySections" toast (rule text is in the response/field
 description; Console shows it fully).
@@ -805,6 +810,27 @@ PR hieuhn09/apcg-cms#35 MERGED (`925ba0b`). Code verified locally. Status of pro
 - Migration tooling `scripts/migrate/**` (legacy GTP site to Central): discover, export, validate-mapping, import, rewrite-links, rollback, redirects, verify; run guide `scripts/migrate/GTP-LEGACY.md`, runbook `docs/12-migration.md`. Importer correctness on the real source is UNPROVEN (synthetic fixture only; owner residuals G15/C10/G53). Known: the loader stalls on about 30% of starts (root cause unknown, mitigated by watchdog and retries).
 - Lexical to Markdown conversion loses tables and in-body images and merges quote cites; editors must not rely on them for gtp.
 - `src/hooks/revalidate.ts` was not changed.
+
+## Exclusive flag (`Articles.exclusive`, tenant-neutral since 2026-10-20)
+
+`Articles.exclusive` is a checkbox on the article (`src/collections/Articles.ts`, near line 381), not a pillar. Since apcg-cms#46 (`aa0e692`, copy only, no migration) its admin description and code comment are tenant-neutral. It is used by brief-asia and by dtw (Opentechwire, dtw-web#60, which lists it through `GET /api/public/articles?flag=exclusive`). It is unrelated to GCV's `exclusive` pillar (`SINGLE_HOME_PILLARS`/`ENGINE_BLOCKED_PILLARS.gcv`); the two share only a name. Only editors and website admins can tick it in /admin; the content engine and APCGHub cannot set it.
+
+---
+
+## AsiaBeautyBrief booths API (abb, 2026-10-22, branch only)
+
+- `GET /api/public/booths?hall=&article=<articleSlug>&page=&limit=` (limit default 24, max 100,
+  sort name,id) returns the Payload list envelope (`docs, totalDocs, limit, page, totalPages,
+  hasNextPage, hasPrevPage, nextPage, prevPage, pagingCounter`); unknown hall/article gives the
+  usual empty envelope `{docs:[],totalDocs:0,page:1,totalPages:0,hasNextPage:false}`.
+- `GET /api/public/booths/{slug}` returns `{ doc }`; 404 `{ok:false,status:"not_found"}` for
+  unknown/unpublished slugs and for any tenant without feature `exhibition`.
+- Same read-token + CORS + `scopedFind` + depth 0 conventions as `/api/public/*`. Shapes are
+  BUILT by an allowlist (`src/lib/public-booths.ts`, tests `npm run test:booths`); media are
+  looked up tenant-scoped (`src/lib/public-booths-media.ts`) and reduced to url/alt/filename.
+- Only `published: true` booths are public. Engines cannot write booths (no engine path; an
+  engine bearer does not authenticate Payload REST). Probe: `npm run probe:abb-booths`
+  (local disposable DB + running dev server).
 
 ## Security patterns already load-bearing in this API surface
 

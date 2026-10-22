@@ -19,6 +19,7 @@ export const FEATURE_KEYS = [
   "dashboards", // FundingRows / AiLeaderboardRows (DTW dashboards)
   "citiesMap", // Cities (WTB "The Map" / /place directory)
   "video", // VideoMedia + the Articles video fields (short-form article video)
+  "exhibition", // Booths (AsiaBeautyBrief "The Beauty Exhibition" directory)
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -34,9 +35,9 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // BriefAsia `pressroom` (owner decision 05-10-26): the content engine may not
 // create or refresh Pressroom articles; they come only from editors (admin /
 // Console) and the owner's scripts. GCV `pressroom` (owner decision 05-10-26,
-// GCV Pressroom parity) is blocked the same way: editor-only. WAD's own
-// `pressroom` pillar is a different tenant and stays engine-writable (the
-// negative control).
+// GCV Pressroom parity) is blocked the same way: editor-only. WAD `pressroom`
+// (owner decision 20-10-26, WAD Pressroom parity) is blocked the same way too:
+// editor-only.
 //
 // GTP (GlobalTravelPost, tenant `gtp`, gtp-launch P1): `press-room` (hyphenated
 // slug; single-home too, see below) and `events-awards` are editor-only. The
@@ -57,12 +58,18 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // SINGLE_HOME_PILLARS entry; the blocked pillars keep sub-sections, secondary
 // sections and a REQUIRED author. `asia-watch`, `briefings` and
 // `corporate-asia` stay engine-writable.
+// AsiaBeautyBrief (tenant `abb`, abb launch, owner decision 22-10-26):
+// `pressroom` (unhyphenated, like BriefAsia/GCV/WAD; single-home too, see below)
+// is editor-only. abb has no `events-awards` pillar; `press-room` on abb is NOT
+// blocked (exact slug match). Its five other pillars stay engine-writable.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
+  abb: ["pressroom"],
   gcv: ["exclusive", "pressroom"],
   "brief-asia": ["pressroom"],
   gtp: ["press-room", "events-awards"],
   vowasia: ["press-room", "real-weddings", "directory"],
   aer: ["long-view", "interviews", "in-focus"],
+  wad: ["pressroom"],
 };
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */
@@ -86,9 +93,10 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // A single-home pillar's articles belong to nothing else: no secondary
 // sections, no sub-section, never added as another article's secondary section,
 // no sub-sections of its own, and (BriefAsia) never flagged `exclusive`.
-// Tenant-slug-keyed like ENGINE_BLOCKED_PILLARS: BriefAsia and (since 05-10-26)
-// GCV `pressroom` are single-home; WAD also has a `pressroom` pillar and is NOT
-// affected (the negative control). Code constant on purpose: no schema field, no
+// Tenant-slug-keyed like ENGINE_BLOCKED_PILLARS: BriefAsia, (since 05-10-26)
+// GCV and (since 20-10-26, owner decision) WAD `pressroom` are single-home, each
+// with an optional author. The same slug on any other tenant is unaffected.
+// Code constant on purpose: no schema field, no
 // migration. Enforced by src/lib/single-home-pillars.ts + its hooks; the slug is
 // protected from rename / tenant move / in-use delete by the Pillars guards.
 // GTP `press-room` (hyphenated, exact slug; gtp-launch P1) is single-home with
@@ -97,11 +105,15 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // VowAsia `press-room` (vowasia launch P1, owner decision 13-10-26: "pressroom
 // is a pillar and has no secondary pillar") is single-home with an optional
 // author, exactly like GTP `press-room`.
+// AsiaBeautyBrief `pressroom` (abb launch, owner decision 22-10-26) is
+// single-home with an optional author, like the other Pressroom pillars.
 export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
+  abb: ["pressroom"],
   "brief-asia": ["pressroom"],
   gcv: ["pressroom"],
   gtp: ["press-room"],
   vowasia: ["press-room"],
+  wad: ["pressroom"],
 };
 
 // ── Top-level user role (global identity) ───────────────────────────────────
@@ -243,7 +255,7 @@ export type ActivityEvent = (typeof ACTIVITY_EVENTS)[number];
 export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   articles: ["articles", "subsections"],
   newsletters: ["newsletters"],
-  podcasts: ["podcasts"],
+  podcasts: ["podcasts", "podcastSeries"],
   marketData: ["marketSnapshots", "fxRates", "trendingBlocks"],
   sponsorSlots: ["sponsorSlots"],
   wireDrops: ["wireDrops"],
@@ -252,4 +264,5 @@ export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   dashboards: ["fundingRows", "aiLeaderboardRows"],
   citiesMap: ["cities"],
   video: ["videoMedia"],
+  exhibition: ["booths"],
 };
