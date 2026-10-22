@@ -191,6 +191,25 @@ and status.
   bios are in the fixture (no city), editable later; fix names BEFORE `--apply` (renaming later touches every
   mirror, see the playbook).
 
+- **AsiaBeautyBrief rollout (owner-run; tenant `abb`):** code adds `abb: ["pressroom"]` to
+  `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS`, the `exhibition` feature and the
+  `booths` collection. **This one HAS a migration** (`20261022_000000_add_booths_exhibition`:
+  creates `booths`, `booths_capabilities`, `booths_rels`, two enums and indexes; adds
+  `tenants.features_exhibition boolean DEFAULT false` and
+  `payload_locked_documents_rels.booths_id`; nothing dropped/altered otherwise). It runs at
+  the production build once merged (`payload migrate` reads the folder); Preview shares the
+  DB and does not migrate, so a Preview of the branch errors on tenant reads until then.
+  **Status 22-10-26: code only, nothing applied.** Steps: (1) owner approves the migration
+  SQL verbatim, merge + deploy; (2) create tenant `abb` by hand in /admin
+  (`docs/07-website-management.md`: `autoPublishEngineDrafts` OFF, features Articles +
+  Newsletters + Corrections + Exhibition); (3) print host + database name (must be
+  `/neondb`); (4) dry run `npm run audit:add-abb-taxonomy -- --confirm-host=<hostname>`
+  (expect 93 `create`); (5) `--apply` from a TTY; (6) re-run dry run, expect 93 `exists`;
+  (7) mint a read token, create the engine record in the Console, add the abb-web origin
+  to `PUBLIC_API_ALLOWED_ORIGINS`. Same guards, never-overwrite and refuse behaviour as
+  the vowasia script. Rollback of the schema: revert the PR AND run the migration `down`
+  (drops the three booths tables, enums and the two columns) only after the owner agrees.
+
 ## Token rotation
 
 `tsx scripts/mint-token.ts read --tenant <slug>` / `engine --engine "<name>"`.
