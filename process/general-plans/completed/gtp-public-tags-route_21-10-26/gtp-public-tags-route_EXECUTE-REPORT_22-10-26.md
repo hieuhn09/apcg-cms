@@ -151,3 +151,7 @@ Gates (disposable PG16 `127.0.0.1:54411/ptags`, `log_statement=all`, data dir `/
 | preflight / db:seed | 0 / 0 | `local database 127.0.0.1:54411/ptags — OK`, `[seed] done` |
 | `npm run probe:public-tags` | 0 | `[probe] 71/71 checks passed` (was 70) |
 | N1 mutation (guard line removed) | 1 | `FAIL G6 N1 result without a rows array throws`, 43/44; restored, sha256 match, 44/44 |
+
+## Correction note (23-10-26, added by UPDATE PROCESS; history above not rewritten)
+
+G12 was run live on production on 23-10-26 (owner, temporary gtp read token `g12-check`, revoked afterwards, 401 confirmed). The "~1,673" and "~434" figures in the G12 script above were estimates and are wrong. Measured: `minCount=2&limit=2000` -> n=1206, totalDocs=1206; `minCount=5` -> 299; `minCount=1&limit=2000` -> n=2000, totalDocs=5037 (truncation signal works); `articles?tag=<slug>&limit=1` totalDocs equals the tag count for 3 spot checks (aviation-safety 65, tourism-investment 3, yunnan-province 2); no token -> 401; gzip 15,187 B vs 75,448 B identity at `minCount=2`; `articles?limit=1`, `authors`, `site` still 200. Cross-tenant was not checked live (covered by the local probe, 71 checks). Merged as apcg-cms#49 (`4f3a8f1`), deployed to production.
