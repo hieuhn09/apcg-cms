@@ -43,7 +43,7 @@ import { eventBriefs, eventDek, eventStatus, planEvents, toLegacyEvent, type Cal
 import { formatProvisional, mappingFingerprint, type Mapping } from "./gtp-mapping";
 import { generateTimestampsFix } from "./gtp-timestamps";
 import {
-  enText, formatTag, isoOrNull, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveCountries,
+  enText, formatTag, isoOrNull, legacyTags, mapStatus, withAddedTags, provenanceRow, publishedAtFor, readMinFor, resolveCountries,
   resolveTaxonomy, sectionsToHtml, statusWrite, str, stripPhotoLabel, takeawaysText, stableFilename, storedFilenameMatches, oldArticleUrl, wordCount, canonicalSourceUrl,
   type CountryRef, type TagRef,
 } from "./gtp-transform";
@@ -618,7 +618,7 @@ async function main(): Promise<number> {
           }
           const ft = formatTag(row.format, m);
           if (!ft && str(row.format)) report.formatTagSkipped++;
-          const tagRefs = [...(ft ? [ft] : []), ...legacyTags(row.tags, m)];
+          const tagRefs = withAddedTags([...(ft ? [ft] : []), ...legacyTags(row.tags, m)], tx.t.addTags, m);
           const cr = resolveCountries(row.countries, countries, m.countries.match);
           for (const u of cr.unmatched) bump(report.countriesUnmatched, u);
           const rm = readMinFor(row.read_minutes, wordCount(body.text), m.readMin.wpm);

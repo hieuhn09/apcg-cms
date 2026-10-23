@@ -1,5 +1,5 @@
 /**
- * Tests of the network-legacy bundle (tenant profile aer). Run: npm run test:migrate-network.
+ * Tests of the network-legacy bundle (tenant profiles aer and agr). Run: npm run test:migrate-network.
  * Every test that switches the profile restores the GTP default afterwards.
  */
 import { test, afterEach } from "node:test";
@@ -265,4 +265,75 @@ test("r2 guard: all four R2 vars required (blank counts as missing); message nam
   assert.deepEqual(missingR2Vars({ ...full, R2_SECRET_ACCESS_KEY: "  " }), ["R2_SECRET_ACCESS_KEY"]);
   assert.match(r2GuardMessage(["R2_BUCKET"]), /R2_BUCKET is not set; images would be saved to this machine's disk/);
   assert.match(r2GuardMessage(["R2_BUCKET", "R2_ENDPOINT"]), /R2_BUCKET, R2_ENDPOINT are not set/);
+});
+
+/* ── agr (AsiaGolfReview) profile + provisional mapping ── */
+const AGR: NetworkProfile = parseProfile(readJ("profiles/agr.json"));
+const AGR_OVERLAY = { source: { siteFilter: AGR.fixtureSiteId }, media: { hostAllowlist: ["mbolvnwkmkeroqmvbvmt.supabase.co"], hostRewrite: {} } };
+test("profile: agr parses; pillars = the 7 agr taxonomy pillars; press-room single-home; matches the constants", async () => {
+  const { AGR_PILLARS } = await import("../../lib/agr-taxonomy");
+  const { SINGLE_HOME_PILLARS } = await import("../../../src/lib/constants");
+  assert.equal(AGR.tenant, "agr");
+  assert.deepEqual([...AGR.pillarSlugs], AGR_PILLARS.map((p) => p.slug));
+  assert.deepEqual([...AGR.singleHomePillars], SINGLE_HOME_PILLARS.agr);
+  assert.deepEqual([...(AGR.requiredImageHosts ?? [])], ["mbolvnwkmkeroqmvbvmt.supabase.co"]);
+  assert.equal(AGR.markerSourceName, "legacy:asiagolfreview");
+  for (const p of AGR.pillarSlugs) assert.ok(AGR.reservedSlugs?.includes(p), p);
+});
+test("entry: agr resolves its profile; missing --site names 01-discover-agr.sql", () => {
+  const p = planEntry(["import", "--tenant", "agr", "--site", "asiagolfreview", "--apply", "--run-id", "agr-real-1"]);
+  assert.equal(p.profile.tenant, "agr");
+  assert.deepEqual([...p.profile.legacySiteSlugs], ["asiagolfreview"]);
+  assert.deepEqual(planEntry(["validate-mapping", "--tenant", "agr"]).argv, ["--mapping", AGR.mappingPath]);
+  assert.throws(() => planEntry(["export", "--tenant", "agr"] as never), /sql\/01-discover-agr\.sql/);
+});
+test("mapping: committed agr mapping is PROVISIONAL: validates structurally, refused by --require-final", () => {
+  setProfile(AGR);
+  const m = readJ("mappings/agr.mapping.json");
+  const r = validateMapping(m, AGR_OVERLAY);
+  assert.deepEqual(r.provisional.map((x) => x.key).sort(), [...m._provisional].sort());
+  assert.ok(m._provisional.includes("categories.map"));
+  assert.throws(() => validateMapping(m, AGR_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.equal(m.source.schema, "agr_ro");
+  // events-awards has no entry on purpose: a row there is rejected until the owner decides.
+  assert.equal(Object.keys(m.categories.map).some((k) => k.startsWith("events-awards")), false);
+  assert.equal(m.categories.unmapped, "reject");
+  assert.equal(m.authors.distribute.mode, "slugHash");
+  assert.deepEqual(m.authors.staff, ["Rachel Lim", "Arjun Mehta", "Kenji Sato", "Ha Tran", "Daniel Wong"]);
+  assert.throws(() => validateMapping(m, { ...AGR_OVERLAY, media: { hostAllowlist: ["x.example.com"], hostRewrite: {} } }), /mbolvnwkmkeroqmvbvmt/);
+});
+test("mapping: every agr target is a real pillar/sub-section; press-room never gets a sub; addTags are kept tags", async () => {
+  const { AGR_SUBSECTIONS } = await import("../../lib/agr-taxonomy");
+  const m = readJ("mappings/agr.mapping.json");
+  const subs = new Set(AGR_SUBSECTIONS.map((s) => `${s.pillarSlug}/${s.slug}`));
+  for (const [k, t] of Object.entries(m.categories.map) as Array<[string, { pillar: string; subSection?: string; addTags?: string[] }]>) {
+    assert.ok(AGR.pillarSlugs.includes(t.pillar), k);
+    if (t.subSection) assert.ok(subs.has(`${t.pillar}/${t.subSection}`), k);
+    if (t.pillar === "press-room") assert.equal(t.subSection, undefined, k);
+    for (const tag of t.addTags ?? []) assert.ok(m.tags.keepOnly.includes(tag), `${k} ${tag}`);
+  }
+  const tx = (sec: string, sub: string) => resolveTaxonomy(sec, sub, m);
+  assert.deepEqual(tx("golf-travel", "resorts-stays"), { ok: true, t: { pillar: "golf-travel", subSection: "resorts-stays", rehomed: false, oldSection: "golf-travel", oldSub: "resorts-stays" } });
+  assert.deepEqual(tx("course-reviews", "hidden-gems"), { ok: true, t: { pillar: "course-reviews", rehomed: true, oldSection: "course-reviews", oldSub: "hidden-gems", addTags: ["hidden-gems"] } });
+  assert.deepEqual(tx("gear-style", "style"), { ok: true, t: { pillar: "gear-style", subSection: "apparel", rehomed: true, oldSection: "gear-style", oldSub: "style" } });
+  assert.deepEqual(tx("press-room", "press-releases"), { ok: true, t: { pillar: "press-room", rehomed: true, oldSection: "press-room", oldSub: "press-releases" } });
+});
+test("addTags: appended after legacy tags under keepOnly/dedupe; no addTags = unchanged list", async () => {
+  const { withAddedTags } = await import("../lib/gtp-transform");
+  const m = readJ("mappings/agr.mapping.json");
+  const tm = { tags: { normalize: "lowercase-trim-dedupe", maxPerArticle: 12, drop: [], renames: m.tags.renames, keepOnly: m.tags.keepOnly } } as never;
+  const base = legacyTags(["Hidden Gem", "golf"], tm);
+  assert.deepEqual(base.map((t) => t.slug), ["hidden-gems"]);
+  assert.deepEqual(withAddedTags(base, ["hidden-gems", "new-renovated", "not-kept"], tm).map((t) => t.slug), ["hidden-gems", "new-renovated"]);
+  assert.deepEqual(withAddedTags(base, undefined, tm), base);
+});
+test("agr SQL Editor files are agr-only (role agr_migrator, schema agr_ro, no aer_ro)", () => {
+  for (const f of ["sql/01-discover-agr.sql", "sql/02-create-readonly-role-views-agr.sql", "sql/02p-set-password-agr.sql", "sql/03-drop-role-and-views-agr.sql"]) {
+    const s = readFileSync(path.join(HERE, f), "utf8");
+    assert.doesNotMatch(s, /aer_ro|Asia Economic/, f);
+  }
+  const s02 = readFileSync(path.join(HERE, "sql/02-create-readonly-role-views-agr.sql"), "utf8");
+  assert.match(s02, /CREATE ROLE agr_migrator/);
+  assert.match(s02, /CREATE SCHEMA agr_ro/);
+  assert.match(readFileSync(path.join(HERE, "sql/01-discover-agr.sql"), "utf8"), /slug::text = 'agr'/);
 });

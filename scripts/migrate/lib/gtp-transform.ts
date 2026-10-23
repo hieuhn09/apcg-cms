@@ -74,6 +74,8 @@ export interface Taxonomy {
   rehomed: boolean;
   oldSection: string;
   oldSub: string;
+  /** Tag slugs the matched categories.map entry adds (network bundle, agr). Absent when the entry has none (GTP/AER). */
+  addTags?: string[];
 }
 export type TaxonomyDecision = { ok: true; t: Taxonomy } | { ok: false; reason: string };
 
@@ -84,7 +86,14 @@ export function resolveTaxonomy(section: unknown, subsection: unknown, m: Pick<M
   if (override) {
     return {
       ok: true,
-      t: { pillar: override.pillar, ...(override.subSection ? { subSection: override.subSection } : {}), rehomed: override.pillar !== sec || (override.subSection ?? "") !== sub, oldSection: sec, oldSub: sub },
+      t: {
+        pillar: override.pillar,
+        ...(override.subSection ? { subSection: override.subSection } : {}),
+        rehomed: override.pillar !== sec || (override.subSection ?? "") !== sub,
+        oldSection: sec,
+        oldSub: sub,
+        ...(override.addTags?.length ? { addTags: [...override.addTags] } : {}),
+      },
     };
   }
   if (!sec) {
@@ -140,6 +149,23 @@ export function legacyTags(raw: unknown, m: Pick<Mapping, "tags">): TagRef[] {
     if (m.tags.keepOnly && !m.tags.keepOnly.includes(slug)) continue;
     out.push({ slug, title: titleCaseWords(slug.replace(/-/g, " ")) });
     if (out.length >= m.tags.maxPerArticle) break;
+  }
+  return out;
+}
+
+/**
+ * Append the tags a categories.map entry adds (`addTags`) to the legacy tags:
+ * same keepOnly / drop / dedupe / maxPerArticle rules as legacyTags. No-op
+ * when the entry adds none (every GTP/AER mapping).
+ */
+export function withAddedTags(tags: TagRef[], addTags: readonly string[] | undefined, m: Pick<Mapping, "tags">): TagRef[] {
+  const out = [...tags];
+  for (const raw of addTags ?? []) {
+    const slug = m.tags.renames[tagSlugify(raw)] ?? tagSlugify(raw);
+    if (!slug || m.tags.drop.includes(slug) || out.some((t) => t.slug === slug)) continue;
+    if (m.tags.keepOnly && !m.tags.keepOnly.includes(slug)) continue;
+    if (out.length >= m.tags.maxPerArticle) break;
+    out.push({ slug, title: titleCaseWords(slug.replace(/-/g, " ")) });
   }
   return out;
 }

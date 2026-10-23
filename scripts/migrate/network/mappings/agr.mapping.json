@@ -1,0 +1,275 @@
+{
+  "version": 1,
+  "_provisional": [
+    "status.map",
+    "categories.map",
+    "authors.distribute",
+    "tags.keepOnly",
+    "media.bodyImages",
+    "urls.oldOrigin",
+    "urls.sectionPaths",
+    "urls.extraLegacyPaths",
+    "urls.gonePaths",
+    "archivedAs"
+  ],
+  "_evidence": "STRUCTURAL mapping for the AsiaGolfReview legacy import (agr-launch W2, 23-10-26). No site id, no image host: those live in the owner-held overlay ~/agr-private/overlay.json. Every key in _provisional is an OWNER DECISION still open; the values are SUGGESTIONS only and --require-final (implied for any non-local run) refuses them. Old section/subsection values are GUESSED from the live site's URLs (23-10-26) and must be checked against the discovery result (01-discover-agr.sql, section 3) before the decision. Open decisions: (1) status.map: suggestion published only, like aer. (2) categories.map: old subs whose name equals a new sub-section pass through. course-reviews/by-country and the-review-index keep pillar course-reviews with NO sub-section (the old site filtered countries with ?country=; this tool cannot derive a country sub-section from the countries column, so the owner decides: leave without sub, or hand-assign later). course-reviews/hidden-gems and new-renovated keep pillar course-reviews with no sub-section and add the tag hidden-gems / new-renovated. rankings/methodology goes to rankings with no sub (methodology is a static page on the new site). gear-style/equipment and tested-in-the-tropics go to gear-style with no sub-section (suggestion: clubs, owner to confirm per article); gear-style/style goes to gear-style/apparel. press-room subs (industry-updates, partnerships, press-releases) go to press-room with no sub-section (single-home) and no tag (which of the 7 tags fits is open). events-awards has NO entry on purpose: unmapped is reject, so a row there stops the run until the owner picks a pillar. (3) authors: even split over the 5 staff names by slug hash (D7); legacy bylines are not kept. (4) tags: only the 7 approved tags survive (D6). (5) media.bodyImages: drop (default, counted) or hero-if-missing. (6) archivedAs section (301) vs 410. (7) old origin apex or www; section paths guessed from the live site; /events-awards, /architects, /studio, /licensing, /press-room-submit and the golf-travel / golf-business tool pages get hand-written redirects at cutover.",
+  "source": {
+    "schema": "agr_ro",
+    "tableAllowList": [
+      "articles",
+      "sites",
+      "site_authors"
+    ],
+    "columns": {
+      "id": "id",
+      "slug": "slug",
+      "title": "title",
+      "dek": "excerpt",
+      "kicker": "kicker",
+      "body": "body_sections",
+      "status": "status",
+      "section": "section",
+      "subsection": "subsection",
+      "tags": "tags",
+      "format": "format",
+      "featured": "featured",
+      "isHero": "is_hero",
+      "readMinutes": "read_minutes",
+      "heroImage": "featured_image",
+      "heroCredit": "featured_image_credit",
+      "seo": "seo",
+      "sourceUrl": "source_url",
+      "byline": "byline",
+      "takeaways": "takeaways",
+      "countries": "countries",
+      "publishedAt": "published_at",
+      "createdAt": "created_at",
+      "updatedAt": "updated_at"
+    }
+  },
+  "body": {
+    "format": "sections",
+    "converter": "html-to-lexical",
+    "lineBreaks": "space"
+  },
+  "status": {
+    "map": {
+      "published": "published",
+      "archived": "SKIP",
+      "draft": "SKIP",
+      "scheduled": "SKIP",
+      "rejected": "SKIP"
+    },
+    "unknown": "reject"
+  },
+  "categories": {
+    "map": {
+      "course-reviews/hidden-gems": {
+        "pillar": "course-reviews",
+        "addTags": [
+          "hidden-gems"
+        ]
+      },
+      "course-reviews/new-renovated": {
+        "pillar": "course-reviews",
+        "addTags": [
+          "new-renovated"
+        ]
+      },
+      "course-reviews/by-country": {
+        "pillar": "course-reviews"
+      },
+      "course-reviews/the-review-index": {
+        "pillar": "course-reviews"
+      },
+      "course-reviews/*": {
+        "pillar": "course-reviews"
+      },
+      "rankings/asia-top-100": {
+        "pillar": "rankings",
+        "subSection": "asia-top-100"
+      },
+      "rankings/best-new-courses": {
+        "pillar": "rankings",
+        "subSection": "best-new-courses"
+      },
+      "rankings/country-top-10": {
+        "pillar": "rankings",
+        "subSection": "country-top-10"
+      },
+      "rankings/methodology": {
+        "pillar": "rankings"
+      },
+      "rankings/*": {
+        "pillar": "rankings"
+      },
+      "golf-travel/destinations": {
+        "pillar": "golf-travel",
+        "subSection": "destinations"
+      },
+      "golf-travel/itineraries": {
+        "pillar": "golf-travel",
+        "subSection": "itineraries"
+      },
+      "golf-travel/resorts-stays": {
+        "pillar": "golf-travel",
+        "subSection": "resorts-stays"
+      },
+      "golf-travel/the-practical-game": {
+        "pillar": "golf-travel",
+        "subSection": "the-practical-game"
+      },
+      "golf-travel/*": {
+        "pillar": "golf-travel"
+      },
+      "the-game/players": {
+        "pillar": "the-game",
+        "subSection": "players"
+      },
+      "the-game/tournament-news": {
+        "pillar": "the-game",
+        "subSection": "tournament-news"
+      },
+      "the-game/watch-prize-money": {
+        "pillar": "the-game",
+        "subSection": "watch-prize-money"
+      },
+      "the-game/*": {
+        "pillar": "the-game"
+      },
+      "gear-style/equipment": {
+        "pillar": "gear-style"
+      },
+      "gear-style/tested-in-the-tropics": {
+        "pillar": "gear-style"
+      },
+      "gear-style/style": {
+        "pillar": "gear-style",
+        "subSection": "apparel"
+      },
+      "gear-style/*": {
+        "pillar": "gear-style"
+      },
+      "golf-business/club-management": {
+        "pillar": "golf-business",
+        "subSection": "club-management"
+      },
+      "golf-business/data-insights": {
+        "pillar": "golf-business",
+        "subSection": "data-insights"
+      },
+      "golf-business/development-design": {
+        "pillar": "golf-business",
+        "subSection": "development-design"
+      },
+      "golf-business/people": {
+        "pillar": "golf-business",
+        "subSection": "people"
+      },
+      "golf-business/*": {
+        "pillar": "golf-business"
+      },
+      "press-room/industry-updates": {
+        "pillar": "press-room"
+      },
+      "press-room/partnerships": {
+        "pillar": "press-room"
+      },
+      "press-room/press-releases": {
+        "pillar": "press-room"
+      },
+      "press-room/*": {
+        "pillar": "press-room"
+      }
+    },
+    "fallback": null,
+    "unmapped": "reject"
+  },
+  "authors": {
+    "resolve": "byColumn",
+    "map": {},
+    "staff": [
+      "Rachel Lim",
+      "Arjun Mehta",
+      "Kenji Sato",
+      "Ha Tran",
+      "Daniel Wong"
+    ],
+    "distribute": {
+      "pool": [
+        "Rachel Lim",
+        "Arjun Mehta",
+        "Kenji Sato",
+        "Ha Tran",
+        "Daniel Wong"
+      ],
+      "keepLegacy": false,
+      "groupBy": "none",
+      "maxSpread": 1,
+      "mode": "slugHash"
+    },
+    "createMissing": false
+  },
+  "tags": {
+    "keepOnly": [
+      "courses",
+      "development",
+      "travel",
+      "gear",
+      "tournaments",
+      "hidden-gems",
+      "new-renovated"
+    ],
+    "renames": {
+      "hidden-gem": "hidden-gems",
+      "new-and-renovated": "new-renovated",
+      "tournament": "tournaments"
+    }
+  },
+  "formatTags": {
+    "enabled": false,
+    "include": []
+  },
+  "countries": {
+    "match": "either"
+  },
+  "readMin": {
+    "wpm": 230
+  },
+  "pin": {
+    "fromFlags": false,
+    "maxPinned": 0
+  },
+  "archivedAs": "section",
+  "events": {
+    "enabled": false
+  },
+  "slug": {
+    "preserve": true,
+    "dedupe": "numeric-suffix",
+    "reservedSlugs": []
+  },
+  "urls": {
+    "oldOrigin": "https://asiagolfreview.com",
+    "articlePathTemplate": "/article/{slug}",
+    "sectionPaths": {
+      "course-reviews": "/course-reviews",
+      "rankings": "/rankings",
+      "golf-travel": "/golf-travel",
+      "the-game": "/the-game",
+      "gear-style": "/gear-style",
+      "golf-business": "/golf-business",
+      "press-room": "/press-room"
+    },
+    "extraLegacyPaths": [],
+    "gonePaths": []
+  },
+  "media": {
+    "maxBytes": 20971520,
+    "failureBudgetPercent": 2,
+    "fetchTimeoutMs": 30000,
+    "concurrency": 3,
+    "hotlinkPolicy": "download",
+    "bodyImages": "drop"
+  }
+}
