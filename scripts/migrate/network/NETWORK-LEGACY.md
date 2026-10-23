@@ -185,9 +185,11 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
 - File SQL riêng của ABB (không sửa gì trong file): `sql/01-discover-abb.sql`,
   `sql/02-create-readonly-role-views-abb.sql`, `sql/02p-set-password-abb.sql`,
   `sql/03-drop-role-and-views-abb.sql`. Không dùng file 02/02p/03 không hậu tố (đó là của AER).
-- Dòng site cũ: slug `asiabeautybrief` (khám phá 22-10-26: 415 bài = 322 published, 75 archived,
-  18 draft, 0 rejected; 398 ảnh đại diện ở `mbolvnwkmkeroqmvbvmt.supabase.co`; `media_assets` 0 dòng).
-- Mapping `mappings/abb.mapping.json`:
+- Dòng site cũ: slug `asiabeautybrief` (khám phá 23-10-26: 421 bài = 330 published, 76 archived
+  [75 chưa từng đăng, 1 đăng 2026-08-09 rồi gỡ], 15 draft, 0 rejected; 403 ảnh đại diện ở
+  `mbolvnwkmkeroqmvbvmt.supabase.co`, 18 bài không ảnh; 0 ảnh trong thân bài; slug 0 rỗng/0 trùng).
+  Site cũ vẫn đăng bài (mới nhất 2026-10-23 01:00 UTC) nên cần lượt chạy bù trước cutover.
+- Mapping `mappings/abb.mapping.json` **đã chốt** (chủ dự án 23-10-26, `_provisional` rỗng):
   - `supply-side` thành pillar `supply`, giữ mục con; mọi pillar và mục con cũ khác giữ nguyên
     slug; `briefing` không mục con vào pillar;
   - tác giả chia cho 5 người theo băm slug (`mode: slugHash`, ổn định qua các lượt chạy bù);
@@ -195,9 +197,9 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   - chỉ giữ 57 tag đã duyệt của `scripts/lib/abb-taxonomy.ts` (so theo slug của tag cũ); SEO bỏ;
   - draft thành nháp, published thành bài đã đăng; ảnh đại diện lên R2 của tenant, credit lấy
     từ `featured_image_credit`;
-  - **còn chờ chủ dự án** (`_provisional`): bài `archived` (đang để nhập là bài đã đăng theo D7;
-    có thể chọn nhập nháp hoặc bỏ qua như AER), và ảnh trong thân bài (đang `drop`, chốt sau
-    khi bước 1 cho số ảnh). Bước 8 (`--require-final`) chỉ qua khi hai mục này đã chốt.
+  - **đã chốt 23-10-26**: bài `archived` bỏ qua (`SKIP`, như AER; chủ dự án "Bỏ qua"); ảnh trong
+    thân bài `drop` (khám phá: 0 ảnh trong 1593 đoạn). Lượt chạy thật hôm nay nhập 330 + 15 = 345
+    bài. `--require-final` qua.
 - Redirect: trang chuyên mục mới là `/section/<pillar>` (`sectionPathPrefix`); `/supply-side`
   thành `/section/supply`; `/events-awards`, `/pro`, `/studio` trả 410. Dạng cũ `?sub=<Tên>` và
   các trang tĩnh (`/exhibition`, `/press-room`, `/editorial-standards`, ...) viết tay trong
@@ -213,8 +215,7 @@ bấm Run một lần.
 
 1. **Khám phá**: chạy `scripts/migrate/network/sql/01-discover-abb.sql`, bấm "Download CSV" và
    gửi file. Cần thấy hàng `1 site match | rows matching asiabeautybrief | 1`. Khác 1: dừng và báo.
-2. **Chủ dự án chốt** bài `archived` và ảnh trong thân bài (agent soạn từ mục `4b archived posts`
-   và `7 body_sections images` của bước 1).
+2. **Đã xong (23-10-26)**: chủ dự án chốt bài `archived` bỏ qua và ảnh trong thân bài bỏ (0 ảnh).
 3. **Tạo role chỉ-đọc**: chạy `sql/02-create-readonly-role-views-abb.sql`. Ô kết quả phải là
    `SELF-CHECK OK` kèm số bài.
 4. **Đặt mật khẩu**: chạy `sql/02p-set-password-abb.sql`, bấm nút copy của ô `new_secret`.

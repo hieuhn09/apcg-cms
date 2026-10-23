@@ -283,14 +283,16 @@ test("abb profile: tenant abb, legacy slug asiabeautybrief, pressroom single-hom
   assert.deepEqual(planEntry(["validate-mapping", "--tenant", "abb"]).argv, ["--mapping", ABB.mappingPath]);
   assert.throws(() => parseProfile({ ...readJ("profiles/abb.json"), sectionPathPrefix: "section" }), /sectionPathPrefix/);
 });
-test("abb mapping: provisional only status.map + media.bodyImages; --require-final refuses; fixture is final", () => {
+test("abb mapping: FINAL (owner 23-10-26): no provisional keys, --require-final passes, archived SKIP, body images dropped; fixture is final", () => {
   setProfile(ABB);
   const m = readJ("mappings/abb.mapping.json");
   const v = validateMapping(m, ABB_OVERLAY);
-  assert.deepEqual(v.provisional.map((x) => x.key), ["status.map", "media.bodyImages"]);
-  assert.throws(() => validateMapping(m, ABB_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.deepEqual(v.provisional.map((x) => x.key), []);
+  assert.deepEqual(m._provisional, []);
+  assert.doesNotThrow(() => validateMapping(m, ABB_OVERLAY, { requireFinal: true }));
+  assert.equal(m.media.bodyImages, "drop");
   assert.doesNotThrow(() => validateMapping(readJ("fixtures/abb-legacy/abb.mapping.fixture.json"), ABB_OVERLAY, { requireFinal: true }));
-  assert.deepEqual(m.status.map, { published: "published", archived: "published", draft: "draft", scheduled: "draft", rejected: "SKIP" });
+  assert.deepEqual(m.status.map, { published: "published", archived: "SKIP", draft: "draft", scheduled: "draft", rejected: "SKIP" });
   assert.deepEqual(m.authors.distribute.pool, ["Joanne Lau", "Kim Seo-yeon", "Kavita Rao", "Emi Fujita", "Nathan Leong"]);
   assert.equal(m.authors.distribute.mode, "slugHash");
   assert.equal(m.authors.distribute.keepLegacy, false);

@@ -84,10 +84,10 @@ COMMON=(--tenant abb --site 00000000-0000-0000-0000-0000000ab001)
 OV=(--mapping-overlay $FX/overlay.fixture.json --out "$OUT")
 MAPF=(--mapping $FX/abb.mapping.fixture.json)
 
-step "6 validate-mapping (committed mapping: OK with PROVISIONAL list; --require-final must refuse)"
+step "6 validate-mapping (committed mapping is FINAL, owner 23-10-26: --require-final must pass)"
 "${N[@]}" validate-mapping --tenant abb --structural-only | head -3
-if "${N[@]}" validate-mapping --tenant abb --structural-only --require-final >/dev/null 2>&1; then fail "--require-final must refuse the provisional ABB mapping"; fi
-echo "--require-final refused (expected)"
+"${N[@]}" validate-mapping --tenant abb --structural-only --require-final >/dev/null || fail "--require-final must accept the FINAL ABB mapping"
+echo "--require-final accepted the committed mapping (expected)"
 "${N[@]}" validate-mapping --tenant abb "${MAPF[@]}" --mapping-overlay $FX/overlay.fixture.json --require-final
 
 step "7 discover + export (read-only, by site id; legacy slug is not "abb")"

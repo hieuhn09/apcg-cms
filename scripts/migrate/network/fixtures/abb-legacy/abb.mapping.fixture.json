@@ -1,7 +1,7 @@
 {
   "version": 1,
   "_provisional": [],
-  "_evidence": "REHEARSAL fixture mapping for tenant abb (synthetic data). Same as mappings/abb.mapping.json with every provisional owner decision taken at its suggested value (archived -> published, body images dropped); never use for a real run.",
+  "_evidence": "REHEARSAL fixture mapping for tenant abb (synthetic data). Same decisions as the FINAL mappings/abb.mapping.json (owner 23-10-26: archived -> SKIP, body images dropped); never use for a real run.",
   "source": {
     "schema": "abb_ro",
     "tableAllowList": [
@@ -44,7 +44,7 @@
   "status": {
     "map": {
       "published": "published",
-      "archived": "published",
+      "archived": "SKIP",
       "draft": "draft",
       "scheduled": "draft",
       "rejected": "SKIP"
