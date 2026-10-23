@@ -116,6 +116,7 @@ and status.
   wad-web (any order; the wad-web "Distributed by" byline is harmless before the CMS
   change). Rollback: remove the two `wad` `pressroom` entries from the constants and
   redeploy (re-run the query before re-enabling).
+  Run 20-10-26 by the owner on production (Neon SQL Editor): all 0, WAD `pressroom` pillar id 38, 0 articles.
 
   ```sql
   WITH t AS (SELECT id FROM tenants WHERE slug='wad'),

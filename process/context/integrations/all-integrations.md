@@ -698,9 +698,9 @@ for Pressroom articles only (merged as #27). Known gap: the admin required aster
 A pillar listed in `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, `{ "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"] }`,
 keyed by **tenant slug + pillar slug**, beside `ENGINE_BLOCKED_PILLARS` at `:40`) owns its articles
 exclusively: a code constant, **no schema field, no migration**. **Updated 2026-10-20 (WAD Pressroom
-parity, owner decision, plan `process/general-plans/active/wad-pressroom_20-10-26/`):** WAD `pressroom` is
+parity, owner decision, plan `process/general-plans/completed/wad-pressroom_20-10-26/`; merged apcg-cms#44 `131e270`, deployed 20-10-26):** WAD `pressroom` is
 now single-home AND engine-blocked exactly like GCV (`wad: ["pressroom"]` in both maps, no migration; the
-owner runs the read-only WAD violator SQL in `docs/11-operations.md` before deploy; hub authoring into WAD
+the owner ran the read-only WAD violator SQL (`docs/11-operations.md`) on production 20-10-26: all 0, and the WAD `pressroom` pillar is id 38 with 0 articles; hub authoring into WAD
 pressroom now gets `blocked_pillar` via the generic `hub-author-refs.ts` check). The tests' and probe's
 negative control is now a fixture-only `(world-travel-brief, pressroom)` pillar (WTB has no such row in
 production; `dtw` is kept pressroom-free on purpose for the move checks). The rule (`src/lib/single-home-pillars.ts:7-15`): V1 primary = P means no
@@ -743,12 +743,12 @@ intake, scripts):
   a refused delete.
 
 **Engine is blocked from Pressroom (Amendment 1, 2026-10-05; owner instruction: Pressroom takes no
-content-engine articles).** `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive", "pressroom"], "brief-asia": ["pressroom"] }`
+content-engine articles).** `ENGINE_BLOCKED_PILLARS = { gcv: ["exclusive", "pressroom"], "brief-asia": ["pressroom"], wad: ["pressroom"] }`
 (`src/lib/constants.ts:40`; GCV `pressroom` added 05-10-26 for GCV Pressroom parity, same 422 on create and refresh); `normalizeEngineBlockedSlug` (trim + lower-case) and `isEngineBlockedPillar`
 make the match case/whitespace-insensitive. Gate 3b in `intake/route.ts:156` runs after auth + tenant/pillar
 resolution and BEFORE 3c and the idempotency lookup, so engine create AND refresh get 422
 `pillar not writable by engine: pressroom` plus an `integration_error` row. WAD `pressroom` is blocked too
-since 20-10-26; tenants not listed are unaffected. Pressroom articles are created by editors only, so "teach the engine Pressroom" and the
+since 20-10-26 (deployed); tenants not listed are unaffected. Pressroom articles are created by editors only, so "teach the engine Pressroom" and the
 `autoPublishEngineDrafts`-for-Pressroom concern are moot. Rollback: remove the `brief-asia` entry (engine
 writes re-enabled; the single-home rule still applies). Only `engine/intake` takes a pillar from an engine actor.
 
