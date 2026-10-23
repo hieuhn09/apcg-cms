@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-10-19 (Asia Economic Review tenant `aer` groundwork, aer launch W2, branch `claude/festive-pasteur-280l52`, local commits only, NOT pushed, nothing run against any database: `ENGINE_BLOCKED_PILLARS.aer` = `["long-view","interviews","in-focus"]`, no `SINGLE_HOME_PILLARS` entry, no migration; taxonomy module `scripts/lib/aer-taxonomy.ts` (6 pillars, 12 sub-sections, 1 newsletter, 4 authors, 6 tags = 29 rows); OWNER-RUN `npm run audit:add-aer-taxonomy` (dry run default, `/neondb` name guard); `test:single-home` now 7 files / 285 tests. Details: `integrations/all-integrations.md` §AER tenant rules, `docs/11-operations.md` "Asia Economic Review rollout".)
+Last updated: 2026-10-20 (WAD Pressroom parity, Stream A, branch `claude/vigilant-knuth-7tvio3`, uncommitted, NOT deployed: `wad: ["pressroom"]` added to `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` in `src/lib/constants.ts` (no migration); the WAD negative control in tests/probe is replaced by a fixture-only `(world-travel-brief, pressroom)`; `test:single-home` 276 tests (was 267), `probe:single-home` 76/76 fresh, 86/86 with `--http` on a disposable PG16; owner must run the read-only WAD violator SQL in `docs/11-operations.md` before deploy. Plan: `process/general-plans/active/wad-pressroom_20-10-26/`.)
+
+Previously: 2026-10-19 (Asia Economic Review tenant `aer` groundwork, aer launch W2, branch `claude/festive-pasteur-280l52`, local commits only, NOT pushed, nothing run against any database: `ENGINE_BLOCKED_PILLARS.aer` = `["long-view","interviews","in-focus"]`, no `SINGLE_HOME_PILLARS` entry, no migration; taxonomy module `scripts/lib/aer-taxonomy.ts` (6 pillars, 12 sub-sections, 1 newsletter, 4 authors, 6 tags = 29 rows); OWNER-RUN `npm run audit:add-aer-taxonomy` (dry run default, `/neondb` name guard); `test:single-home` now 7 files / 285 tests. Details: `integrations/all-integrations.md` §AER tenant rules, `docs/11-operations.md` "Asia Economic Review rollout".)
 
 Previously: 2026-10-16 (PR #36 branch `claude/awesome-wright-x5iwsf`: `origin/main` `fe88bc4` merged in by merge commit, no conflict, no `src/migrations` change vs `main`; re-run on the merged tree: typecheck, lint, lint:migrate 0 errors; test:media-redirect 175, test:single-home 267, test:hub-media 100, test:hub-live 27, test:hub-p56 127, test:migrate-gtp 69, all pass; clean-clone `VERCEL_ENV=preview npm run vercel-build` exit 0, migrations skipped, no DB touched. Still NOT merged, NOT VERIFIED.)
 
@@ -314,7 +316,7 @@ Any new relationship to a secret-bearing collection needs the same treatment; no
 automatically. Full detail: `process/context/integrations/all-integrations.md` §Security patterns.
 
 **Single-home pillar rule (2026-10-05).** `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, tenant slug
--> pillar slugs; today `brief-asia` -> `pressroom` and `gcv` -> `pressroom`; WAD's `pressroom` is the negative control) makes a pillar's articles belong to nothing else: no
+-> pillar slugs; today `brief-asia`, `gcv` and (since 20-10-26) `wad` -> `pressroom`, `gtp`/`vowasia` -> `press-room`; the tests' negative control is a fixture-only `world-travel-brief` `pressroom`) makes a pillar's articles belong to nothing else: no
 secondary sections, no sub-section, never another article's secondary section, no sub-sections of its
 own, not `exclusive`, and its slug/tenant can't be renamed/moved/deleted in use. Code constant only (no
 migration); enforced in the Articles `beforeChange` hook on the *resulting* state (never trusting
@@ -322,7 +324,7 @@ Payload's backfill), SubSections/secondary-row validators, Pillars row guards, a
 and Console error unwrapping. The `pressroom` Pillars row is created LAST by the owner
 (`npm run audit:add-pressroom`, dry-run first, `--apply --confirm-host=<prod DB host>` from a TTY) via the
 shared local-DB guard `scripts/lib/local-db-guard.ts`. The content engine is BLOCKED from Pressroom
-(`ENGINE_BLOCKED_PILLARS["brief-asia"] = ["pressroom"]`, `gcv` = `["exclusive", "pressroom"]`, intake gate 3b, 422 `pillar not writable by engine`,
+(`ENGINE_BLOCKED_PILLARS["brief-asia"] = ["pressroom"]`, `gcv` = `["exclusive", "pressroom"]`, `wad` = `["pressroom"]`, intake gate 3b, 422 `pillar not writable by engine`,
 create AND refresh; editors create Pressroom articles). Full detail, residuals and the engine 422 reasons:
 `process/context/integrations/all-integrations.md` §Single-home pillar rule.
 
@@ -419,7 +421,7 @@ independent verification, not from guessing.
 | `npm run migrate:gtp:{discover,export,validate-mapping,import,rewrite-links,rollback,redirects,verify,fixture}` | gtp legacy-site migration CLIs (`scripts/migrate/*-gtp*.ts`); see `scripts/migrate/GTP-LEGACY.md` and `docs/12-migration.md`; proven only on a synthetic fixture so far |
 | `npm run rehearse:gtp` | `bash scripts/migrate/fixtures/gtp-legacy/rehearse-gtp.sh` — scripted end-to-end rehearsal on a local legacy fixture (needs Docker or native PG16) |
 | `npm run lint:migrate` / `npm run test:migrate-gtp` | eslint over `scripts/migrate`; `tsx --test scripts/migrate/lib/*.test.ts` |
-| `npm run test:single-home` | `tsx --test` on 3 files (rule module, hook, local-db guard incl. its 27-URL table), 181 tests; no DB, no network |
+| `npm run test:single-home` | `tsx --test` on 6 files (rule module, hook, local-db guard incl. its 27-URL table, gtp/vowasia taxonomy, central-db-name guard), 276 tests (20-10-26); no DB, no network |
 | `npm run test:hub-media` | `tsx --test` on 3 files (`hub-media-validate`, `media-create`, `hub-author-media-token`), 100 tests (re-run 2026-10-15 on `5d5b28c`); P5.3, branch-only | `node:test`, no DB/network |
 | `npm run test:hub-live` | `tsx --test` on 2 files (`hub-author-live-pure`, `hub-author-live-core`), 27 tests (re-run 2026-10-15); P5.4, branch-only | `node:test`, no DB/network |
 | `npm run test:hub-p56` | `tsx --test` on 4 files (`hub-author-preview-{pure,core}`, `hub-taxonomy-create-{pure,core}`), 127 tests (re-run 2026-10-15); P5.6, branch-only | `node:test`, no DB/network |
