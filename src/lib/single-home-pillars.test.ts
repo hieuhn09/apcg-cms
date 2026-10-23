@@ -43,9 +43,10 @@ const V4 = 'pillar rule: "pressroom" is a single-home pillar: it cannot have sub
 const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed there cannot be marked exclusive.';
 
 describe("constants", () => {
-  it("SINGLE_HOME_PILLARS = { brief-asia: [pressroom], gcv: [pressroom], gtp: [press-room], vowasia: [press-room], wad: [pressroom] } beside ENGINE_BLOCKED_PILLARS", () => {
-    assert.deepEqual(SINGLE_HOME_PILLARS, { "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"] });
+  it("SINGLE_HOME_PILLARS = { abb: [pressroom], brief-asia: [pressroom], gcv: [pressroom], gtp: [press-room], vowasia: [press-room], wad: [pressroom] } beside ENGINE_BLOCKED_PILLARS", () => {
+    assert.deepEqual(SINGLE_HOME_PILLARS, { abb: ["pressroom"], "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"] });
     assert.deepEqual(ENGINE_BLOCKED_PILLARS, {
+      abb: ["pressroom"],
       gcv: ["exclusive", "pressroom"],
       "brief-asia": ["pressroom"],
       gtp: ["press-room", "events-awards"],
