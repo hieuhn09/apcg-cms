@@ -94,6 +94,28 @@ in `scripts/lib/aer-taxonomy.ts`.
   29 rows) with `npm run audit:add-aer-taxonomy`: see `docs/11-operations.md`
   "Asia Economic Review rollout". Same `/neondb` name guard as the vowasia script.
 
+### Example: AsiaGolfReview (`agr`)
+
+Owner-run, systemAdmin only. Status 23-10-26: **code only**; the tenant does NOT exist yet
+and nothing has been run against any database. Field sheet as data: `AGR_TENANT_FIELDS`
+in `scripts/lib/agr-taxonomy.ts`.
+
+- Name `AsiaGolfReview`, slug `agr` (the web repo is `agr-web`; the domain is
+  `asiagolfreview.com`), status `active`, default language `en`, supported languages
+  `[en]`, timezone `Asia/Singapore`. Contact (PENDING OWNER): editorial
+  `editor@asiagolfreview.com`, general `info@asiagolfreview.com`, advertising/partnerships
+  `info@asiapresscentre.com`.
+- Domain, additional domains and **frontend URL: EMPTY at creation** (set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` on; everything else off (incl.
+  translations).
+- **Auto publish engine drafts: OFF** (`audit:add-agr-taxonomy` refuses `--apply` while on).
+- `course-reviews`, `rankings` and `press-room` are engine-blocked in code
+  (`src/lib/constants.ts`); `press-room` (hyphenated) is also single-home (no sub-sections,
+  optional author). No migration.
+- Then create the taxonomy (7 pillars, 29 sub-sections, 2 newsletters, 5 authors, 7 tags =
+  50 rows) with `npm run audit:add-agr-taxonomy`: see `docs/11-operations.md`
+  "AsiaGolfReview rollout". Same `/neondb` name guard as the aer script.
+
 ## Configure domain & languages
 
 - **Domain**: `domain` + `additionalDomains` are informational/CORS hints; the

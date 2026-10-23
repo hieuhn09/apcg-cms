@@ -797,6 +797,24 @@ description; Console shows it fully).
   rows, read token and engine record `content-engine-aer` do not exist. Runbook:
   `docs/11-operations.md` "Asia Economic Review rollout".
 
+## AGR tenant rules (AsiaGolfReview, agr launch W2, 2026-10-23)
+
+- Tenant slug `agr` (name "AsiaGolfReview", domain `asiagolfreview.com`, web repo `agr-web`).
+  `ENGINE_BLOCKED_PILLARS.agr = ["course-reviews", "rankings", "press-room"]`;
+  `SINGLE_HOME_PILLARS.agr = ["press-room"]` (hyphenated, like gtp/vowasia; `pressroom` is
+  not special for agr, pinned in `scripts/lib/agr-taxonomy.test.ts`). `course-reviews` and
+  `rankings` keep sub-sections, secondary sections and a required author.
+- Taxonomy source of truth: `scripts/lib/agr-taxonomy.ts` (7 pillars, 29 sub-sections,
+  2 newsletters `sunday-round` / `golf-business-brief`, 5 authors, 7 tags = 50 rows);
+  OWNER-RUN `npm run audit:add-agr-taxonomy` (dry run default, host + `/neondb` name guard).
+- Legacy import profile `scripts/migrate/network/profiles/agr.json` + mapping
+  `mappings/agr.mapping.json` (owner decisions still in `_provisional`, so `--require-final`
+  refuses; `events-awards` unmapped on purpose). `categories.map` entries may carry
+  `addTags` (applied by `withAddedTags`, `scripts/migrate/lib/gtp-transform.ts`).
+- Status 23-10-26: code only, branch `claude/eloquent-galileo-muecfh` (stacked on the AER
+  branch), not pushed; tenant, rows, read token and engine record `content-engine-agr` do not
+  exist. Runbook: `docs/11-operations.md` "AsiaGolfReview rollout".
+
 ## GTP tenant rules (GlobalTravelPost, gtp-launch P1/P4, 2026-10-12)
 
 PR hieuhn09/apcg-cms#35 MERGED (`925ba0b`). Code verified locally. Status of production steps as of 13-10-26:

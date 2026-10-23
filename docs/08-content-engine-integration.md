@@ -64,8 +64,8 @@ Content-Type: application/json
 | 401 | `{ ok:false, status:"unauthorized" }` | bad/suspended token |
 | 403 | `{ ok:false, status:"forbidden", reason }` | tenant/action not allowed |
 | 422 | `{ ok:false, status:"unprocessable", reason }` | feature disabled / unknown pillar |
-| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom`, WAD `pressroom` (since 20-10-26), GlobalTravelPost (`gtp`) `press-room` and `events-awards`, VowAsia (`vowasia`) `press-room`, `real-weddings` and `directory`, Asia Economic Review (`aer`) `long-view`, `interviews` and `in-focus`, Pressroom / Press Room / Events & Awards articles come only from editors); the check is on the PRIMARY `pillarSlug` only (a gtp `news` primary with `sections:["events-awards"]` is not blocked by it); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
-| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom`, GCV `pressroom`, WAD `pressroom` (since 20-10-26), GlobalTravelPost `gtp` `press-room` and VowAsia `vowasia` `press-room`; gtp `events-awards` is not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom`, WAD `pressroom` (since 20-10-26), GlobalTravelPost (`gtp`) `press-room` and `events-awards`, VowAsia (`vowasia`) `press-room`, `real-weddings` and `directory`, Asia Economic Review (`aer`) `long-view`, `interviews` and `in-focus`, AsiaGolfReview (`agr`) `course-reviews`, `rankings` and `press-room`, Pressroom / Press Room / Events & Awards articles come only from editors); the check is on the PRIMARY `pillarSlug` only (a gtp `news` primary with `sections:["events-awards"]` is not blocked by it); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom`, GCV `pressroom`, WAD `pressroom` (since 20-10-26), GlobalTravelPost `gtp` `press-room`, VowAsia `vowasia` `press-room` and AsiaGolfReview `agr` `press-room`; gtp `events-awards` is not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
 | 5xx | `{ ok:false, status:"error" }` | transient — safe to retry |
 
 ### GlobalTravelPost (`gtp`) notes
@@ -113,6 +113,19 @@ Content-Type: application/json
 - `byline` must equal an aer `authors.name` exactly (`Lena Ho`, `Arjun Menon`,
   `Mei Fong Chua`, `Rahul Sethi`); no shared "editorial team" byline.
 - Status 19-10-26: code only; intake for `aer` answers 4xx until the owner creates the
+  tenant, taxonomy and engine record.
+
+### AsiaGolfReview (`agr`) notes
+
+- Tenant slug / `publicationId` `agr`. Engine-writable pillars: `golf-travel`, `the-game`,
+  `gear-style`, `golf-business` (all have sub-sections: send `subSectionSlug(s)`);
+  `course-reviews`, `rankings` and `press-room` are editor-only (422 `pillar not writable by
+  engine`). `press-room` is single-home; unhyphenated `pressroom` means nothing for agr.
+  Taxonomy source of truth: `scripts/lib/agr-taxonomy.ts`.
+- `engineDraftId`: `content-engine:agr:<article.id>`, same convention as gtp/vowasia/aer.
+- `byline` must equal an agr `authors.name` exactly (`Rachel Lim`, `Arjun Mehta`,
+  `Kenji Sato`, `Ha Tran`, `Daniel Wong`); no shared "AGR Editors" byline.
+- Status 23-10-26: code only; intake for `agr` answers 4xx until the owner creates the
   tenant, taxonomy and engine record.
 
 ### `contentType` — what the document is

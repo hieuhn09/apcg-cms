@@ -173,3 +173,37 @@ Rủi ro phải nói rõ (giống VowAsia Amendment 2): role `aer_migrator` đ�
 pg_net `net._http_response`, `net.http_request_queue` (Supabase cấp cho mọi role), và nếu
 tự tắt chế độ chỉ-đọc thì ghi được hàng đợi HTTP, nên lộ mật khẩu là lộ nhiều hơn dữ liệu
 AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role tự hết hạn sau 14 ngày.
+
+## AsiaGolfReview (`--tenant agr`)
+
+- Slug Central: **`agr`** (chủ dự án chốt 23-10-26). Role DB cũ: `agr_migrator`; schema
+  view: `agr_ro`; overlay riêng: `~/agr-private/overlay.json`; run-id: `agr-real-1`, ...
+- Dòng site cũ: **chưa biết** (đoán slug `asiagolfreview`). File khám phá
+  `sql/01-discover-agr.sql` tìm dòng site theo `asiagolfreview` / `asia golf review` /
+  `asia-golf-review` hoặc slug đúng `agr`, in ra mọi slug site để so, và thêm mục
+  `3b countries x section` (để quyết mục con theo nước của Course Reviews).
+- File SQL Editor của agr là bản riêng (khác tên với file của AER):
+  `sql/01-discover-agr.sql`, `sql/02-create-readonly-role-views-agr.sql`,
+  `sql/02p-set-password-agr.sql`, `sql/03-drop-role-and-views-agr.sql`. Các bước giống hệt
+  AER ở trên, chỉ thay `aer` bằng `agr` và dùng đúng các file này. Đã chạy thử cả bốn file
+  trên Postgres giả trong máy (23-10-26): khám phá ra đúng 1 site, `SELF-CHECK OK`,
+  `CLEANUP OK`.
+- Mapping `mappings/agr.mapping.json` **CHƯA chốt** (`_provisional` còn: `status.map`,
+  `categories.map`, `authors.distribute`, `tags.keepOnly`, `media.bodyImages`, các `urls.*`,
+  `archivedAs`). `validate-mapping --require-final` (ngầm bật khi chạy với Central thật) từ
+  chối cho tới khi chủ dự án chốt sau bước khám phá. Gợi ý đang ghi:
+  - chỉ chuyển bài `published`;
+  - mục con cũ trùng tên giữ nguyên (`asia-top-100`, `best-new-courses`, `country-top-10`,
+    `destinations`, `itineraries`, `resorts-stays`, `the-practical-game`, `players`,
+    `tournament-news`, `watch-prize-money`, `club-management`, `data-insights`,
+    `development-design`, `people`);
+  - `course-reviews/hidden-gems`, `new-renovated` → `course-reviews` không mục con, thêm
+    tag `hidden-gems` / `new-renovated` (`addTags`); `by-country`, `the-review-index` →
+    `course-reviews` không mục con (mục con theo nước: chủ dự án quyết);
+  - `gear-style/equipment`, `tested-in-the-tropics` → `gear-style` không mục con (gợi ý
+    `clubs`, chưa chốt); `gear-style/style` → `gear-style/apparel`;
+  - `press-room/*` → `press-room` không mục con (một nhà), chưa gắn tag;
+  - `events-awards`: **không có dòng** cố ý; bài ở đó bị từ chối cho tới khi chủ dự án
+    chọn pillar;
+  - tác giả chia đều 5 người theo băm slug (`slugHash`, D7); chỉ giữ 7 tag đã duyệt.
+- Ảnh: như AER, overlay PHẢI có host `mbolvnwkmkeroqmvbvmt.supabase.co`.

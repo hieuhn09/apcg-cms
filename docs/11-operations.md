@@ -207,6 +207,26 @@ and status.
   `aer`, actions only `create_article` + `update_article`, hub flags off; (9) add the aer-web
   origin to `PUBLIC_API_ALLOWED_ORIGINS`. Same guards, never-overwrite and refuse
   behaviour as the vowasia script. Author bios and the tag set are PENDING OWNER wording.
+- **AsiaGolfReview rollout (owner-run; tenant `agr`):** the rule ships in code
+  (`ENGINE_BLOCKED_PILLARS.agr = ["course-reviews", "rankings", "press-room"]`;
+  `SINGLE_HOME_PILLARS.agr = ["press-room"]`) and is inert until the tenant exists. No
+  migration. **Status 23-10-26: code only, nothing applied.** Steps: (1) merge (after the AER
+  PR, this branch is stacked on it) + deploy; (2) create the tenant by hand in /admin from
+  `AGR_TENANT_FIELDS` (`docs/07-website-management.md`; slug `agr`,
+  `autoPublishEngineDrafts` off, frontend URL empty); (3) print host and database name:
+  `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-agr-taxonomy -- --confirm-host=<hostname>` (7 pillars, 29 sub-sections,
+  2 newsletters, 5 authors, 7 tags = 50 rows, all `create`); (5) apply from an interactive
+  terminal: `npm run audit:add-agr-taxonomy -- --apply --confirm-host=<hostname>`;
+  (6) re-run the dry run: all 50 rows must read `exists`; (7) read token:
+  `npx tsx scripts/mint-token.ts read --tenant agr --label frontend-preview`; (8) engine
+  record `content-engine-agr` in Console `/console/engines/new`: writer, allowed tenant only
+  `agr`, actions only `create_article` + `update_article`, hub flags off; (9) add the agr-web
+  origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import: `scripts/migrate/network/NETWORK-LEGACY.md`
+  "AsiaGolfReview" (mapping still provisional). Author bios, contacts and the tag set are
+  PENDING OWNER wording. Steps 4 to 6 were rehearsed on a disposable local Postgres
+  (23-10-26: 50 create, then 50 created, then 50 exists).
 
 ## Token rotation
 
