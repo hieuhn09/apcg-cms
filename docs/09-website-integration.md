@@ -65,9 +65,11 @@ whole article list.
 - `totalDocs` is the number of matching tags **before** the `limit` cap. If
   `docs.length < totalDocs` the list was truncated: treat it as degraded (log it)
   and hide all tag chips rather than show a partial list. No paging in v1.
-- Growth margin: gtp at `minCount=2` was about 1,673 tags (21-10-26), about 84% of
-  the 2,000 cap. Pass `limit=2000` and re-check `totalDocs` from time to time; a
-  higher cap is a separate decision.
+- Growth margin: gtp at `minCount=2` was 1,206 tags (measured live on production,
+  23-10-26), about 60% of the 2,000 cap. (The earlier 21-10-26 figure of about
+  1,673 was not a live measurement and is superseded.) At `minCount=1` the list is
+  truncated: 2,000 returned of 5,037 (`totalDocs`). Pass `limit=2000` and re-check
+  `totalDocs` from time to time; a higher cap is a separate decision.
 - Tag slugs are unique per tenant: the `Tags` hook checks it and the database
   has the unique index `tags_tenant_slug_idx` on `(tenant_id, slug)` (migration
   `20260801_082303_migration_hardening`). The final id tiebreaker in the order is
