@@ -57,6 +57,15 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // SINGLE_HOME_PILLARS entry; the blocked pillars keep sub-sections, secondary
 // sections and a REQUIRED author. `asia-watch`, `briefings` and
 // `corporate-asia` stay engine-writable.
+//
+// AsiaGolfReview (tenant `agr`, agr launch W2, owner decision 23-10-26):
+// `course-reviews` and `rankings` are editor-only (reviews are played on-site,
+// rankings come from a named panel); `press-room` (hyphenated slug, like
+// gtp/vowasia; single-home too, see below) is editor-only. `course-reviews`
+// and `rankings` are NOT single-home: they keep sub-sections, secondary
+// sections and a REQUIRED author. `golf-travel`, `the-game`, `gear-style` and
+// `golf-business` stay engine-writable. The unhyphenated `pressroom` means
+// nothing for agr.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   gcv: ["exclusive", "pressroom"],
   "brief-asia": ["pressroom"],
@@ -64,6 +73,7 @@ export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   vowasia: ["press-room", "real-weddings", "directory"],
   wad: ["pressroom"],
   aer: ["long-view", "interviews", "in-focus"],
+  agr: ["course-reviews", "rankings", "press-room"],
 };
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */
@@ -99,12 +109,16 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // VowAsia `press-room` (vowasia launch P1, owner decision 13-10-26: "pressroom
 // is a pillar and has no secondary pillar") is single-home with an optional
 // author, exactly like GTP `press-room`.
+// AsiaGolfReview `press-room` (agr launch W2, owner decision 23-10-26) is
+// single-home with an optional author, exactly like GTP `press-room`; agr
+// `pressroom` (unhyphenated) is NOT single-home.
 export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
   "brief-asia": ["pressroom"],
   gcv: ["pressroom"],
   gtp: ["press-room"],
   vowasia: ["press-room"],
   wad: ["pressroom"],
+  agr: ["press-room"],
 };
 
 // ── Top-level user role (global identity) ───────────────────────────────────
