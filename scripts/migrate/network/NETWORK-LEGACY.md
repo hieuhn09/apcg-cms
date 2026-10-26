@@ -204,6 +204,7 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   - tác giả chia đều 5 người trang Team (`mode: even`, lệch tối đa 1 bài; bản băm slug cho 61/70/83/64/65 ở lần chạy khô đầu nên đổi), không giữ byline cũ; chỉ giữ 7 tag
     đã duyệt; bài cũ không chuyển → 301 về trang chuyên mục (không 410); gốc cũ
     `https://asiagolfreview.com` (bản `www` cũng đang chạy, redirect lúc cutover phủ cả hai).
+- Thân bài: site cũ lưu mỗi mục thành MỘT khối và tách đoạn lúc hiển thị (như AER) ⇒ `body.reflowMaxChars: 380` (khớp 104/117 mục mẫu trên site cũ). Lượt `agr-real-1` (8 bài, nhập trước khi có reflow) phải rollback rồi nhập lại bằng `agr-real-2`.
 - Overlay của chủ dự án `~/agr-private/overlay.json`: `source.siteFilter` =
   `773fee2f-8ab7-4787-a31c-2947267a03e7`, `media.hostAllowlist` =
   `["mbolvnwkmkeroqmvbvmt.supabase.co"]`. Role DB cũ `agr_migrator`, schema `agr_ro`, run-id

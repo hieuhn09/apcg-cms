@@ -294,6 +294,8 @@ test("mapping: committed agr mapping is FINAL (owner 26-10-26) and passes --requ
   assert.throws(() => validateMapping({ ...m, _provisional: ["categories.map"] }, AGR_OVERLAY, { requireFinal: true }), /require-final/);
   assert.deepEqual(Object.entries(m.status.map).filter(([, v]) => v !== "SKIP").map(([k]) => k), ["published"]);
   assert.equal(m.archivedAs, "section");
+  // The old site splits each one-block section into paragraphs at render time (same as aer).
+  assert.equal(m.body.reflowMaxChars, 380);
   // Every (section, subsection) pair seen in the real discovery result (26-10-26).
   const tx = (sec: string, sub: string) => {
     const r = resolveTaxonomy(sec, sub, m);
