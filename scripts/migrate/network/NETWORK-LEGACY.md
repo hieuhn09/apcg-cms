@@ -188,6 +188,8 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   AER ở trên, chỉ thay `aer` bằng `agr` và dùng đúng các file này. Đã chạy thử cả bốn file
   trên Postgres giả trong máy (23-10-26): khám phá ra đúng 1 site, `SELF-CHECK OK`,
   `CLEANUP OK`.
+- Dòng site cũ: slug `asiagolfreview`, id `773fee2f-8ab7-4787-a31c-2947267a03e7` (khám phá 26-10-26: 605 bài = 343 published, 208 archived (193 chưa từng có ngày đăng), 51 draft, 3 rejected; cột countries rỗng ở mọi bài; 578 ảnh đại diện ở `mbolvnwkmkeroqmvbvmt.supabase.co`, 27 bài không ảnh, 0 ảnh trong thân; không có bài `rankings`, `press-room`, `events-awards`; site cũ vẫn đang đăng bài).
+- Mục con cũ thật khác dự đoán: `golf-travel/practical-game` (mới: `the-practical-game`) và `gear-style/tested-in-tropics` đã có dòng riêng trong mapping; `the-game` không mục con đi qua `the-game/*`.
 - Mapping `mappings/agr.mapping.json` **CHƯA chốt** (`_provisional` còn: `status.map`,
   `categories.map`, `authors.distribute`, `tags.keepOnly`, `media.bodyImages`, các `urls.*`,
   `archivedAs`). `validate-mapping --require-final` (ngầm bật khi chạy với Central thật) từ
@@ -200,7 +202,7 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   - `course-reviews/hidden-gems`, `new-renovated` → `course-reviews` không mục con, thêm
     tag `hidden-gems` / `new-renovated` (`addTags`); `by-country`, `the-review-index` →
     `course-reviews` không mục con (mục con theo nước: chủ dự án quyết);
-  - `gear-style/equipment`, `tested-in-the-tropics` → `gear-style` không mục con (gợi ý
+  - `gear-style/equipment`, `tested-in-tropics` → `gear-style` không mục con (gợi ý
     `clubs`, chưa chốt); `gear-style/style` → `gear-style/apparel`;
   - `press-room/*` → `press-room` không mục con (một nhà), chưa gắn tag;
   - `events-awards`: **không có dòng** cố ý; bài ở đó bị từ chối cho tới khi chủ dự án

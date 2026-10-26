@@ -12,7 +12,7 @@
     "urls.gonePaths",
     "archivedAs"
   ],
-  "_evidence": "STRUCTURAL mapping for the AsiaGolfReview legacy import (agr-launch W2, 23-10-26). No site id, no image host: those live in the owner-held overlay ~/agr-private/overlay.json. Every key in _provisional is an OWNER DECISION still open; the values are SUGGESTIONS only and --require-final (implied for any non-local run) refuses them. Old section/subsection values are GUESSED from the live site's URLs (23-10-26) and must be checked against the discovery result (01-discover-agr.sql, section 3) before the decision. Open decisions: (1) status.map: suggestion published only, like aer. (2) categories.map: old subs whose name equals a new sub-section pass through. course-reviews/by-country and the-review-index keep pillar course-reviews with NO sub-section (the old site filtered countries with ?country=; this tool cannot derive a country sub-section from the countries column, so the owner decides: leave without sub, or hand-assign later). course-reviews/hidden-gems and new-renovated keep pillar course-reviews with no sub-section and add the tag hidden-gems / new-renovated. rankings/methodology goes to rankings with no sub (methodology is a static page on the new site). gear-style/equipment and tested-in-the-tropics go to gear-style with no sub-section (suggestion: clubs, owner to confirm per article); gear-style/style goes to gear-style/apparel. press-room subs (industry-updates, partnerships, press-releases) go to press-room with no sub-section (single-home) and no tag (which of the 7 tags fits is open). events-awards has NO entry on purpose: unmapped is reject, so a row there stops the run until the owner picks a pillar. (3) authors: even split over the 5 staff names by slug hash (D7); legacy bylines are not kept. (4) tags: only the 7 approved tags survive (D6). (5) media.bodyImages: drop (default, counted) or hero-if-missing. (6) archivedAs section (301) vs 410. (7) old origin apex or www; section paths guessed from the live site; /events-awards, /architects, /studio, /licensing, /press-room-submit and the golf-travel / golf-business tool pages get hand-written redirects at cutover.",
+  "_evidence": "STRUCTURAL mapping for the AsiaGolfReview legacy import (agr-launch W2, 23-10-26). No site id, no image host: those live in the owner-held overlay ~/agr-private/overlay.json. Every key in _provisional is an OWNER DECISION still open; the values are SUGGESTIONS only and --require-final (implied for any non-local run) refuses them. Old section/subsection values were CHECKED against the real discovery result on 26-10-26 (01-discover-agr.sql run by the owner in the globaltravelpost SQL Editor): 605 articles (published 343, archived 208, draft 51, rejected 3); real legacy pairs are course-reviews/{by-country,hidden-gems,new-renovated}, gear-style/{equipment,style,tested-in-tropics}, golf-business/{club-management,data-insights,development-design,people}, golf-travel/{destinations,itineraries,practical-game,resorts-stays}, the-game/{(empty),players,tournament-news,watch-prize-money}; no rankings, press-room or events-awards rows; countries column empty on every row; 0 body images; 578 featured images on the old Supabase storage host, 27 without. The legacy slugs practical-game and tested-in-tropics differ from the guesses and have explicit entries; the-game with an empty subsection resolves through the-game/*. Open decisions: (1) status.map: suggestion published only, like aer. (2) categories.map: old subs whose name equals a new sub-section pass through. course-reviews/by-country and the-review-index keep pillar course-reviews with NO sub-section (the old site filtered countries with ?country=; this tool cannot derive a country sub-section from the countries column, so the owner decides: leave without sub, or hand-assign later). course-reviews/hidden-gems and new-renovated keep pillar course-reviews with no sub-section and add the tag hidden-gems / new-renovated. rankings/methodology goes to rankings with no sub (methodology is a static page on the new site). gear-style/equipment and tested-in-the-tropics go to gear-style with no sub-section (suggestion: clubs, owner to confirm per article); gear-style/style goes to gear-style/apparel. press-room subs (industry-updates, partnerships, press-releases) go to press-room with no sub-section (single-home) and no tag (which of the 7 tags fits is open). events-awards has NO entry on purpose: unmapped is reject, so a row there stops the run until the owner picks a pillar. (3) authors: even split over the 5 staff names by slug hash (D7); legacy bylines are not kept. (4) tags: only the 7 approved tags survive (D6). (5) media.bodyImages: drop (default, counted) or hero-if-missing. (6) archivedAs section (301) vs 410. (7) old origin apex or www; section paths guessed from the live site; /events-awards, /architects, /studio, /licensing, /press-room-submit and the golf-travel / golf-business tool pages get hand-written redirects at cutover.",
   "source": {
     "schema": "agr_ro",
     "tableAllowList": [
@@ -119,6 +119,10 @@
         "pillar": "golf-travel",
         "subSection": "the-practical-game"
       },
+      "golf-travel/practical-game": {
+        "pillar": "golf-travel",
+        "subSection": "the-practical-game"
+      },
       "golf-travel/*": {
         "pillar": "golf-travel"
       },
@@ -141,6 +145,9 @@
         "pillar": "gear-style"
       },
       "gear-style/tested-in-the-tropics": {
+        "pillar": "gear-style"
+      },
+      "gear-style/tested-in-tropics": {
         "pillar": "gear-style"
       },
       "gear-style/style": {
