@@ -128,6 +128,20 @@ Content-Type: application/json
 - Status 23-10-26: code only; intake for `agr` answers 4xx until the owner creates the
   tenant, taxonomy and engine record.
 
+### AsiaBeautyBrief (`abb`) notes
+
+- Tenant slug / `publicationId` `abb`. Engine-writable pillars: `briefing`, `markets`,
+  `supply`, `trends`, `professional`; `pressroom` is single-home AND editor-only (422).
+  `press-room` is not a pillar on abb and is not blocked. Taxonomy source of truth:
+  `scripts/lib/abb-taxonomy.ts` (from the canonical `abb-taxonomy_22-10-26.json`).
+- `byline` must equal an abb `authors.name` exactly: `Joanne Lau`, `Kim Seo-yeon`,
+  `Kavita Rao`, `Emi Fujita`, `Nathan Leong`.
+- **Booths (The Beauty Exhibition) are editor-only.** The engine has no write path: intake
+  only creates/refreshes articles, there is no booths engine action, and an engine token
+  does not authenticate Payload REST (`/api/booths` answers 403; probe
+  `npm run probe:abb-booths`). The booth-to-article link is stored on the booth.
+- Status 22-10-26: code only; tenant, taxonomy and engine record do not exist yet.
+
 ### `contentType` — what the document is
 
 Optional. `"article"` (default) or `"daily-brief"`. Set on create only; a refresh

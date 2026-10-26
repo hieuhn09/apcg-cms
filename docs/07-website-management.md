@@ -116,6 +116,29 @@ in `scripts/lib/agr-taxonomy.ts`.
   50 rows) with `npm run audit:add-agr-taxonomy`: see `docs/11-operations.md`
   "AsiaGolfReview rollout". Same `/neondb` name guard as the aer script.
 
+### Example: AsiaBeautyBrief (`abb`)
+
+Owner-run, systemAdmin only. Status 22-10-26: **code only, on branch, not merged**; the
+tenant does NOT exist yet and nothing has been run against any shared database. Field sheet
+as data: `ABB_TENANT_FIELDS` in `scripts/lib/abb-taxonomy.ts`.
+
+- Name `AsiaBeautyBrief`, slug `abb`, status `active`, default language `en`, supported
+  languages `[en]`, timezone `Asia/Singapore`. Domain and frontend URL EMPTY at creation
+  (live domain `asiabeautybrief.com`, set at cutover).
+- Features: `articles`, `newsletters`, `corrections` and **`exhibition`** on; everything
+  else off. `exhibition` is a NEW flag (needs migration `20261022_000000_add_booths_exhibition`
+  deployed first); it shows the **Exhibition > Booths** collection in /admin and serves
+  `/api/public/booths*` (shapes: header comments of `src/app/api/public/booths/` and `src/lib/public-booths.ts`).
+- **Auto publish engine drafts: OFF** (`audit:add-abb-taxonomy` refuses `--apply` while on).
+- `pressroom` (no hyphen) is single-home and engine-blocked in code; `press-room` is NOT
+  blocked on abb. No Events/Awards pillar.
+- Then create the taxonomy (6 pillars, 22 sub-sections, 3 newsletters, 5 authors, 57 tags
+  = 93 rows) with `npm run audit:add-abb-taxonomy`: see `docs/11-operations.md`
+  "AsiaBeautyBrief rollout". Booths are entered by editors in /admin (never by the engine).
+- Mint a read token for abb-web, create the engine record in the Console
+  (`/console/engines/new`, tenant `abb` only, actions `create_article` + `update_article`,
+  hub flags off), and add the abb-web origin to `PUBLIC_API_ALLOWED_ORIGINS`.
+
 ## Configure domain & languages
 
 - **Domain**: `domain` + `additionalDomains` are informational/CORS hints; the

@@ -19,6 +19,7 @@ export const FEATURE_KEYS = [
   "dashboards", // FundingRows / AiLeaderboardRows (DTW dashboards)
   "citiesMap", // Cities (WTB "The Map" / /place directory)
   "video", // VideoMedia + the Articles video fields (short-form article video)
+  "exhibition", // Booths (AsiaBeautyBrief "The Beauty Exhibition" directory)
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -66,7 +67,13 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // sections and a REQUIRED author. `golf-travel`, `the-game`, `gear-style` and
 // `golf-business` stay engine-writable. The unhyphenated `pressroom` means
 // nothing for agr.
+//
+// AsiaBeautyBrief (tenant `abb`, abb launch, owner decision 22-10-26):
+// `pressroom` (unhyphenated, like BriefAsia/GCV/WAD; single-home too, see below)
+// is editor-only. abb has no `events-awards` pillar; `press-room` on abb is NOT
+// blocked (exact slug match). Its five other pillars stay engine-writable.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
+  abb: ["pressroom"],
   gcv: ["exclusive", "pressroom"],
   "brief-asia": ["pressroom"],
   gtp: ["press-room", "events-awards"],
@@ -112,7 +119,10 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // AsiaGolfReview `press-room` (agr launch W2, owner decision 23-10-26) is
 // single-home with an optional author, exactly like GTP `press-room`; agr
 // `pressroom` (unhyphenated) is NOT single-home.
+// AsiaBeautyBrief `pressroom` (abb launch, owner decision 22-10-26) is
+// single-home with an optional author, like the other Pressroom pillars.
 export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
+  abb: ["pressroom"],
   "brief-asia": ["pressroom"],
   gcv: ["pressroom"],
   gtp: ["press-room"],
@@ -269,4 +279,5 @@ export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   dashboards: ["fundingRows", "aiLeaderboardRows"],
   citiesMap: ["cities"],
   video: ["videoMedia"],
+  exhibition: ["booths"],
 };

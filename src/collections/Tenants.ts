@@ -208,6 +208,7 @@ export const Tenants: CollectionConfig = {
         { name: "dashboards", type: "checkbox", defaultValue: false },
         { name: "citiesMap", type: "checkbox", defaultValue: false },
         { name: "video", type: "checkbox", defaultValue: false },
+        { name: "exhibition", type: "checkbox", defaultValue: false },
       ],
     },
 

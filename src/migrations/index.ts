@@ -12,6 +12,7 @@ import * as migration_20260924_000000_add_content_engines_hub_read from './20260
 import * as migration_20260925_000000_add_content_engines_hub_write from './20260925_000000_add_content_engines_hub_write';
 import * as migration_20260930_000000_add_content_engines_hub_author from './20260930_000000_add_content_engines_hub_author';
 import * as migration_20261021_000000_add_podcast_series from './20261021_000000_add_podcast_series';
+import * as migration_20261022_000000_add_booths_exhibition from './20261022_000000_add_booths_exhibition';
 
 export const migrations = [
   {
@@ -83,5 +84,10 @@ export const migrations = [
     up: migration_20261021_000000_add_podcast_series.up,
     down: migration_20261021_000000_add_podcast_series.down,
     name: '20261021_000000_add_podcast_series'
+  },
+  {
+    up: migration_20261022_000000_add_booths_exhibition.up,
+    down: migration_20261022_000000_add_booths_exhibition.down,
+    name: '20261022_000000_add_booths_exhibition'
   },
 ];
