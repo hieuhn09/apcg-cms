@@ -210,3 +210,11 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   `["mbolvnwkmkeroqmvbvmt.supabase.co"]`. Role DB cũ `agr_migrator`, schema `agr_ro`, run-id
   `agr-real-1`, `agr-real-2`, ...
 - Ảnh: như AER, overlay PHẢI có host `mbolvnwkmkeroqmvbvmt.supabase.co`.
+- **Đã chạy 26-10-26:** lượt `agr-real-2` nhập 343 bài published (334 ảnh tạo, 1 bài không ảnh), timestamps-fix `COMMIT`, `verify` PASS (phép 8 redirects SKIP). Role `agr_migrator` đã xoá bằng file 03, khoá R2 tạm `agr-migrate-temp` đã xoá. Site cũ vẫn đăng bài.
+- **Lượt chạy bù lúc cutover** (chủ dự án tắt pipeline cũ NGAY TRƯỚC lượt này, Q8):
+  1. Tạo lại quyền: chạy `02-create-readonly-role-views-agr.sql` (`SELF-CHECK OK`), rồi `02p-set-password-agr.sql`; tạo khoá R2 tạm mới (Object Read & Write, chỉ `apcg-central-media`), ghi 4 biến R2 vào `.env.local` bằng `read -s`.
+  2. `read -s LEGACY_PW`, `export LEGACY_DB_URL=...` (host Session pooler `aws-0-ap-southeast-1.pooler.supabase.com:5432`, user `agr_migrator.mbolvnwkmkeroqmvbvmt`).
+  3. Chạy khô với run-id MỚI `agr-real-3` (không `--resume` run-id cũ): bài đã có sẽ là `skippedExisting`, chỉ bài mới được tạo; tác giả của bài cũ giữ nguyên, bài mới được chia để tổng vẫn lệch tối đa 1.
+  4. `--apply --run-id agr-real-3`, rồi `timestamps-fix --run-id agr-real-3` + `psql "$DIRECT_URL" -f scripts/migrate/out/agr-real-3/timestamps-fix.sql`, rồi `verify --run-id agr-real-3`.
+  5. Dựng redirect (`redirects --run-id agr-real-3 --known-routes ~/agr-private/known-routes.json`), chạy file 03 (`CLEANUP OK`), xoá khoá R2 tạm.
+  - Giới hạn: lượt bù chỉ THÊM bài mới đăng (kể cả bài lúc trước là nháp nay đã đăng). Bài đã nhập mà site cũ sửa sau đó KHÔNG được cập nhật lại; bài site cũ gỡ đi vẫn còn trên Central (biên tập tự ẩn nếu cần).
