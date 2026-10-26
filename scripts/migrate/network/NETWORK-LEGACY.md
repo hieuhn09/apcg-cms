@@ -190,22 +190,22 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   `CLEANUP OK`.
 - Dòng site cũ: slug `asiagolfreview`, id `773fee2f-8ab7-4787-a31c-2947267a03e7` (khám phá 26-10-26: 605 bài = 343 published, 208 archived (193 chưa từng có ngày đăng), 51 draft, 3 rejected; cột countries rỗng ở mọi bài; 578 ảnh đại diện ở `mbolvnwkmkeroqmvbvmt.supabase.co`, 27 bài không ảnh, 0 ảnh trong thân; không có bài `rankings`, `press-room`, `events-awards`; site cũ vẫn đang đăng bài).
 - Mục con cũ thật khác dự đoán: `golf-travel/practical-game` (mới: `the-practical-game`) và `gear-style/tested-in-tropics` đã có dòng riêng trong mapping; `the-game` không mục con đi qua `the-game/*`.
-- Mapping `mappings/agr.mapping.json` **CHƯA chốt** (`_provisional` còn: `status.map`,
-  `categories.map`, `authors.distribute`, `tags.keepOnly`, `media.bodyImages`, các `urls.*`,
-  `archivedAs`). `validate-mapping --require-final` (ngầm bật khi chạy với Central thật) từ
-  chối cho tới khi chủ dự án chốt sau bước khám phá. Gợi ý đang ghi:
-  - chỉ chuyển bài `published`;
-  - mục con cũ trùng tên giữ nguyên (`asia-top-100`, `best-new-courses`, `country-top-10`,
-    `destinations`, `itineraries`, `resorts-stays`, `the-practical-game`, `players`,
-    `tournament-news`, `watch-prize-money`, `club-management`, `data-insights`,
-    `development-design`, `people`);
-  - `course-reviews/hidden-gems`, `new-renovated` → `course-reviews` không mục con, thêm
-    tag `hidden-gems` / `new-renovated` (`addTags`); `by-country`, `the-review-index` →
-    `course-reviews` không mục con (mục con theo nước: chủ dự án quyết);
-  - `gear-style/equipment`, `tested-in-tropics` → `gear-style` không mục con (gợi ý
-    `clubs`, chưa chốt); `gear-style/style` → `gear-style/apparel`;
-  - `press-room/*` → `press-room` không mục con (một nhà), chưa gắn tag;
-  - `events-awards`: **không có dòng** cố ý; bài ở đó bị từ chối cho tới khi chủ dự án
-    chọn pillar;
-  - tác giả chia đều 5 người theo băm slug (`slugHash`, D7); chỉ giữ 7 tag đã duyệt.
+- Mapping `mappings/agr.mapping.json` **đã chốt** (chủ dự án 26-10-26, `_provisional` rỗng,
+  `validate-mapping --require-final` OK):
+  - chỉ chuyển bài `published` (343); `archived`/`draft`/`scheduled`/`rejected` bỏ qua. Lượt
+    chạy bù trước khi chuyển tên miền lấy thêm bài site cũ đăng sau lần chạy đầu;
+  - mục con cũ trùng tên giữ nguyên; `golf-travel/practical-game` → `the-practical-game`;
+  - `course-reviews/by-country` → `course-reviews` không mục con (DB cũ không có nước,
+    biên tập gán sau); `new-renovated`, `hidden-gems` → `course-reviews` không mục con, thêm
+    tag cùng tên;
+  - `gear-style/equipment`, `tested-in-tropics` → `gear-style` không mục con (biên tập gán
+    clubs/balls/bags sau); `gear-style/style` → `apparel`;
+  - `events-awards`: không có dòng (DB cũ cũng không có bài);
+  - tác giả chia đều 5 người trang Team theo băm slug, không giữ byline cũ; chỉ giữ 7 tag
+    đã duyệt; bài cũ không chuyển → 301 về trang chuyên mục (không 410); gốc cũ
+    `https://asiagolfreview.com` (bản `www` cũng đang chạy, redirect lúc cutover phủ cả hai).
+- Overlay của chủ dự án `~/agr-private/overlay.json`: `source.siteFilter` =
+  `773fee2f-8ab7-4787-a31c-2947267a03e7`, `media.hostAllowlist` =
+  `["mbolvnwkmkeroqmvbvmt.supabase.co"]`. Role DB cũ `agr_migrator`, schema `agr_ro`, run-id
+  `agr-real-1`, `agr-real-2`, ...
 - Ảnh: như AER, overlay PHẢI có host `mbolvnwkmkeroqmvbvmt.supabase.co`.
