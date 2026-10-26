@@ -6,7 +6,7 @@ import { repoRoot } from "./out-dir";
 import {
   enText, formatTag, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveCountries, resolveTaxonomy,
   sanitizeLegacyHtml, sectionsToHtml, sniffBodyFormat, statusWrite, stripPhotoLabel, takeawaysText, tagSlugify, stableFilename, storedFilenameMatches,
-  canonicalSourceUrl, oldArticleUrl, plainTextForParity, jaccard, rewriteInternalLinks,
+  canonicalSourceUrl, oldArticleUrl, plainTextForParity, jaccard, rewriteInternalLinks, reflowParagraph,
 } from "./gtp-transform";
 import { buildSlugPlan, planEventSlugs } from "./slug-plan";
 import { eventBriefs, planEvents, toLegacyEvent, similarity } from "./gtp-events";
@@ -185,4 +185,16 @@ test("C11/G39 unit: legacy-source-urls one line per unique URL, collisions liste
   assert.deepEqual(r.lines.map((l) => [l.source_url, l.title]), [["https://a.com/x", "A"], ["https://a.com/x?utm_source=z", "C"]]);
   assert.deepEqual(r.collisions, [{ source_url: "https://a.com/x", legacyIds: ["1", "2", "3"] }]);
   assert.equal(subscribersCsv([{ email: "=cmd", newsletter: "a,b", source: "s", created_at: "t" }]), "email,newsletter,source,created_at\n'=cmd,\"a,b\",s,t\n");
+});
+
+test("body reflow (AER): one stored block becomes paragraphs of whole sentences <= maxChars; unset keeps the block", () => {
+  const a = "A".repeat(150) + ".";
+  const b = "B".repeat(150) + ".";
+  const c = "C".repeat(150) + ".";
+  assert.deepEqual(reflowParagraph(`${a} ${b} ${c}`, 380), [`${a} ${b}`, c]);
+  assert.deepEqual(reflowParagraph("x".repeat(500) + ".", 380), ["x".repeat(500) + "."]);
+  const raw = [{ heading: { en: "H" }, body: { en: `${a} ${b} ${c}` } }];
+  assert.equal(sectionsToHtml(raw, "space", 380).paragraphs.length, 2);
+  assert.equal(sectionsToHtml(raw).paragraphs.length, 1);
+  assert.equal(sectionsToHtml(raw, "space", 380).text.replace(/\n/g, " "), sectionsToHtml(raw).text.replace(/\n/g, " "));
 });

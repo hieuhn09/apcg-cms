@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "_provisional": [],
+  "_evidence": "FINAL mapping for the Asia Economic Review legacy import (aer-launch W4). No site id, no image host: those live in the owner-held overlay ~/aer-private/overlay.json. Decided 20-10-26 from the discovery result (01-discover-aer.sql, 644 rows: 276 published, 311 archived never published, 53 draft, 4 rejected) and two owner answers. (1) status: published only (owner); everything else is SKIP, later catch-up runs pick up what the old site publishes before cutover. (2) categories: the old site only has briefings, corporate-asia and essays; their subsection slugs equal the new taxonomy, so briefings and corporate-asia pass through unchanged (pillar = old section, sub-section = old subsection) and essays goes to asia-watch with the same sub-section. The other entries cover sections with zero rows today, in case a catch-up run meets them. (3) authors: even split over the 4 staff names (owner); legacy bylines (Lena Ho 247 of 276 published) are not kept. (4) tags: only the 6 approved tags (D6). (5) bodyImages and archivedAs are moot (0 body images; archived rows are skipped). (6) old origin is the apex host (the old sitemap uses it). Old pages with no articles (/team, /the-long-view, /the-review-interview, /data-annual, /partner-insights) get hand-written redirects at cutover, not from this file. (7) body.reflowMaxChars 380 (owner review 20-10-26): the old DB holds each section as one block (0 of 1,268 sections contain a newline) and the old site split it into paragraphs at render time; grouping sentences while a paragraph stays <= 380 chars reproduces the old breaks exactly in 150 of 161 sampled sections.",
+  "source": {
+    "schema": "aer_ro",
+    "tableAllowList": [
+      "articles",
+      "sites",
+      "site_authors"
+    ],
+    "columns": {
+      "id": "id",
+      "slug": "slug",
+      "title": "title",
+      "dek": "excerpt",
+      "kicker": "kicker",
+      "body": "body_sections",
+      "status": "status",
+      "section": "section",
+      "subsection": "subsection",
+      "tags": "tags",
+      "format": "format",
+      "featured": "featured",
+      "isHero": "is_hero",
+      "readMinutes": "read_minutes",
+      "heroImage": "featured_image",
+      "heroCredit": "featured_image_credit",
+      "seo": "seo",
+      "sourceUrl": "source_url",
+      "byline": "byline",
+      "takeaways": "takeaways",
+      "countries": "countries",
+      "publishedAt": "published_at",
+      "createdAt": "created_at",
+      "updatedAt": "updated_at"
+    }
+  },
+  "body": {
+    "format": "sections",
+    "converter": "html-to-lexical",
+    "lineBreaks": "space",
+    "reflowMaxChars": 380
+  },
+  "status": {
+    "map": {
+      "published": "published",
+      "archived": "SKIP",
+      "draft": "SKIP",
+      "scheduled": "SKIP",
+      "rejected": "SKIP"
+    },
+    "unknown": "reject"
+  },
+  "categories": {
+    "map": {
+      "essays/growth-policy": {
+        "pillar": "asia-watch",
+        "subSection": "growth-policy"
+      },
+      "essays/money-finance": {
+        "pillar": "asia-watch",
+        "subSection": "money-finance"
+      },
+      "essays/technology-industry": {
+        "pillar": "asia-watch",
+        "subSection": "technology-industry"
+      },
+      "essays/*": {
+        "pillar": "asia-watch"
+      },
+      "the-review-interview/*": {
+        "pillar": "interviews"
+      },
+      "the-long-view/*": {
+        "pillar": "long-view"
+      },
+      "data-annual/*": {
+        "pillar": "in-focus"
+      },
+      "partner-insights/*": {
+        "pillar": "corporate-asia"
+      }
+    },
+    "fallback": null,
+    "unmapped": "reject"
+  },
+  "authors": {
+    "resolve": "byColumn",
+    "map": {},
+    "staff": [
+      "Lena Ho",
+      "Arjun Menon",
+      "Mei Fong Chua",
+      "Rahul Sethi"
+    ],
+    "distribute": {
+      "pool": [
+        "Lena Ho",
+        "Arjun Menon",
+        "Mei Fong Chua",
+        "Rahul Sethi"
+      ],
+      "keepLegacy": false,
+      "groupBy": "country",
+      "maxSpread": 1,
+      "mode": "even"
+    },
+    "createMissing": false
+  },
+  "tags": {
+    "keepOnly": [
+      "china",
+      "india",
+      "japan",
+      "south-korea",
+      "indonesia",
+      "vietnam"
+    ],
+    "renames": {
+      "korea": "south-korea",
+      "viet-nam": "vietnam"
+    }
+  },
+  "formatTags": {
+    "enabled": false,
+    "include": []
+  },
+  "countries": {
+    "match": "either"
+  },
+  "readMin": {
+    "wpm": 230
+  },
+  "pin": {
+    "fromFlags": false,
+    "maxPinned": 0
+  },
+  "archivedAs": "section",
+  "events": {
+    "enabled": false
+  },
+  "slug": {
+    "preserve": true,
+    "dedupe": "numeric-suffix",
+    "reservedSlugs": []
+  },
+  "urls": {
+    "oldOrigin": "https://asiaeconomicreview.com",
+    "articlePathTemplate": "/article/{slug}",
+    "sectionPaths": {
+      "essays": "/essays",
+      "briefings": "/briefings",
+      "corporate-asia": "/corporate-asia",
+      "the-review-interview": "/the-review-interview",
+      "the-long-view": "/the-long-view",
+      "in-focus": "/in-focus",
+      "data-annual": "/data-annual",
+      "partner-insights": "/partner-insights"
+    },
+    "extraLegacyPaths": [
+      "/team"
+    ],
+    "gonePaths": [
+      "/corrections"
+    ]
+  },
+  "media": {
+    "maxBytes": 20971520,
+    "failureBudgetPercent": 2,
+    "fetchTimeoutMs": 30000,
+    "concurrency": 3,
+    "hotlinkPolicy": "download",
+    "bodyImages": "drop"
+  }
+}

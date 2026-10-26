@@ -34,14 +34,16 @@ import { editorConfigFactory } from "@payloadcms/richtext-lexical";
 import config from "../../../payload.config";
 import { pCreate, pFind } from "../../lib/payload-loose";
 import { CliError, intFlag } from "./args";
-import { FIXTURE_SITE_ID, parseCommand, resolveEntity, resolveRequireFinal, resolveTestHooks, STRUCTURAL_MAPPING_PATH } from "./cli-spec";
+import { parseCommand, resolveEntity, resolveRequireFinal, resolveTestHooks } from "./cli-spec";
+import { profile } from "./network-profile";
+import { assignByRule, bodyImageUrls } from "./network-authors";
 import { assertImportTenant, centralTarget, loadEffectiveMapping, openLegacy, outDir, resolvePath, runMain } from "./cli-common";
 import { assignAuthors, authorTotals, pillarsUnderTwoAuthors, type AuthorItem } from "./gtp-author-distribution";
 import { eventBriefs, eventDek, eventStatus, planEvents, toLegacyEvent, type CalendarRef } from "./gtp-events";
 import { formatProvisional, mappingFingerprint, type Mapping } from "./gtp-mapping";
 import { generateTimestampsFix } from "./gtp-timestamps";
 import {
-  enText, formatTag, isoOrNull, legacyTags, mapStatus, provenanceRow, publishedAtFor, readMinFor, resolveCountries,
+  enText, formatTag, isoOrNull, legacyTags, mapStatus, withAddedTags, provenanceRow, publishedAtFor, readMinFor, resolveCountries,
   resolveTaxonomy, sectionsToHtml, statusWrite, str, stripPhotoLabel, takeawaysText, stableFilename, storedFilenameMatches, oldArticleUrl, wordCount, canonicalSourceUrl,
   type CountryRef, type TagRef,
 } from "./gtp-transform";
@@ -50,6 +52,7 @@ import { htmlToLexical } from "./lexical-body";
 import { LiveLegacyReader, writeSnapshot } from "./legacy-reader";
 import { effectiveAllowList } from "./legacy-sql";
 import { fetchImageWithRetry } from "./media-fetch";
+import { missingR2Vars, r2GuardMessage } from "./r2-guard";
 import { normaliseKey } from "./normalise-path";
 import { assertOutDirSafe, writeFileSafe } from "./out-dir";
 import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId, type MediaMapEntry, type RunState, type SlugMapEntry } from "./run-dir";
@@ -58,7 +61,10 @@ import { buildSlugPlan, pinPriorSlugs, planEventSlugs, type SlugPlanEntry } from
 type Doc = Record<string, unknown>;
 type P = Awaited<ReturnType<typeof getPayload>>;
 
-export const MARKER = { origin: "import", engineSourceName: "legacy:globaltravelpost" } as const;
+export const MARKER = { origin: "import", engineSourceName: profile().markerSourceName } as const;
+const STRUCTURAL_MAPPING_PATH = profile().mappingPath;
+const FIXTURE_SITE_ID = profile().fixtureSiteId;
+const SINGLE_HOME = new Set<string>(profile().singleHomePillars);
 const ctx = { disableRevalidate: true, skipTranslationEnqueue: true };
 
 const ARTICLE_COLUMNS = [
@@ -106,6 +112,9 @@ function newReport() {
     featuredFlag: 0,
     isHeroFlag: 0,
     droppedSections: 0,
+    bodyImagesDropped: 0,
+    bodyImageUsedAsHero: 0,
+    authorSectionFallbacks: 0,
     tagLikeTextRows: 0,
     sourceUrlCollisions: [] as { source_url: string; legacyIds: string[] }[],
     internalLinkRewritable: 0,
@@ -156,6 +165,10 @@ async function main(): Promise<number> {
   const entity = resolveEntity(a);
   const tenantSlug = assertImportTenant();
   const central = centralTarget(a, a.apply);
+  if (!central.local) {
+    const missingR2 = missingR2Vars(process.env);
+    if (missingR2.length) throw new CliError(r2GuardMessage(missingR2));
+  }
   if (!a.get("mapping-overlay")) throw new CliError("import: --mapping-overlay is required (it carries the site filter and the image host).");
   const v0 = loadEffectiveMapping(a, STRUCTURAL_MAPPING_PATH, { structuralOnly: false });
   const siteId = v0.mapping.source.siteFilter as string;
@@ -210,7 +223,7 @@ async function main(): Promise<number> {
     if (!doc) throw new CliError(`import: preflight failed: Central author "${name}" is missing in tenant ${tenantSlug} (the importer never creates authors).`);
     authorId.set(name, doc.id as number | string);
   }
-  for (const p of ["news", "destinations", "business-of-travel", "experiences-luxury", "press-room", "events-awards"]) {
+  for (const p of profile().pillarSlugs) {
     if (!pillarId.has(p)) throw new CliError(`import: preflight failed: pillar ${p} missing in tenant ${tenantSlug}.`);
   }
   const countries: CountryRef[] = (await findAll(payload, "countries", {})).map((c) => ({ id: c.id as number | string, code: str(c.code), name: str(c.name) }));
@@ -262,7 +275,7 @@ async function main(): Promise<number> {
     const articlePlan = buildSlugPlan(planRows, m);
     const existingSlugs = new Set((await findAll(payload, "articles", { tenant: { equals: tenantId } }, { draft: true, select: { slug: true } })).map((d) => String(d.slug)));
     const allEvents = [];
-    for await (const p of reader.pages("events", "all", 500)) allEvents.push(...p.map(toLegacyEvent));
+    if (m.events.enabled) for await (const p of reader.pages("events", "all", 500)) allEvents.push(...p.map(toLegacyEvent));
     const eventPlan = planEventSlugs(allEvents.map((e) => ({ id: e.id, title: e.title, dateStart: e.dateStart })), [...articlePlan.map((x) => x.slug), ...existingSlugs]);
     plan = pinPriorSlugs([...articlePlan, ...eventPlan], priorSlug);
     if (a.apply) run.writeJson("slug-plan.json", plan);
@@ -284,9 +297,9 @@ async function main(): Promise<number> {
         if (str(row.section) === "events-awards" && str(row.subsection) === "industry-calendar") cal.push({ title: enText(row.title), date: isoOrNull(row.published_at)?.slice(0, 10) ?? null, legacyId });
         if (mapStatus(row.status, m).kind !== "import" || !planById.has(legacyId)) continue;
         const tx = resolveTaxonomy(row.section, row.subsection, m);
-        if (!tx.ok || !pillarId.has(tx.t.pillar) || (tx.t.subSection && !subId.has(`${tx.t.pillar}/${tx.t.subSection}`)) || (tx.t.pillar === "press-room" && tx.t.subSection)) continue;
+        if (!tx.ok || !pillarId.has(tx.t.pillar) || (tx.t.subSection && !subId.has(`${tx.t.pillar}/${tx.t.subSection}`)) || (SINGLE_HOME.has(tx.t.pillar) && tx.t.subSection)) continue;
         const countriesRaw = Array.isArray(row.countries) ? row.countries.map((x) => String(x ?? "").trim().toLowerCase()).filter(Boolean) : [];
-        items.push({ legacyId, slug: (planById.get(legacyId) as SlugPlanEntry).slug, publishedAt: publishedAtFor(row.published_at, row.created_at).iso, countries: countriesRaw, legacyByline: str(row.byline), kind: "article" });
+        items.push({ legacyId, slug: (planById.get(legacyId) as SlugPlanEntry).slug, publishedAt: publishedAtFor(row.published_at, row.created_at).iso, countries: countriesRaw, legacyByline: str(row.byline), kind: "article", section: tx.t.oldSection });
         pillarOf.set(legacyId, tx.t.pillar);
       }
     }
@@ -318,7 +331,14 @@ async function main(): Promise<number> {
       return true;
     });
     items.splice(0, items.length, ...keep);
-    const assign = assignAuthors(items, m.authors.distribute, m.authors.map, fixed);
+    const mode = m.authors.distribute.mode ?? "even";
+    let assign: Map<string, string>;
+    if (mode === "even") assign = assignAuthors(items, m.authors.distribute, m.authors.map, fixed);
+    else {
+      const r = assignByRule(items, mode, m.authors.distribute.pool, m.authors.bySection ?? {}, fixed);
+      assign = r.assign;
+      report.authorSectionFallbacks = r.sectionFallbacks;
+    }
     authorPlan = items.map((it) => ({ legacyId: it.legacyId, author: assign.get(it.legacyId) as string, pillar: pillarOf.get(it.legacyId) as string }));
     if (a.apply) run.writeJson("author-plan.json", authorPlan);
   }
@@ -399,7 +419,7 @@ async function main(): Promise<number> {
   };
 
   const ensureHero = async (legacyId: string, rawUrl: string, alt: string, credit: string): Promise<number | string | undefined> => {
-    const filename = stableFilename(rawUrl);
+    const filename = stableFilename(rawUrl, profile().mediaPrefix);
     if (mediaCache.has(filename)) return mediaCache.get(filename)?.id;
     const existing = await findMediaByStable(filename);
     if (existing) {
@@ -553,7 +573,7 @@ async function main(): Promise<number> {
             rejectsLines.push(JSON.stringify({ legacyId, kind: "reject", reason: `unmapped-category ${tx.t.pillar}/${tx.t.subSection ?? ""}` }));
             continue;
           }
-          if (tx.t.pillar === "press-room" && tx.t.subSection) {
+          if (SINGLE_HOME.has(tx.t.pillar) && tx.t.subSection) {
             bump(report.rejects, "reject: press-room-sub-section");
             continue;
           }
@@ -566,7 +586,7 @@ async function main(): Promise<number> {
           const oldSlug = str(row.slug) || slug;
           const legacyCreatedAt = isoOrNull(row.created_at);
           const legacyUpdatedAt = isoOrNull(row.updated_at);
-          const body = sectionsToHtml(row.body_sections, m.body.lineBreaks);
+          const body = sectionsToHtml(row.body_sections, m.body.lineBreaks, m.body.reflowMaxChars);
           const textLinks = (body.paragraphs.join(" ").match(new RegExp(`${oldOrigin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^\\s)"']+`, "g")) ?? []).map((u) => u.replace(/[.,;:]+$/, ""));
           const entryBase = {
             legacyId, kind: "article" as const, slug, status: sd.status, legacyCreatedAt, legacyUpdatedAt,
@@ -584,6 +604,7 @@ async function main(): Promise<number> {
           // transforms
           const title = enText(row.title) || `Untitled ${legacyId.slice(0, 8)}`;
           report.droppedSections += body.droppedSections;
+          const bodyImgs = bodyImageUrls(row.body_sections);
           if (body.tagLikeText) report.tagLikeTextRows++;
           if (Buffer.byteLength(body.html) > m.body.maxBytes) {
             bump(report.rejects, "reject: body-too-large");
@@ -597,7 +618,7 @@ async function main(): Promise<number> {
           }
           const ft = formatTag(row.format, m);
           if (!ft && str(row.format)) report.formatTagSkipped++;
-          const tagRefs = [...(ft ? [ft] : []), ...legacyTags(row.tags, m)];
+          const tagRefs = withAddedTags([...(ft ? [ft] : []), ...legacyTags(row.tags, m)], tx.t.addTags, m);
           const cr = resolveCountries(row.countries, countries, m.countries.match);
           for (const u of cr.unmatched) bump(report.countriesUnmatched, u);
           const rm = readMinFor(row.read_minutes, wordCount(body.text), m.readMin.wpm);
@@ -611,10 +632,16 @@ async function main(): Promise<number> {
           const sw = statusWrite(sd.status);
           bump(report.perPillar, tx.t.pillar);
           bump(report.perSub, `${tx.t.pillar}/${tx.t.subSection ?? ""}`);
+          let heroUrl = str(row.featured_image);
+          if (!heroUrl && m.media.bodyImages === "hero-if-missing" && bodyImgs.length) {
+            heroUrl = bodyImgs[0] as string;
+            report.bodyImageUsedAsHero++;
+            report.bodyImagesDropped += bodyImgs.length - 1;
+          } else report.bodyImagesDropped += bodyImgs.length;
           report.planned++;
           if (!a.apply) continue;
 
-          const heroUrl = str(row.featured_image);
+
           let heroId: number | string | undefined;
           if (heroUrl) heroId = await ensureHero(legacyId, heroUrl, title, stripPhotoLabel(row.featured_image_credit));
           if (heroId === undefined) report.heroMissing++;
@@ -777,7 +804,7 @@ async function main(): Promise<number> {
     }
     flagJ.close();
     const finalMap = run.compactSlugMap();
-    const ts = generateTimestampsFix(finalMap.map((e) => ({ slug: e.slug, kind: e.kind, legacyCreatedAt: e.legacyCreatedAt, legacyUpdatedAt: e.legacyUpdatedAt })), { tenantSlug, runId });
+    const ts = generateTimestampsFix(finalMap.map((e) => ({ slug: e.slug, kind: e.kind, legacyCreatedAt: e.legacyCreatedAt, legacyUpdatedAt: e.legacyUpdatedAt })), { tenantSlug, runId, markerSourceName: MARKER.engineSourceName });
     writeFileSafe(run.p("timestamps-fix.sql"), ts.sql);
     run.writeJson("timestamps-baseline.json", ts.baseline);
     run.writeJson("timestamps-fix.skipped.json", ts.skipped);
@@ -812,7 +839,7 @@ class StopRun extends Error {}
 function renderReport(r: Report): string {
   const kv = (o: Record<string, number>) => Object.entries(o).map(([k, n]) => `  - ${k}: ${n}`).join("\n") || "  - (none)";
   const list = (l: string[], max = 30) => (l.length ? l.slice(0, max).map((x) => `  - ${x}`).join("\n") + (l.length > max ? `\n  - ... +${l.length - max}` : "") : "  - (none)");
-  return `# GTP legacy import report (${r.mode === "apply" ? "APPLY" : "DRY RUN: nothing written"})
+  return `# ${profile().id.toUpperCase()} legacy import report (${r.mode === "apply" ? "APPLY" : "DRY RUN: nothing written"})
 
 - run id: ${r.runId}
 - rows considered: ${r.seen}; planned for create: ${r.planned}; imported: ${r.imported}; skippedExisting: ${r.skippedExisting}
@@ -844,6 +871,7 @@ ${kv(r.authors.assignedThisRun)}
 - pillars with fewer than 2 distinct authors: ${r.authors.pillarsUnderTwoAuthors.join(", ") || "none"}
 - readMinComputed: ${r.readMinComputed}; publishedAtFellBack: ${r.publishedAtFellBack}
 - seoDropped: ${r.seoDropped}; featured flag: ${r.featuredFlag}; is_hero flag: ${r.isHeroFlag} (not mapped to pinnedToLatest)
+- body images (body_sections[].image): dropped ${r.bodyImagesDropped}, used as hero ${r.bodyImageUsedAsHero}; author section fallbacks to slug hash (counted when the author plan is first built): ${r.authorSectionFallbacks}
 - droppedSections: ${r.droppedSections}; rows with tag-like text (kept as text): ${r.tagLikeTextRows}
 - sourceUrlCollisions: ${r.sourceUrlCollisions.length}
 - internalLinkRewritable: ${r.internalLinkRewritable}

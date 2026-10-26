@@ -36,7 +36,7 @@ export function expectedFromSource(rows: readonly Row[], m: Pick<Mapping, "statu
       continue;
     }
     out.byStatus[target] = (out.byStatus[target] ?? 0) + 1;
-    const o = m.categories.map[`${sec}/${sub}`];
+    const o = m.categories.map[`${sec}/${sub}`] ?? (sub === "" ? m.categories.map[sec] : undefined) ?? m.categories.map[`${sec}/*`];
     const pillar = o ? o.pillar : sec;
     const subSection = o ? o.subSection ?? "" : sub;
     out.byPillar[pillar] = (out.byPillar[pillar] ?? 0) + 1;

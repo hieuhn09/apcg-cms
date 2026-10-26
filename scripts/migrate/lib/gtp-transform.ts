@@ -74,17 +74,26 @@ export interface Taxonomy {
   rehomed: boolean;
   oldSection: string;
   oldSub: string;
+  /** Tag slugs the matched categories.map entry adds (network bundle, agr). Absent when the entry has none (GTP/AER). */
+  addTags?: string[];
 }
 export type TaxonomyDecision = { ok: true; t: Taxonomy } | { ok: false; reason: string };
 
 export function resolveTaxonomy(section: unknown, subsection: unknown, m: Pick<Mapping, "categories">): TaxonomyDecision {
   const sec = str(section).toLowerCase();
   const sub = str(subsection).toLowerCase();
-  const override = m.categories.map[`${sec}/${sub}`] ?? (sub === "" ? m.categories.map[sec] : undefined);
+  const override = m.categories.map[`${sec}/${sub}`] ?? (sub === "" ? m.categories.map[sec] : undefined) ?? m.categories.map[`${sec}/*`];
   if (override) {
     return {
       ok: true,
-      t: { pillar: override.pillar, ...(override.subSection ? { subSection: override.subSection } : {}), rehomed: override.pillar !== sec || (override.subSection ?? "") !== sub, oldSection: sec, oldSub: sub },
+      t: {
+        pillar: override.pillar,
+        ...(override.subSection ? { subSection: override.subSection } : {}),
+        rehomed: override.pillar !== sec || (override.subSection ?? "") !== sub,
+        oldSection: sec,
+        oldSub: sub,
+        ...(override.addTags?.length ? { addTags: [...override.addTags] } : {}),
+      },
     };
   }
   if (!sec) {
@@ -137,8 +146,26 @@ export function legacyTags(raw: unknown, m: Pick<Mapping, "tags">): TagRef[] {
     if (!slug) continue;
     slug = m.tags.renames[slug] ?? slug;
     if (m.tags.drop.includes(slug) || out.some((t) => t.slug === slug)) continue;
+    if (m.tags.keepOnly && !m.tags.keepOnly.includes(slug)) continue;
     out.push({ slug, title: titleCaseWords(slug.replace(/-/g, " ")) });
     if (out.length >= m.tags.maxPerArticle) break;
+  }
+  return out;
+}
+
+/**
+ * Append the tags a categories.map entry adds (`addTags`) to the legacy tags:
+ * same keepOnly / drop / dedupe / maxPerArticle rules as legacyTags. No-op
+ * when the entry adds none (every GTP/AER mapping).
+ */
+export function withAddedTags(tags: TagRef[], addTags: readonly string[] | undefined, m: Pick<Mapping, "tags">): TagRef[] {
+  const out = [...tags];
+  for (const raw of addTags ?? []) {
+    const slug = m.tags.renames[tagSlugify(raw)] ?? tagSlugify(raw);
+    if (!slug || m.tags.drop.includes(slug) || out.some((t) => t.slug === slug)) continue;
+    if (m.tags.keepOnly && !m.tags.keepOnly.includes(slug)) continue;
+    if (out.length >= m.tags.maxPerArticle) break;
+    out.push({ slug, title: titleCaseWords(slug.replace(/-/g, " ")) });
   }
   return out;
 }
@@ -215,8 +242,27 @@ export interface SectionsResult {
   text: string;
 }
 
+/**
+ * Regroup one stored paragraph into paragraphs of whole sentences, each at most `maxChars` long
+ * (a single longer sentence stays on its own). This is how the AER site displayed its one-block
+ * sections; on 161 real sections it reproduces the old paragraph breaks exactly in 150.
+ */
+export function reflowParagraph(p: string, maxChars: number): string[] {
+  const sentences = p.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const out: string[] = [];
+  let cur = "";
+  for (const s of sentences) {
+    if (cur && cur.length + 1 + s.length > maxChars) {
+      out.push(cur);
+      cur = s;
+    } else cur = cur ? `${cur} ${s}` : s;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 /** Turn `body_sections` into escaped HTML (h2 + p). Tag-like text can never become a tag. */
-export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" = "space"): SectionsResult {
+export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" = "space", reflowMaxChars?: number): SectionsResult {
   let v = raw;
   if (typeof v === "string") {
     try {
@@ -238,7 +284,8 @@ export function sectionsToHtml(raw: unknown, lineBreaks: "space" | "br" = "space
     const paras = body
       .split(/\n{2,}/)
       .map((p) => normaliseWs(lineBreaks === "space" ? p.replace(/\n/g, " ") : p))
-      .filter(Boolean);
+      .filter(Boolean)
+      .flatMap((p) => (reflowMaxChars ? reflowParagraph(p, reflowMaxChars) : [p]));
     if (!heading && !paras.length) {
       dropped++;
       continue;
@@ -357,7 +404,7 @@ export function rewriteInternalLinks(html: string, oldOrigin: string, map: (oldP
  * basename never ends in `-<digits>` (Payload's upload renamer increments such a
  * suffix), and lookups must accept Payload's `-<n>` rename (`storedFilenameMatches`).
  */
-export function stableFilename(url: string): string {
+export function stableFilename(url: string, prefix = "gtp"): string {
   const hash = createHash("sha1").update(url).digest("hex").slice(0, 8);
   let base = "image";
   try {
@@ -374,7 +421,7 @@ export function stableFilename(url: string): string {
   }
   base = base.replace(/\./g, "-").slice(-60).replace(/^-+|-+$/g, "") || "image";
   if (/[0-9]$/.test(base)) base += "-img";
-  return `gtp-${hash}-${base}.${ext}`;
+  return `${prefix}-${hash}-${base}.${ext}`;
 }
 
 /** Does a stored media filename match the stable one, allowing Payload's `-<n>` rename? */

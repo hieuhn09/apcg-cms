@@ -40,6 +40,8 @@ export interface AuthorItem {
   countries: readonly string[];
   legacyByline?: string | null;
   kind: "article" | "event";
+  /** Old legacy section (network bundle, mode bySection). */
+  section?: string;
 }
 
 const byDate = (a: AuthorItem, b: AuthorItem): number => {

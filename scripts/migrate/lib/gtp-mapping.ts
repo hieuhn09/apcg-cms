@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { ALLOWED_TABLE_NAMES, effectiveAllowList } from "./legacy-sql";
+import { missingRequiredImageHosts, profile } from "./network-profile";
 
 export const GTP_PILLAR_SLUGS = ["news", "destinations", "business-of-travel", "experiences-luxury", "press-room", "events-awards"] as const;
 
@@ -86,6 +87,9 @@ export const MappingSchema = z
         format: z.enum(["sections", "auto", "html", "markdown", "lexical-json", "text"]).default("sections"),
         converter: z.enum(["html-to-lexical", "markdown-to-lexical", "passthrough-lexical", "plain-paragraphs"]).default("html-to-lexical"),
         lineBreaks: z.enum(["space", "br"]).default("space"),
+        // AER: the old site stored each section as ONE block and split it into paragraphs at render time
+        // (sentences grouped while the paragraph stays <= reflowMaxChars). Unset = paragraphs kept as stored.
+        reflowMaxChars: z.number().int().positive().optional(),
         sanitize: z.boolean().default(true),
         stripEmbeds: z.boolean().default(true),
         allowedTags: z.array(z.string()).default(DEFAULT_ALLOWED_TAGS),
@@ -127,10 +131,14 @@ export const MappingSchema = z
             keepLegacy: z.boolean().default(false),
             groupBy: z.enum(["country", "none"]).default("country"),
             maxSpread: z.number().int().min(1).default(1),
+            // network bundle (optional, absent = "even", the GTP behaviour): by old section, or by stable slug hash.
+            mode: z.enum(["even", "bySection", "slugHash"]).optional(),
           })
           .strict()
           .prefault({}),
         createMissing: z.boolean().default(false),
+        // network bundle: old section -> author name (mode bySection); unmatched sections fall back to slugHash.
+        bySection: z.record(z.string(), z.string()).optional(),
       })
       .strict()
       .prefault({}),
@@ -140,6 +148,8 @@ export const MappingSchema = z
         maxPerArticle: z.number().int().positive().default(12),
         drop: z.array(z.string()).default([]),
         renames: z.record(z.string(), z.string()).default({}),
+        // network bundle (D6): when set, ONLY these tag slugs (after renames) are kept; everything else is dropped.
+        keepOnly: z.array(z.string()).optional(),
       })
       .strict()
       .prefault({}),
@@ -195,6 +205,8 @@ export const MappingSchema = z
         fetchTimeoutMs: z.number().int().positive().default(30_000),
         concurrency: z.number().int().positive().default(3),
         hotlinkPolicy: z.enum(["download", "skip"]).default("download"),
+        // network bundle: body_sections[].image handling (absent = "drop", the GTP behaviour; counted in the report).
+        bodyImages: z.enum(["drop", "hero-if-missing"]).optional(),
       })
       .strict()
       .prefault({}),
@@ -208,19 +220,19 @@ export type Mapping = z.infer<typeof MappingSchema>;
 export const KEY_TABLE: readonly string[] = [
   "version", "_provisional", "_evidence",
   "source.schema", "source.siteFilter", "source.tableAllowList", "source.columns",
-  "body.format", "body.converter", "body.lineBreaks", "body.sanitize", "body.stripEmbeds", "body.allowedTags", "body.maxBytes",
+  "body.format", "body.converter", "body.lineBreaks", "body.reflowMaxChars", "body.sanitize", "body.stripEmbeds", "body.allowedTags", "body.maxBytes",
   "status.map", "status.unknown",
   "categories.map", "categories.fallback", "categories.unmapped",
   "routing.pressRelease", "routing.events",
-  "authors.resolve", "authors.map", "authors.staff", "authors.distribute", "authors.createMissing",
-  "tags.normalize", "tags.maxPerArticle", "tags.drop", "tags.renames",
+  "authors.resolve", "authors.map", "authors.staff", "authors.distribute", "authors.createMissing", "authors.bySection",
+  "tags.normalize", "tags.maxPerArticle", "tags.drop", "tags.renames", "tags.keepOnly",
   "formatTags.enabled", "formatTags.include",
   "countries.match", "readMin.wpm", "pin.fromFlags", "pin.maxPinned", "archivedAs",
   "events.enabled", "events.nearMatchThreshold", "events.inactive",
   "dates.fallback", "dates.timezone", "slug.preserve", "slug.dedupe", "slug.reservedSlugs", "flags.breaking",
   "urls.oldOrigin", "urls.articlePathTemplate", "urls.sectionPaths", "urls.extraLegacyPaths", "urls.gonePaths",
   "media.hostAllowlist", "media.hostRewrite", "media.maxBytes", "media.failureBudgetPercent", "media.fetchTimeoutMs",
-  "media.concurrency", "media.hotlinkPolicy",
+  "media.concurrency", "media.hotlinkPolicy", "media.bodyImages",
   "redact",
 ];
 
@@ -317,14 +329,20 @@ export function validateMapping(structuralRaw: unknown, overlayRaw: unknown | un
   const m = parsed.data;
   effectiveAllowList(m.source.tableAllowList); // narrowing rule; throws LegacySqlError with a fixed message
   const prov = m._provisional ?? [];
-  for (const k of prov) if (!(k in OWNER_DECISION_KEYS)) throw new MappingError(MAPPING_MESSAGES.provisionalForeign);
+  const decisionKeys: Record<string, string> = { ...OWNER_DECISION_KEYS, ...profile().extraOwnerDecisionKeys };
+  for (const k of prov) if (!(k in decisionKeys)) throw new MappingError(MAPPING_MESSAGES.provisionalForeign);
   if (m.authors.createMissing) throw new MappingError(MAPPING_MESSAGES.createMissing);
-  const pillars = new Set<string>(GTP_PILLAR_SLUGS);
+  const pillars = new Set<string>(profile().pillarSlugs);
+  const singleHome = new Set<string>(profile().singleHomePillars);
   const targets = [...Object.values(m.categories.map), ...(m.categories.fallback ? [m.categories.fallback] : [])];
   for (const t of targets) {
-    if (!pillars.has(t.pillar)) throw new MappingError(MAPPING_MESSAGES.pillar(t.pillar));
-    if (t.pillar === "press-room" && t.subSection) throw new MappingError(MAPPING_MESSAGES.pressRoomSub);
+    if (!pillars.has(t.pillar)) throw new MappingError(profile().id === "gtp" ? MAPPING_MESSAGES.pillar(t.pillar) : `mapping: pillar "${t.pillar}" is not one of the ${profile().pillarSlugs.length} ${profile().id} pillars.`);
+    if (singleHome.has(t.pillar) && t.subSection) throw new MappingError(MAPPING_MESSAGES.pressRoomSub);
   }
+  for (const target of Object.values(m.authors.bySection ?? {})) {
+    if (!m.authors.staff.includes(target)) throw new MappingError(MAPPING_MESSAGES.author(target));
+  }
+  for (const k of m.tags.keepOnly ?? []) if (!/^[a-z0-9][a-z0-9-]*$/.test(k)) throw new MappingError("mapping: tags.keepOnly entries must be tag slugs.");
   for (const target of Object.values(m.authors.map)) {
     if (!m.authors.staff.includes(target)) throw new MappingError(MAPPING_MESSAGES.author(target));
   }
@@ -336,10 +354,14 @@ export function validateMapping(structuralRaw: unknown, overlayRaw: unknown | un
   }
   const structuralOnly = opts.structuralOnly === true;
   if (!structuralOnly && (!m.source.siteFilter || !m.media.hostAllowlist?.length)) throw new MappingError(MAPPING_MESSAGES.overlayRequired);
+  if (!structuralOnly) {
+    const missing = missingRequiredImageHosts(m.media.hostAllowlist);
+    if (missing.length) throw new MappingError(`mapping: media.hostAllowlist must contain the legacy image host(s) ${missing.join(", ")} (tenant profile requiredImageHosts).`);
+  }
   if (opts.requireFinal && prov.length > 0) throw new MappingError(MAPPING_MESSAGES.requireFinal);
   return {
     mapping: m,
-    provisional: prov.map((key) => ({ key, value: getPath(m, key), decision: OWNER_DECISION_KEYS[key as keyof typeof OWNER_DECISION_KEYS] })),
+    provisional: prov.map((key) => ({ key, value: getPath(m, key), decision: decisionKeys[key] as string })),
     structuralOnly,
   };
 }

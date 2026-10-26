@@ -14,6 +14,7 @@
  *     with a warning (argv is visible); argv wins.
  */
 import { CliError, parseArgs, type FlagSpec, type ParsedArgs } from "./args";
+import { profile } from "./network-profile";
 
 export const FIXTURE_SITE_ID = "00000000-0000-0000-0000-00000000f001";
 export const STRUCTURAL_MAPPING_PATH = "scripts/migrate/legacy-mapping.gtp-network.json";
@@ -84,7 +85,7 @@ export interface TargetInfo {
 export function resolveRehearsal(command: Command, a: ParsedArgs, t: TargetInfo): boolean {
   if (!a.has("rehearsal")) return false;
   if (!(command in { import: 1, "rewrite-links": 1, redirects: 1, verify: 1 })) throw new CliError(CLI_MESSAGES.rehearsalRefused);
-  const fixtureSite = t.siteFilter !== undefined && t.siteFilter.toLowerCase() === FIXTURE_SITE_ID;
+  const fixtureSite = t.siteFilter !== undefined && t.siteFilter.toLowerCase() === profile().fixtureSiteId;
   const localDb = t.centralLocal === true;
   if (fixtureSite || localDb) return true;
   throw new CliError(CLI_MESSAGES.rehearsalRefused);
@@ -129,9 +130,10 @@ export function resolveEntity(a: ParsedArgs): Entity {
 /** verify read token: env GTP_READ_TOKEN preferred; argv accepted with a warning and wins when both are present. */
 export function resolveReadToken(a: ParsedArgs, env: Record<string, string | undefined>): { token?: string; warning?: string } {
   const argv = a.get("read-token");
-  const fromEnv = env.GTP_READ_TOKEN && env.GTP_READ_TOKEN !== "" ? env.GTP_READ_TOKEN : undefined;
-  if (a.has("public-base") && argv === undefined && fromEnv === undefined) throw new CliError(CLI_MESSAGES.tokenMissing);
-  if (argv !== undefined) return { token: argv, warning: CLI_MESSAGES.tokenArgvWarning };
+  const name = profile().readTokenEnv;
+  const fromEnv = env[name] && env[name] !== "" ? env[name] : undefined;
+  if (a.has("public-base") && argv === undefined && fromEnv === undefined) throw new CliError(CLI_MESSAGES.tokenMissing.replace("GTP_READ_TOKEN", name));
+  if (argv !== undefined) return { token: argv, warning: CLI_MESSAGES.tokenArgvWarning.replace("GTP_READ_TOKEN", name) };
   return { token: fromEnv };
 }
 
@@ -139,7 +141,7 @@ export function resolveReadToken(a: ParsedArgs, env: Record<string, string | und
 export function resolveMappingPath(command: Command, a: ParsedArgs): string | undefined {
   const m = a.get("mapping");
   if (m) return m;
-  if (command === "discover" || command === "redirects" || command === "verify" || command === "export") return STRUCTURAL_MAPPING_PATH;
+  if (command === "discover" || command === "redirects" || command === "verify" || command === "export") return profile().mappingPath;
   return undefined;
 }
 
