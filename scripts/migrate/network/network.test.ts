@@ -287,13 +287,30 @@ test("entry: agr resolves its profile; missing --site names 01-discover-agr.sql"
   assert.deepEqual(planEntry(["validate-mapping", "--tenant", "agr"]).argv, ["--mapping", AGR.mappingPath]);
   assert.throws(() => planEntry(["export", "--tenant", "agr"] as never), /sql\/01-discover-agr\.sql/);
 });
-test("mapping: committed agr mapping is PROVISIONAL: validates structurally, refused by --require-final", () => {
+test("mapping: committed agr mapping is FINAL (owner 26-10-26) and passes --require-final; real legacy pairs resolve", () => {
   setProfile(AGR);
   const m = readJ("mappings/agr.mapping.json");
-  const r = validateMapping(m, AGR_OVERLAY);
-  assert.deepEqual(r.provisional.map((x) => x.key).sort(), [...m._provisional].sort());
-  assert.ok(m._provisional.includes("categories.map"));
-  assert.throws(() => validateMapping(m, AGR_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.deepEqual(validateMapping(m, AGR_OVERLAY, { requireFinal: true }).provisional, []);
+  assert.throws(() => validateMapping({ ...m, _provisional: ["categories.map"] }, AGR_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.deepEqual(Object.entries(m.status.map).filter(([, v]) => v !== "SKIP").map(([k]) => k), ["published"]);
+  assert.equal(m.archivedAs, "section");
+  // Every (section, subsection) pair seen in the real discovery result (26-10-26).
+  const tx = (sec: string, sub: string) => {
+    const r = resolveTaxonomy(sec, sub, m);
+    assert.ok(r.ok, `${sec}/${sub}`);
+    return r.ok ? [r.t.pillar, r.t.subSection ?? null] : null;
+  };
+  assert.deepEqual(tx("course-reviews", "by-country"), ["course-reviews", null]);
+  assert.deepEqual(tx("course-reviews", "hidden-gems"), ["course-reviews", null]);
+  assert.deepEqual(tx("course-reviews", "new-renovated"), ["course-reviews", null]);
+  assert.deepEqual(tx("gear-style", "equipment"), ["gear-style", null]);
+  assert.deepEqual(tx("gear-style", "style"), ["gear-style", "apparel"]);
+  assert.deepEqual(tx("gear-style", "tested-in-tropics"), ["gear-style", null]);
+  for (const sub of ["club-management", "data-insights", "development-design", "people"]) assert.deepEqual(tx("golf-business", sub), ["golf-business", sub]);
+  for (const sub of ["destinations", "itineraries", "resorts-stays"]) assert.deepEqual(tx("golf-travel", sub), ["golf-travel", sub]);
+  assert.deepEqual(tx("golf-travel", "practical-game"), ["golf-travel", "the-practical-game"]);
+  assert.deepEqual(tx("the-game", ""), ["the-game", null]);
+  for (const sub of ["players", "tournament-news", "watch-prize-money"]) assert.deepEqual(tx("the-game", sub), ["the-game", sub]);
   assert.equal(m.source.schema, "agr_ro");
   // events-awards has no entry on purpose: a row there is rejected until the owner decides.
   assert.equal(Object.keys(m.categories.map).some((k) => k.startsWith("events-awards")), false);
