@@ -315,7 +315,7 @@ test("mapping: committed agr mapping is FINAL (owner 26-10-26) and passes --requ
   // events-awards has no entry on purpose: a row there is rejected until the owner decides.
   assert.equal(Object.keys(m.categories.map).some((k) => k.startsWith("events-awards")), false);
   assert.equal(m.categories.unmapped, "reject");
-  assert.equal(m.authors.distribute.mode, "slugHash");
+  assert.equal(m.authors.distribute.mode, "even");
   assert.deepEqual(m.authors.staff, ["Rachel Lim", "Arjun Mehta", "Kenji Sato", "Ha Tran", "Daniel Wong"]);
   assert.throws(() => validateMapping(m, { ...AGR_OVERLAY, media: { hostAllowlist: ["x.example.com"], hostRewrite: {} } }), /mbolvnwkmkeroqmvbvmt/);
 });

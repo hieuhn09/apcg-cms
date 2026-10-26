@@ -201,7 +201,7 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   - `gear-style/equipment`, `tested-in-tropics` → `gear-style` không mục con (biên tập gán
     clubs/balls/bags sau); `gear-style/style` → `apparel`;
   - `events-awards`: không có dòng (DB cũ cũng không có bài);
-  - tác giả chia đều 5 người trang Team theo băm slug, không giữ byline cũ; chỉ giữ 7 tag
+  - tác giả chia đều 5 người trang Team (`mode: even`, lệch tối đa 1 bài; bản băm slug cho 61/70/83/64/65 ở lần chạy khô đầu nên đổi), không giữ byline cũ; chỉ giữ 7 tag
     đã duyệt; bài cũ không chuyển → 301 về trang chuyên mục (không 410); gốc cũ
     `https://asiagolfreview.com` (bản `www` cũng đang chạy, redirect lúc cutover phủ cả hai).
 - Overlay của chủ dự án `~/agr-private/overlay.json`: `source.siteFilter` =
