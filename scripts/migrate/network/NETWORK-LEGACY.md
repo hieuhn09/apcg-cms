@@ -218,3 +218,54 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   4. `--apply --run-id agr-real-3`, rồi `timestamps-fix --run-id agr-real-3` + `psql "$DIRECT_URL" -f scripts/migrate/out/agr-real-3/timestamps-fix.sql`, rồi `verify --run-id agr-real-3`.
   5. Dựng redirect (`redirects --run-id agr-real-3 --known-routes ~/agr-private/known-routes.json`), chạy file 03 (`CLEANUP OK`), xoá khoá R2 tạm.
   - Giới hạn: lượt bù chỉ THÊM bài mới đăng (kể cả bài lúc trước là nháp nay đã đăng). Bài đã nhập mà site cũ sửa sau đó KHÔNG được cập nhật lại; bài site cũ gỡ đi vẫn còn trên Central (biên tập tự ẩn nếu cần).
+
+## AsiaMaterialsBrief (`--tenant amb`)
+
+- Slug Central: **`amb`** (mặc định agent điền, chủ dự án sửa được trước khi merge; plan
+  delta 27-10-26). Role DB cũ: `amb_migrator`; schema view: `amb_ro`; overlay riêng:
+  `~/amb-private/overlay.json`; run-id: `amb-real-1`, ...
+- Tenant tạo tay trong /admin với feature **`exhibition` BẬT** (The Exhibition dùng chung
+  collection `booths` với abb; danh sách trường: `AMB_TENANT_FIELDS` trong
+  `scripts/lib/amb-taxonomy.ts`, `docs/07-website-management.md`).
+- Dòng site cũ: **chưa biết** (đoán slug `asiamaterialsbrief`). File khám phá
+  `sql/01-discover-amb.sql` tìm dòng site theo `asiamaterialsbrief` / `asia materials brief` /
+  `asia-materials-brief` hoặc slug đúng `amb`, in ra mọi slug site để so, và chỉ trả MỘT bảng
+  kết quả (SQL Editor chỉ hiện bảng cuối, không hiện NOTICE). Ngoài các mục như agr, file
+  còn báo:
+  - `3 section/subsection x status`: giá trị mục con thật của site cũ (site cũ lọc bằng
+    `?sub=<Tên>`, đôi khi `?sub=<slug>`), để chốt mapping;
+  - `8 media_assets (old image library)`: số dòng của site này trong `public.media_assets`,
+    tổng dung lượng nếu có cột kích thước dạng số (kiểm `information_schema` trước), và danh
+    sách cột (cho plan riêng chuyển kho ảnh cũ sang Media Engine, Q6);
+  - `8b public tables`: mọi bảng của schema `public`, số dòng của site này khi bảng có cột
+    `site_id` (không có thì số ước lượng), bảng có tên giống danh bạ (booth, exhibit,
+    director, vendor, supplier, compan, brand, listing) được đánh dấu `<< directory-like`
+    (để quyết việc chuyển gian hàng cũ `/exhibition/<booth>` vào `booths`).
+- File SQL Editor của amb là bản riêng: `sql/01-discover-amb.sql`,
+  `sql/02-create-readonly-role-views-amb.sql`, `sql/02p-set-password-amb.sql`,
+  `sql/03-drop-role-and-views-amb.sql`. Các bước giống hệt AER/AGR ở trên, chỉ thay bằng
+  `amb` và dùng đúng các file này. Đã chạy thử cả bốn file trên Postgres 16 giả trong máy
+  (27-10-26): khám phá ra đúng 1 site (2 site khớp thì không mô tả bài, 02 dừng
+  `SITE STOP`), `SELF-CHECK OK`, `CLEANUP OK`.
+- Mapping `mappings/amb.mapping.json` **CHƯA chốt** (`_provisional` còn: `status.map`,
+  `categories.map`, `authors.distribute`, `tags.keepOnly`, `media.bodyImages`,
+  `body.reflowMaxChars`, các `urls.*`, `archivedAs`). `validate-mapping --require-final`
+  (ngầm bật khi chạy với Central thật) từ chối cho tới khi chủ dự án chốt sau bước khám phá.
+  Gợi ý đang ghi:
+  - chỉ chuyển bài `published`;
+  - pillar cũ trùng slug mới (`briefing`, `materials`, `interiors-ffe`, `lighting-tech`,
+    `projects`, `press-room`); mỗi mục con khớp cả tên viết thường (`industry news`,
+    `projects & pipeline`, ...) lẫn slug mới; `new & sustainable` / `new-sustainable` →
+    `new-sustainable-materials`; mục con lạ → pillar đó, không mục con (`<pillar>/*`);
+  - `press-room/*` → `press-room` không mục con (một nhà);
+  - `intelligence`, `exhibition`, `events-awards`: **không có dòng** cố ý (trang, không phải
+    pillar ở site mới); bài ở đó bị từ chối cho tới khi chủ dự án chọn pillar;
+  - tác giả chia đều 6 người trang Team (`mode: even`), không giữ byline cũ; chỉ giữ 6 tag
+    đã duyệt; `body.reflowMaxChars: 380` như AER/AGR (kiểm lại trên vài bài cũ);
+  - gốc cũ `https://asiamaterialsbrief.com`, bài `/article/{slug}`.
+- Ảnh: như AER, overlay PHẢI có host `mbolvnwkmkeroqmvbvmt.supabase.co`. Kho ảnh cũ
+  `media_assets` → Media Engine của content engine: plan riêng sau khi khám phá.
+- Lưu ý chung (phát hiện 27-10-26 khi chạy thử): mục `8 other tables of this site` của
+  `01-discover-aer.sql` / `01-discover-agr.sql` luôn để trống cột `detail`, vì
+  `query_to_xml(..., tableforest => false)` bọc kết quả trong `<table>` mà xpath lại tìm
+  `/row/n`. File amb dùng `/table/row/n` (đã thử).

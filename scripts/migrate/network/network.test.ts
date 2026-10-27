@@ -1,5 +1,5 @@
 /**
- * Tests of the network-legacy bundle (tenant profiles aer and agr). Run: npm run test:migrate-network.
+ * Tests of the network-legacy bundle (tenant profiles aer, agr and amb). Run: npm run test:migrate-network.
  * Every test that switches the profile restores the GTP default afterwards.
  */
 import { test, afterEach } from "node:test";
@@ -355,4 +355,94 @@ test("agr SQL Editor files are agr-only (role agr_migrator, schema agr_ro, no ae
   assert.match(s02, /CREATE ROLE agr_migrator/);
   assert.match(s02, /CREATE SCHEMA agr_ro/);
   assert.match(readFileSync(path.join(HERE, "sql/01-discover-agr.sql"), "utf8"), /slug::text = 'agr'/);
+});
+
+/* ── amb (AsiaMaterialsBrief) profile + provisional mapping ── */
+const AMB: NetworkProfile = parseProfile(readJ("profiles/amb.json"));
+const AMB_OVERLAY = { source: { siteFilter: AMB.fixtureSiteId }, media: { hostAllowlist: ["mbolvnwkmkeroqmvbvmt.supabase.co"], hostRewrite: {} } };
+test("profile: amb parses; pillars = the 6 amb taxonomy pillars; press-room single-home; matches the constants", async () => {
+  const { AMB_PILLARS } = await import("../../lib/amb-taxonomy");
+  const { SINGLE_HOME_PILLARS } = await import("../../../src/lib/constants");
+  assert.equal(AMB.tenant, "amb");
+  assert.deepEqual([...AMB.pillarSlugs], AMB_PILLARS.map((p) => p.slug));
+  assert.deepEqual([...AMB.singleHomePillars], SINGLE_HOME_PILLARS.amb);
+  assert.deepEqual([...(AMB.requiredImageHosts ?? [])], ["mbolvnwkmkeroqmvbvmt.supabase.co"]);
+  assert.equal(AMB.markerSourceName, "legacy:asiamaterialsbrief");
+  assert.notEqual(AMB.fixtureSiteId, AGR.fixtureSiteId);
+  for (const p of [...AMB.pillarSlugs, "intelligence", "exhibition", "events-awards"]) assert.ok(AMB.reservedSlugs?.includes(p), p);
+});
+test("entry: amb resolves its profile; missing --site names 01-discover-amb.sql", () => {
+  const p = planEntry(["import", "--tenant", "amb", "--site", "asiamaterialsbrief", "--apply", "--run-id", "amb-real-1"]);
+  assert.equal(p.profile.tenant, "amb");
+  assert.deepEqual([...p.profile.legacySiteSlugs], ["asiamaterialsbrief"]);
+  assert.deepEqual(planEntry(["validate-mapping", "--tenant", "amb"]).argv, ["--mapping", AMB.mappingPath]);
+  assert.throws(() => planEntry(["export", "--tenant", "amb"] as never), /sql\/01-discover-amb\.sql/);
+});
+test("mapping: committed amb mapping is PROVISIONAL: validates structurally, refused by --require-final", () => {
+  setProfile(AMB);
+  const m = readJ("mappings/amb.mapping.json");
+  const r = validateMapping(m, AMB_OVERLAY);
+  assert.deepEqual(r.provisional.map((x) => x.key).sort(), [...m._provisional].sort());
+  for (const k of ["categories.map", "authors.distribute", "tags.keepOnly", "body.reflowMaxChars", "urls.oldOrigin"]) assert.ok(m._provisional.includes(k), k);
+  assert.throws(() => validateMapping(m, AMB_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.equal(m.source.schema, "amb_ro");
+  assert.equal(m.urls.oldOrigin, "https://asiamaterialsbrief.com");
+  assert.equal(m.urls.articlePathTemplate, "/article/{slug}");
+  // intelligence, exhibition and events-awards are pages on the new site: no entry, rejected until the owner decides.
+  for (const sec of ["intelligence", "exhibition", "events-awards"]) assert.equal(Object.keys(m.categories.map).some((k) => k === sec || k.startsWith(`${sec}/`)), false, sec);
+  assert.equal(m.categories.unmapped, "reject");
+  assert.equal(m.authors.distribute.mode, "even");
+  assert.deepEqual(m.authors.staff, ["Rachel Tan", "Marcus Lim", "Siriporn Chaiyasit", "Dimas Prasetyo", "Lin Wei", "Aisyah Rahman"]);
+  assert.deepEqual(m.authors.distribute.pool, m.authors.staff);
+  assert.throws(() => validateMapping(m, { ...AMB_OVERLAY, media: { hostAllowlist: ["x.example.com"], hostRewrite: {} } }), /mbolvnwkmkeroqmvbvmt/);
+});
+test("mapping: every amb target is a real pillar/sub-section; press-room never gets a sub; ?sub= names and slugs both resolve", async () => {
+  const { AMB_SUBSECTIONS, AMB_TAGS } = await import("../../lib/amb-taxonomy");
+  const m = readJ("mappings/amb.mapping.json");
+  const subs = new Set(AMB_SUBSECTIONS.map((s) => `${s.pillarSlug}/${s.slug}`));
+  for (const [k, t] of Object.entries(m.categories.map) as Array<[string, { pillar: string; subSection?: string }]>) {
+    assert.ok(AMB.pillarSlugs.includes(t.pillar), k);
+    if (t.subSection) assert.ok(subs.has(`${t.pillar}/${t.subSection}`), k);
+    if (t.pillar === "press-room") assert.equal(t.subSection, undefined, k);
+  }
+  assert.deepEqual([...m.tags.keepOnly], AMB_TAGS.map((t) => t.slug));
+  for (const [from, to] of Object.entries(m.tags.renames) as Array<[string, string]>) assert.ok(m.tags.keepOnly.includes(to), `${from} -> ${to}`);
+  const tx = (sec: string, sub: string) => {
+    const r = resolveTaxonomy(sec, sub, m);
+    assert.ok(r.ok, `${sec}/${sub}`);
+    return r.ok ? [r.t.pillar, r.t.subSection ?? null] : null;
+  };
+  // Every sub-section resolves from its design name (any case, as ?sub=<Name> stores it) and from its slug.
+  for (const s of AMB_SUBSECTIONS) {
+    assert.deepEqual(tx(s.pillarSlug, s.title), [s.pillarSlug, s.slug], s.title);
+    assert.deepEqual(tx(s.pillarSlug, s.title.toUpperCase()), [s.pillarSlug, s.slug], s.title);
+    assert.deepEqual(tx(s.pillarSlug, s.slug), [s.pillarSlug, s.slug], s.slug);
+  }
+  assert.deepEqual(tx("materials", "New & Sustainable"), ["materials", "new-sustainable-materials"]);
+  assert.deepEqual(tx("materials", "new-sustainable"), ["materials", "new-sustainable-materials"]);
+  assert.deepEqual(tx("briefing", ""), ["briefing", null]);
+  assert.deepEqual(tx("projects", "hotel-projects"), ["projects", null]);
+  assert.deepEqual(tx("press-room", "Press Releases"), ["press-room", null]);
+});
+test("amb SQL Editor files are amb-only (role amb_migrator, schema amb_ro, no agr_ro/aer_ro); 01 is one statement", () => {
+  for (const f of ["sql/01-discover-amb.sql", "sql/02-create-readonly-role-views-amb.sql", "sql/02p-set-password-amb.sql", "sql/03-drop-role-and-views-amb.sql"]) {
+    const s = readFileSync(path.join(HERE, f), "utf8");
+    assert.doesNotMatch(s, /aer_ro|agr_ro|Asia Economic|AsiaGolf|asiagolfreview/, f);
+  }
+  const s02 = readFileSync(path.join(HERE, "sql/02-create-readonly-role-views-amb.sql"), "utf8");
+  assert.match(s02, /CREATE ROLE amb_migrator/);
+  assert.match(s02, /CREATE SCHEMA amb_ro/);
+  const s01 = readFileSync(path.join(HERE, "sql/01-discover-amb.sql"), "utf8");
+  assert.match(s01, /slug::text = 'amb'/);
+  // Same site predicate in 01 and 02 (02 must pick exactly the row 01 showed).
+  const pred = /WHERE (s::text ILIKE '%asiamaterialsbrief%'[^\n]*'amb')/;
+  assert.equal(s01.match(pred)?.[1], s02.match(pred)?.[1]);
+  // One result set: exactly one statement terminator, on the last line of code.
+  const code = s01.split("\n").filter((l) => l.trim() !== "" && !l.trimStart().startsWith("--"));
+  assert.deepEqual(code.map((l, i) => [i, l.trimEnd().endsWith(";")]).filter(([, e]) => e).map(([i]) => i), [code.length - 1]);
+  assert.match(s01, /media_assets/);
+  assert.match(s01, /information_schema\.columns/);
+  assert.match(s01, /directory-like/);
+  // query_to_xml(..., tableforest => false) wraps rows in <table>: the xpath must start at /table.
+  assert.doesNotMatch(s01, /xpath\('\/row/);
 });

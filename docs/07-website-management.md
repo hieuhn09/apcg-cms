@@ -135,9 +135,43 @@ as data: `ABB_TENANT_FIELDS` in `scripts/lib/abb-taxonomy.ts`.
 - Then create the taxonomy (6 pillars, 22 sub-sections, 3 newsletters, 5 authors, 57 tags
   = 93 rows) with `npm run audit:add-abb-taxonomy`: see `docs/11-operations.md`
   "AsiaBeautyBrief rollout". Booths are entered by editors in /admin (never by the engine).
+  The same collection serves AsiaMaterialsBrief's The Exhibition (`amb`, below); each title
+  may only use its own six halls (`BOOTH_HALLS_BY_TENANT`, `src/lib/booth-halls.ts`).
 - Mint a read token for abb-web, create the engine record in the Console
   (`/console/engines/new`, tenant `abb` only, actions `create_article` + `update_article`,
   hub flags off), and add the abb-web origin to `PUBLIC_API_ALLOWED_ORIGINS`.
+
+### Example: AsiaMaterialsBrief (`amb`)
+
+Owner-run, systemAdmin only. Status 27-10-26: **code only, on branch
+`claude/sharp-ramanujan-6bxu4n`, not pushed**; the tenant does NOT exist yet and nothing has
+been run against any shared database. Field sheet as data: `AMB_TENANT_FIELDS` in
+`scripts/lib/amb-taxonomy.ts`.
+
+- Name `AsiaMaterialsBrief`, slug `amb` (the web repo is `amb-web`; the domain is
+  `asiamaterialsbrief.com`), status `active`, default language `en`, supported languages
+  `[en]`, timezone `Asia/Singapore`. Contact (PENDING OWNER, the design's mailboxes):
+  editorial and general `info@asiamaterialsbrief.com`, advertising/partnerships
+  `info@asiapresscentre.com`.
+- Domain, additional domains and **frontend URL: EMPTY at creation** (set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` and **`exhibition`** on; everything
+  else off (incl. translations). `exhibition` shows **Exhibition > Booths** in /admin and
+  serves `/api/public/booths*` for The Exhibition (same collection as abb).
+- **Auto publish engine drafts: OFF** (`audit:add-amb-taxonomy` refuses `--apply` while on).
+- Only `press-room` (hyphenated) is engine-blocked in code (`src/lib/constants.ts`), and it
+  is single-home (no sub-sections, optional author). The engine also stays off the
+  `projects` sub-sections `specified` and `design-voices`: that rule is in the content
+  engine, not here.
+- Booth halls: amb uses six of the `booths.hall` values, in this website order:
+  `manufacturers`, `brands`, `design-studios`, `distributors-showrooms`, `services`,
+  `country-pavilions` (`AMB_BOOTH_HALLS` in `src/lib/booth-halls.ts`); a hall of another
+  title is refused by the field validate (abb keeps its six). The four new values need
+  migration `20261027_000000_add_amb_booth_halls` deployed first (additive
+  `ALTER TYPE ... ADD VALUE`).
+- Then create the taxonomy (6 pillars, 18 sub-sections, 3 newsletters, 6 authors, 6 tags =
+  39 rows) with `npm run audit:add-amb-taxonomy`: see `docs/11-operations.md`
+  "AsiaMaterialsBrief rollout". Same `/neondb` name guard as the agr script. Booths are
+  entered by editors in /admin (never by the engine).
 
 ## Configure domain & languages
 
