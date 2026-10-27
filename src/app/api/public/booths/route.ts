@@ -1,6 +1,7 @@
 /**
  * GET /api/public/booths?hall=&article=<articleSlug>&page=&limit= — published
- * booths of The Beauty Exhibition (AsiaBeautyBrief) for the token's tenant.
+ * booths of The Beauty Exhibition (AsiaBeautyBrief) or The Exhibition
+ * (AsiaMaterialsBrief) for the token's tenant.
  * Feature-gated on `exhibition` (404 `{ ok:false, status:"not_found" }` when
  * off, like every feature-gated public route). Returns the same list envelope
  * as /api/public/articles (docs, totalDocs, limit, page, totalPages, hasNextPage,
