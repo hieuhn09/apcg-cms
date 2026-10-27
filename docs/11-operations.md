@@ -273,7 +273,7 @@ and status.
   record `content-engine-amb` in Console `/console/engines/new`: writer, allowed tenant only
   `amb`, actions only `create_article` + `update_article`, hub flags off; (9) add the amb-web
   origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import: `scripts/migrate/network/NETWORK-LEGACY.md`
-  "AsiaMaterialsBrief" (old site row unknown, mapping provisional). Author bios, contacts
+  "AsiaMaterialsBrief" (old site `asiamaterialsbrief` found 27-10-26; mapping FINAL, owner 27-10-26: published only, 252 rows). Author bios, contacts
   and the tag set are PENDING OWNER wording.
 
 ## Token rotation

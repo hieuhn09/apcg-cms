@@ -378,54 +378,68 @@ test("entry: amb resolves its profile; missing --site names 01-discover-amb.sql"
   assert.deepEqual(planEntry(["validate-mapping", "--tenant", "amb"]).argv, ["--mapping", AMB.mappingPath]);
   assert.throws(() => planEntry(["export", "--tenant", "amb"] as never), /sql\/01-discover-amb\.sql/);
 });
-test("mapping: committed amb mapping is PROVISIONAL: validates structurally, refused by --require-final", () => {
+test("mapping: committed amb mapping is FINAL (owner 27-10-26) and passes --require-final; real legacy pairs resolve", () => {
   setProfile(AMB);
   const m = readJ("mappings/amb.mapping.json");
-  const r = validateMapping(m, AMB_OVERLAY);
-  assert.deepEqual(r.provisional.map((x) => x.key).sort(), [...m._provisional].sort());
-  for (const k of ["categories.map", "authors.distribute", "tags.keepOnly", "body.reflowMaxChars", "urls.oldOrigin"]) assert.ok(m._provisional.includes(k), k);
-  assert.throws(() => validateMapping(m, AMB_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.deepEqual(validateMapping(m, AMB_OVERLAY, { requireFinal: true }).provisional, []);
+  assert.throws(() => validateMapping({ ...m, _provisional: ["categories.map"] }, AMB_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.deepEqual(Object.entries(m.status.map).filter(([, v]) => v !== "SKIP").map(([k]) => k), ["published"]);
+  assert.equal(m.archivedAs, "section");
+  // Same legacy platform as aer/agr: each one-block section is split into paragraphs at render time.
+  assert.equal(m.body.reflowMaxChars, 380);
+  assert.equal(m.media.bodyImages, "drop");
   assert.equal(m.source.schema, "amb_ro");
   assert.equal(m.urls.oldOrigin, "https://asiamaterialsbrief.com");
   assert.equal(m.urls.articlePathTemplate, "/article/{slug}");
-  // intelligence, exhibition and events-awards are pages on the new site: no entry, rejected until the owner decides.
-  for (const sec of ["intelligence", "exhibition", "events-awards"]) assert.equal(Object.keys(m.categories.map).some((k) => k === sec || k.startsWith(`${sec}/`)), false, sec);
-  assert.equal(m.categories.unmapped, "reject");
-  assert.equal(m.authors.distribute.mode, "even");
-  assert.deepEqual(m.authors.staff, ["Rachel Tan", "Marcus Lim", "Siriporn Chaiyasit", "Dimas Prasetyo", "Lin Wei", "Aisyah Rahman"]);
-  assert.deepEqual(m.authors.distribute.pool, m.authors.staff);
-  assert.throws(() => validateMapping(m, { ...AMB_OVERLAY, media: { hostAllowlist: ["x.example.com"], hostRewrite: {} } }), /mbolvnwkmkeroqmvbvmt/);
-});
-test("mapping: every amb target is a real pillar/sub-section; press-room never gets a sub; ?sub= names and slugs both resolve", async () => {
-  const { AMB_SUBSECTIONS, AMB_TAGS } = await import("../../lib/amb-taxonomy");
-  const m = readJ("mappings/amb.mapping.json");
-  const subs = new Set(AMB_SUBSECTIONS.map((s) => `${s.pillarSlug}/${s.slug}`));
-  for (const [k, t] of Object.entries(m.categories.map) as Array<[string, { pillar: string; subSection?: string }]>) {
-    assert.ok(AMB.pillarSlugs.includes(t.pillar), k);
-    if (t.subSection) assert.ok(subs.has(`${t.pillar}/${t.subSection}`), k);
-    if (t.pillar === "press-room") assert.equal(t.subSection, undefined, k);
-  }
-  assert.deepEqual([...m.tags.keepOnly], AMB_TAGS.map((t) => t.slug));
-  for (const [from, to] of Object.entries(m.tags.renames) as Array<[string, string]>) assert.ok(m.tags.keepOnly.includes(to), `${from} -> ${to}`);
+  assert.deepEqual(m.urls.sectionPaths, Object.fromEntries(AMB.pillarSlugs.map((p) => [p, `/${p}`])));
+  // Page routes are hand-written in amb-web at cutover (as agr), not built from the mapping.
+  assert.deepEqual([m.urls.extraLegacyPaths, m.urls.gonePaths], [[], []]);
+  // Every (section, subsection) pair seen in the real discovery result (27-10-26).
   const tx = (sec: string, sub: string) => {
     const r = resolveTaxonomy(sec, sub, m);
     assert.ok(r.ok, `${sec}/${sub}`);
     return r.ok ? [r.t.pillar, r.t.subSection ?? null] : null;
   };
-  // Every sub-section resolves from its design name (any case, as ?sub=<Name> stores it) and from its slug.
-  for (const s of AMB_SUBSECTIONS) {
-    assert.deepEqual(tx(s.pillarSlug, s.title), [s.pillarSlug, s.slug], s.title);
-    assert.deepEqual(tx(s.pillarSlug, s.title.toUpperCase()), [s.pillarSlug, s.slug], s.title);
-    assert.deepEqual(tx(s.pillarSlug, s.slug), [s.pillarSlug, s.slug], s.slug);
-  }
-  assert.deepEqual(tx("materials", "New & Sustainable"), ["materials", "new-sustainable-materials"]);
+  for (const sub of ["industry-news", "people-firms", "policy-trade", "projects-pipeline"]) assert.deepEqual(tx("briefing", sub), ["briefing", sub]);
+  for (const sub of ["decor-ose", "furniture", "kitchen-bath", "soft-ffe"]) assert.deepEqual(tx("interiors-ffe", sub), ["interiors-ffe", sub]);
+  for (const sub of ["building-systems", "lighting"]) assert.deepEqual(tx("lighting-tech", sub), ["lighting-tech", sub]);
+  assert.deepEqual(tx("lighting-tech", "smart-building"), ["lighting-tech", "smart-building-home"]);
+  for (const sub of ["architectural", "surfaces", "wood-panels"]) assert.deepEqual(tx("materials", sub), ["materials", sub]);
   assert.deepEqual(tx("materials", "new-sustainable"), ["materials", "new-sustainable-materials"]);
-  assert.deepEqual(tx("briefing", ""), ["briefing", null]);
-  assert.deepEqual(tx("projects", "hotel-projects"), ["projects", null]);
-  assert.deepEqual(tx("press-room", "Press Releases"), ["press-room", null]);
+  assert.deepEqual(tx("projects", ""), ["projects", null]);
+  assert.deepEqual(tx("projects", "home-renovation"), ["projects", "home-renovation"]);
+  // AI-written project news, not interviews: Design Voices (and Specified) stay editor-only.
+  assert.deepEqual(tx("projects", "design-voices"), ["projects", null]);
+  assert.deepEqual(tx("projects", "specified"), ["projects", null]);
+  // Wildcard fallbacks: an unknown sub keeps its pillar with no sub-section.
+  for (const p of AMB.pillarSlugs) assert.deepEqual(tx(p, "something-new"), [p, null], p);
+  // intelligence, exhibition and events-awards are pages on the new site: no entry, rejected.
+  for (const sec of ["intelligence", "exhibition", "events-awards"]) assert.equal(Object.keys(m.categories.map).some((k) => k === sec || k.startsWith(`${sec}/`)), false, sec);
+  assert.equal(m.categories.unmapped, "reject");
+  assert.equal(m.authors.distribute.mode, "even");
+  assert.equal(m.authors.distribute.keepLegacy, false);
+  assert.deepEqual(m.authors.staff, ["Rachel Tan", "Marcus Lim", "Siriporn Chaiyasit", "Dimas Prasetyo", "Lin Wei", "Aisyah Rahman"]);
+  assert.deepEqual(m.authors.distribute.pool, m.authors.staff);
+  assert.throws(() => validateMapping(m, { ...AMB_OVERLAY, media: { hostAllowlist: ["x.example.com"], hostRewrite: {} } }), /mbolvnwkmkeroqmvbvmt/);
+});
+test("mapping: every amb target is a real pillar/sub-section; press-room never gets a sub; only the 6 approved tags survive", async () => {
+  const { AMB_SUBSECTIONS, AMB_TAGS, AMB_ENGINE_EXCLUDED_SUBSECTIONS } = await import("../../lib/amb-taxonomy");
+  const m = readJ("mappings/amb.mapping.json");
+  const subs = new Set(AMB_SUBSECTIONS.map((s) => `${s.pillarSlug}/${s.slug}`));
+  for (const [k, t] of Object.entries(m.categories.map) as Array<[string, { pillar: string; subSection?: string }]>) {
+    assert.ok(AMB.pillarSlugs.includes(t.pillar), k);
+    if (t.subSection) assert.ok(subs.has(`${t.pillar}/${t.subSection}`), k);
+    if (t.subSection) assert.ok(!AMB_ENGINE_EXCLUDED_SUBSECTIONS.includes(t.subSection), `${k}: editor-only sub-section`);
+    if (t.pillar === "press-room") assert.equal(t.subSection, undefined, k);
+  }
+  assert.deepEqual([...m.tags.keepOnly], AMB_TAGS.map((t) => t.slug));
+  assert.deepEqual(m.tags.renames, {});
+  const tm = { tags: { normalize: "lowercase-trim-dedupe", maxPerArticle: 12, drop: [], renames: m.tags.renames, keepOnly: m.tags.keepOnly } } as never;
+  assert.deepEqual(legacyTags(["Tiles", "hotel design", "Vietnam"], tm), []);
+  assert.deepEqual(resolveTaxonomy("press-room", "press-releases", m), { ok: true, t: { pillar: "press-room", rehomed: true, oldSection: "press-room", oldSub: "press-releases" } });
 });
 test("amb SQL Editor files are amb-only (role amb_migrator, schema amb_ro, no agr_ro/aer_ro); 01 is one statement", () => {
-  for (const f of ["sql/01-discover-amb.sql", "sql/02-create-readonly-role-views-amb.sql", "sql/02p-set-password-amb.sql", "sql/03-drop-role-and-views-amb.sql"]) {
+  for (const f of ["sql/01-discover-amb.sql", "sql/01b-inspect-amb-booths.sql", "sql/02-create-readonly-role-views-amb.sql", "sql/02p-set-password-amb.sql", "sql/03-drop-role-and-views-amb.sql"]) {
     const s = readFileSync(path.join(HERE, f), "utf8");
     assert.doesNotMatch(s, /aer_ro|agr_ro|Asia Economic|AsiaGolf|asiagolfreview/, f);
   }
@@ -445,4 +459,20 @@ test("amb SQL Editor files are amb-only (role amb_migrator, schema amb_ro, no ag
   assert.match(s01, /directory-like/);
   // query_to_xml(..., tableforest => false) wraps rows in <table>: the xpath must start at /table.
   assert.doesNotMatch(s01, /xpath\('\/row/);
+});
+test("amb 01b booths inspection: one read-only statement, tables guarded, secret-looking columns never selected", () => {
+  const s = readFileSync(path.join(HERE, "sql/01b-inspect-amb-booths.sql"), "utf8");
+  const code = s.split("\n").filter((l) => l.trim() !== "" && !l.trimStart().startsWith("--"));
+  assert.deepEqual(code.map((l, i) => [i, l.trimEnd().endsWith(";")]).filter(([, e]) => e).map(([i]) => i), [code.length - 1]);
+  assert.match(code[0] as string, /^WITH/);
+  assert.doesNotMatch(code.join("\n"), /\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|GRANT|TRUNCATE|SET)\b/);
+  assert.match(s, /'149a9792-a169-47ca-b592-ea1ff1a9ea82'/);
+  for (const t of ["amb_booths", "amb_booth_applications"]) assert.match(s, new RegExp(`'${t}'`));
+  assert.match(s, /information_schema\.tables/);
+  // Rows are rendered as to_jsonb(row) minus the secret-looking columns; the screen covers the owner's list.
+  assert.match(s, /to_jsonb\(r\) - %L::text\[\]/);
+  const re = new RegExp((s.match(/'(\(mail\|[^']+)'::text AS secret_re/) as RegExpMatchArray)[1] as string, "i");
+  for (const c of ["contact_email", "email", "phone", "password_hash", "api_token", "client_secret"]) assert.match(c, re, c);
+  for (const c of ["name", "hall", "description", "logo_url", "website", "country"]) assert.doesNotMatch(c, re, c);
+  assert.doesNotMatch(s, /xpath\('\/row/);
 });

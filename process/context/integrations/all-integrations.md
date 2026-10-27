@@ -815,8 +815,10 @@ description; Console shows it fully).
   (website Hall 01..06): `manufacturers`, `brands`, `design-studios`, `distributors-showrooms`, `services`,
   `country-pavilions`.
 - Legacy import profile `scripts/migrate/network/profiles/amb.json` + mapping `mappings/amb.mapping.json`
-  (owner decisions still in `_provisional`, `--require-final` refuses; `intelligence`, `exhibition`,
-  `events-awards` unmapped on purpose); old site row unknown until `sql/01-discover-amb.sql` runs.
+  (FINAL, owner 27-10-26, `_provisional` empty: published only (252 of 440), `projects/design-voices` ->
+  `projects` with no sub-section, only the 6 approved tags; `intelligence`, `exhibition`, `events-awards`
+  unmapped on purpose); old site `asiamaterialsbrief` (id in the owner overlay), discovery 27-10-26.
+  Booths are a separate later step (`sql/01b-inspect-amb-booths.sql`, read-only).
 - Status 27-10-26: code only, branch `claude/sharp-ramanujan-6bxu4n`, not pushed; tenant, rows, read token and engine record
   `content-engine-amb` do not exist. Runbook: `docs/11-operations.md` "AsiaMaterialsBrief rollout".
 
