@@ -104,6 +104,24 @@ async function postRevalidate(
 }
 
 /**
+ * The same signed webhook the collection hook sends, for a caller that wrote with
+ * `context.disableRevalidate` and posts it itself AFTER its transaction committed
+ * (the hub flags route, POST /api/hub/articles/{id}/flags: posting from inside the
+ * open transaction let the frontend re-cache the OLD row and held the row / advisory
+ * locks for up to REVALIDATE_TIMEOUT_MS). Best-effort, never throws (findTenantById
+ * and postRevalidate both swallow their errors).
+ */
+export async function revalidateTenantDoc(
+  payload: Payload,
+  tenantId: number | string | null | undefined,
+  tags: readonly string[],
+  slug: string | undefined,
+): Promise<void> {
+  const tenant = tenantId == null ? null : await findTenantById(payload, tenantId);
+  await postRevalidate(payload, tenant, { tags, slug });
+}
+
+/**
  * Build afterChange/afterDelete hooks for a collection. `tags` are the logical
  * cache tags (without tenant prefix) the frontend uses for this collection.
  */

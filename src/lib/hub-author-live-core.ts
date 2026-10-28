@@ -51,7 +51,7 @@ import { authenticateHubWriteEngine } from "@/lib/hub-write-auth";
 import { isHubAuthoredDoc } from "@/lib/hub-author-auth";
 import type { ConvertResult, HubEditorConfig } from "@/lib/hub-author-body";
 import { extractMediaIds, uploadIdsInTree } from "@/lib/hub-author-media-token";
-import type { HubDraftFieldKey, HubDraftInput } from "@/lib/hub-author-input";
+import type { HubDraftInput, HubWriteKey } from "@/lib/hub-author-input";
 import { checkPublishable } from "@/lib/hub-author-publish-core";
 import { withHubArticleLock, type HubLockCtx, type HubLockResult } from "@/lib/hub-article-lock";
 import {
@@ -110,7 +110,7 @@ export const LIVE_KEY_COLUMNS: Record<HubLiveFieldKey, readonly string[]> = {
 };
 
 /** The columns left out of D12 (1) for this write: the mapped columns of every CHANGED key. */
-export function liveChangedColumns(changed: readonly HubDraftFieldKey[], data: Record<string, unknown>): string[] {
+export function liveChangedColumns(changed: readonly HubWriteKey[], data: Record<string, unknown>): string[] {
   const out: string[] = [];
   for (const k of changed) {
     if (!isLiveFieldKey(k)) continue;
@@ -315,7 +315,7 @@ export async function handleHubLiveUpdateWith(
 
   async function inLock(
     lk: HubLockCtx,
-    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubDraftFieldKey[] },
+    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubWriteKey[] },
   ): Promise<HubLockResult> {
     const { v, tenant, articleId, data, changed } = s;
     const fail = (value: Response): HubLockResult => ({ ok: false, value });

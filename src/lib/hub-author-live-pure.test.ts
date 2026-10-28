@@ -190,4 +190,20 @@ describe("HUB_LIVE_FIELD_KEYS (D4)", () => {
     assert.deepEqual([...HUB_LIVE_FIELD_KEYS], [...DERIVED_LIVE_FIELD_KEYS]);
     assert.equal(HUB_LIVE_FIELD_KEYS.length, 15);
   });
+
+  // hub-pin-exclusive-flags (D2 / D13): the three editorial ROOT keys of the draft routes are
+  // NOT live keys — under `fields` they stay 400, so buildDraftUpdateData never sees them on /live.
+  it("editorial keys under `fields` (exclusive / pinnedToLatest / pinnedUntil) ⇒ 400 field:fields.<key>", () => {
+    for (const k of ["exclusive", "pinnedToLatest", "pinnedUntil"]) {
+      const r = parseLiveBody(body({ [k]: k === "pinnedUntil" ? null : true }));
+      assert.deepEqual([r.ok, !r.ok && r.status, !r.ok && r.body], [false, 400, { ok: false, status: "bad_request", reason: `unknown field: fields.${k}`, field: `fields.${k}` }]);
+      assert.equal((HUB_LIVE_FIELD_KEYS as readonly string[]).includes(k), false);
+    }
+    const ok = parseLiveBody(body({ title: "T" }));
+    assert.equal(ok.ok, true);
+    if (ok.ok) {
+      assert.equal("editorial" in ok.value, false);
+      assert.deepEqual(ok.value.present, ["title"]);
+    }
+  });
 });

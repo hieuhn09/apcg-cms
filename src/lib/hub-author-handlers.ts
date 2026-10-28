@@ -9,11 +9,15 @@
  * POST order (first failure wins): auth (401 / 403 hubRead / 403 hubAuthor) → body
  * ≤ 1,000,000 bytes (413) → JSON / object / tenant / unknown keys (400) → pure
  * checks incl. body (1)–(3) + 1b (422) → tenant ∈ grant (403, logged) →
- * `features.articles` (403 feature_disabled) → references + blocked pillar (422) →
+ * `features.articles` (403 feature_disabled) → (only with an editorial key: `exclusive`,
+ * `pinnedToLatest`, `pinnedUntil`) the CMS switch HUB_EDITORIAL_FLAGS_TENANTS (422
+ * `not_enabled` on every key present) then the `pinnedUntil` window (422 `out_of_range`)
+ * → references + blocked pillar (422) →
  * conversion in ONE vm call (422) → slug in use, main table OR latest draft (409)
  * → create.
  *
- * PATCH order: auth → 413 → 400 / 422 → tenant (403) → feature (403) → id shape +
+ * PATCH order: auth → 413 → 400 / 422 → tenant (403) → feature (403) → (editorial
+ * keys) switch + window (422, as POST) → id shape +
  * int4 (404) → latest draft AND main row in THAT tenant (404) → both
  * `origin === "manual"` + `workflowStatus === "draft"`, latest hub-authored (422
  * not_editable) → `expectedVersion` === latest version (409) → (with bodyMarkdown)
@@ -60,10 +64,11 @@ import {
   invalidBody,
   parseCreateBody,
   parseUpdateBody,
-  type HubDraftFieldKey,
   type HubDraftInput,
   type HubParseResult,
+  type HubWriteKey,
 } from "@/lib/hub-author-input";
+import { draftEditorialErrors, editorialFlagsTenants, editorialKeysOf, pinInstant } from "@/lib/hub-author-flags";
 import { convertBody, isRoundTripSafeBody, lexicalTreesEqual, type ConvertResult, type HubEditorConfig } from "@/lib/hub-author-body";
 import { bodyMediaIdsMatch, findSlugConflict, resolveDraftRefs, type ResolvedRefs } from "@/lib/hub-author-refs";
 import {
@@ -90,6 +95,10 @@ export interface HubDraftDeps {
   getPayload?: () => Promise<Payload>;
   /** The CMS-A lock + transaction (default: `withHubArticleLock`); `--check6 --unit-only` passes a disabled one. */
   lock?: typeof withHubArticleLock;
+  /** hub-pin-exclusive-flags D10: the editorial switch (default: `editorialFlagsTenants()`, read on this call). */
+  editorialTenants?: readonly string[];
+  /** Server clock in ms for the `pinnedUntil` window (default `Date.now`). */
+  now?: () => number;
 }
 
 // ── Frozen response bodies ───────────────────────────────────────────────────
@@ -247,6 +256,25 @@ async function writeFailed(payload: Payload, engineId: Id, tenantId: Id, slug: s
   return logInternal(payload, engineId, err);
 }
 
+/**
+ * hub-pin-exclusive-flags D10 — both draft routes, right after tenant + `features.articles`:
+ * the request carries editorial keys ⇒ the CMS switch (`not_enabled` on every key present)
+ * then the `pinnedUntil` window (`out_of_range`); no editorial key ⇒ nothing is read, the
+ * old behaviour is unchanged.
+ */
+function editorialStep(v: HubDraftInput, tenant: TenantDoc, deps?: HubDraftDeps): Response | null {
+  const keys = editorialKeysOf(v.present);
+  if (keys.length === 0) return null;
+  const errors = draftEditorialErrors({
+    keys,
+    editorial: v.editorial,
+    tenantSlug: tenant.slug,
+    tenants: deps?.editorialTenants ?? editorialFlagsTenants(),
+    nowMs: (deps?.now ?? Date.now)(),
+  });
+  return errors ? invalid(errors) : null;
+}
+
 const defaultGetPayload = () => getPayload({ config });
 const defaultFindMain = async (payload: Payload, id: Id): Promise<Doc | null> =>
   (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc | null;
@@ -274,6 +302,10 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     const t = await resolveTenant(payload, auth, v.tenant);
     if (!t.ok) return t.response;
     const tenant = t.tenant;
+
+    const ed = editorialStep(v, tenant, deps);
+    if (ed) return ed;
+    const editorialKeys = editorialKeysOf(v.present);
 
     const refsR = await resolveDraftRefs({ payload, tenant, input: v });
     if (!refsR.ok) return invalid(refsR.fields);
@@ -323,16 +355,18 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     if (v.sponsor != null) data.sponsor = v.sponsor;
     if (refs.heroImage != null) data.heroImage = refs.heroImage;
     if (v.leadImageCaption != null) data.leadImageCaption = v.leadImageCaption;
+    // hub-pin-exclusive-flags (D2): the editorial keys sent, as parsed (`pinnedUntil` normalised or null).
+    for (const k of editorialKeys) data[k] = v.editorial?.[k];
 
     // CMS-A (M5): the slug lock, the slug check again and the create run in ONE transaction.
-    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data }));
+    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data, editorialKeys }));
   } catch (err) {
     return logInternal(payload, engine.id, err);
   }
 
   /** In the lock: slug lock → `findSlugConflict` again (409 body unchanged) → `create` on `lk.req`. */
-  async function createInLock(lk: HubLockCtx, s: { v: HubDraftInput; tenant: TenantDoc; data: Doc }): Promise<HubLockResult> {
-    const { v, tenant, data } = s;
+  async function createInLock(lk: HubLockCtx, s: { v: HubDraftInput; tenant: TenantDoc; data: Doc; editorialKeys: string[] }): Promise<HubLockResult> {
+    const { v, tenant, data, editorialKeys } = s;
     if (v.slug) {
       await lk.lockSlug(v.slug);
       if (await findSlugConflict({ payload, tenantId: tenant.id, slug: v.slug })) {
@@ -350,7 +384,12 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
         data: data as never,
         depth: 0,
         overrideAccess: true,
-        context: { hubAuthor: { actor: v.actor, action: "create" }, engineId: engine.id, disableRevalidate: true },
+        // D11 (hub-pin-exclusive-flags): `fields` = the editorial keys sent, only when there are some.
+        context: {
+          hubAuthor: editorialKeys.length ? { actor: v.actor, action: "create", fields: editorialKeys } : { actor: v.actor, action: "create" },
+          engineId: engine.id,
+          disableRevalidate: true,
+        },
       })) as unknown as Doc;
     } catch (err) {
       return { ok: false, value: await writeFailed(payload, engine.id, tenant.id, v.slug, err) };
@@ -452,7 +491,7 @@ export async function loadHubEditableArticle(
 }
 
 /** The result of `buildDraftUpdateData`: the update `data` + the changed REQUEST keys, or the frozen error Response. */
-export type DraftUpdateBuild = { ok: true; data: Doc; changed: HubDraftFieldKey[] } | { ok: false; response: Response };
+export type DraftUpdateBuild = { ok: true; data: Doc; changed: HubWriteKey[] } | { ok: false; response: Response };
 
 /**
  * APCGHub P5.4 (D3): the PATCH pipeline after the `expectedVersion` check, moved here
@@ -496,8 +535,8 @@ export async function buildDraftUpdateData(
 
   // What changes, by REQUEST key name (E11 c), against the latest version.
   const data: Doc = {};
-  const changed: HubDraftFieldKey[] = [];
-  const mark = (k: HubDraftFieldKey) => {
+  const changed: HubWriteKey[] = [];
+  const mark = (k: HubWriteKey) => {
     if (!changed.includes(k)) changed.push(k);
   };
   for (const k of v.present) {
@@ -618,6 +657,26 @@ export async function buildDraftUpdateData(
           mark(k);
         }
         break;
+      // hub-pin-exclusive-flags (D2 / D5): the editorial ROOT keys — PATCH only. The live
+      // route never gets here with them: `parseLiveBody` answers 400 `fields.<key>` first.
+      case "exclusive":
+      case "pinnedToLatest": {
+        const next = v.editorial?.[k];
+        if (typeof next === "boolean" && next !== (latest[k] === true)) {
+          data[k] = next;
+          mark(k);
+        }
+        break;
+      }
+      case "pinnedUntil": {
+        // The pair travels together; `pinnedToLatest: false` always comes with `pinnedUntil: null`.
+        const next = v.editorial?.pinnedUntil ?? null;
+        if (pinInstant(next) !== pinInstant(latest.pinnedUntil)) {
+          data.pinnedUntil = next;
+          mark(k);
+        }
+        break;
+      }
     }
   }
   return { ok: true, data, changed };
@@ -645,6 +704,9 @@ export async function handleHubDraftUpdateWith(
     const t = await resolveTenant(payload, auth, v.tenant);
     if (!t.ok) return t.response;
     const tenant = t.tenant;
+
+    const ed = editorialStep(v, tenant, deps);
+    if (ed) return ed;
 
     const loaded = await loadHubEditableArticle(payload, tenant, id, findMain);
     if (!loaded.ok) return loaded.response;
@@ -687,7 +749,7 @@ export async function handleHubDraftUpdateWith(
    */
   async function updateInLock(
     lk: HubLockCtx,
-    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubDraftFieldKey[]; latest: Doc; currentVersion: number },
+    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubWriteKey[]; latest: Doc; currentVersion: number },
   ): Promise<HubLockResult> {
     const { v, tenant, articleId, data, changed, latest, currentVersion } = s;
     const relatest = (await payload.findByID({

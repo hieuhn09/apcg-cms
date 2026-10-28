@@ -102,6 +102,10 @@ const HUB_ARTICLE_SELECT = {
   // only; its own `tenant` stays an id at that depth) and reduced to
   // `{slug, title}` by the sanitizer below. `dek` is searched but NOT selected.
   pillar: true,
+  // hub-pin-exclusive-flags (Public Contracts CMS 4): the Thư viện chips "Ghim" / "Độc quyền".
+  exclusive: true,
+  pinnedToLatest: true,
+  pinnedUntil: true,
 } as const;
 
 /** One article as this route emits it. */
@@ -117,10 +121,22 @@ export interface HubArticle {
   /** Cumulative counter. `null` when the DB holds NULL — not coerced to 0. */
   views: number | null;
   pillar: { slug: string | null; title: string | null } | null;
+  /** hub-pin-exclusive-flags: stored flags (absent / non-boolean ⇒ false). */
+  exclusive: boolean;
+  pinnedToLatest: boolean;
+  /** UTC `YYYY-MM-DDTHH:mm:ss.fffZ` or null; an expired pin is NOT cleared here (the hub compares with now). */
+  pinnedUntil: string | null;
 }
 
 function str(v: unknown): string | null {
   return typeof v === "string" ? v : null;
+}
+
+/** A stored date (string / Date) → `YYYY-MM-DDTHH:mm:ss.fffZ`; null / absent / unparseable → null. */
+function isoOrNull(v: unknown): string | null {
+  if (v == null) return null;
+  const t = new Date(v as string).getTime();
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
 }
 
 /**
@@ -137,7 +153,7 @@ function str(v: unknown): string | null {
  * this function builds a fresh object and never spreads the source doc):
  *   id, title, slug, workflowStatus, publishedAt, contentType,
  *   tenant.slug, lastEditedBy.name, lastEditedBy.role, views,
- *   pillar.slug, pillar.title
+ *   pillar.slug, pillar.title, exclusive, pinnedToLatest, pinnedUntil
  *
  * SENSITIVE FIELDS CHECKED AGAINST THAT LIST, each absent by construction:
  *   Tenants.readTokens        — `tenant` is never populated; only a slug string
@@ -179,6 +195,9 @@ export function sanitizeHubArticle(doc: Record<string, unknown>, tenantSlug: str
     lastEditedBy,
     views: typeof doc.views === "number" ? doc.views : null,
     pillar,
+    exclusive: doc.exclusive === true,
+    pinnedToLatest: doc.pinnedToLatest === true,
+    pinnedUntil: isoOrNull(doc.pinnedUntil),
   };
 }
 

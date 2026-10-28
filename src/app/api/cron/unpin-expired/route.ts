@@ -3,6 +3,7 @@ import config from "@payload-config";
 import { logActivity } from "@/lib/activity";
 import { json } from "@/lib/http";
 import { toId } from "@/access/helpers";
+import { unpinIfStillExpired } from "@/lib/unpin-expired";
 
 /**
  * Pin-expiry cron — GET /api/cron/unpin-expired.
@@ -19,6 +20,9 @@ import { toId } from "@/access/helpers";
  *   - CRON_SECRET set (any environment) → `Authorization: Bearer <secret>` required, else 401.
  *   - CRON_SECRET unset + production   → 503, fail CLOSED.
  *   - CRON_SECRET unset + non-production → open, for local `curl`.
+ *
+ * Each write is conditional (src/lib/unpin-expired.ts): re-checked under the hub article
+ * lock + the row lock, so a pin re-set after the search is never cleared.
  *
  * The update runs with `context.systemWrite` so articleBookkeeping skips its
  * version bump / lastEditedBy stamp — this sweep is metadata-only, nobody
@@ -77,49 +81,40 @@ export async function GET(request: Request): Promise<Response> {
   });
 
   // 3. Unpin one at a time — one bad row must not take the whole batch down.
+  //    Each write is a compare-and-set (review L3, src/lib/unpin-expired.ts): under the hub
+  //    advisory lock + the row lock, the LATEST version is re-read and unpinned only if it is
+  //    STILL pinned with an expiry at or before now — a pin re-set since the search above is
+  //    skipped, never cleared. The write itself is the one this route always made:
+  //    `systemWrite` (bookkeeping: version / lastEditedBy unchanged), `skipTranslationEnqueue`
+  //    (an unpin changes no content) and `disableRevalidate` (this sweep is admin hygiene only:
+  //    `pinnedUntil` is enforced at READ time — src/app/api/public/articles/route.ts filters
+  //    expired pins out of `?flag=pinnedToLatest` — so readers never see the stale flag and have
+  //    nothing to be busted for; firing the webhook here dropped every reader's whole
+  //    `articles:all` cache once an hour for a change no reader can observe), with `draft` when
+  //    the latest version is a draft (a plain update base-merges from the LATEST version and
+  //    would publish a half-written draft as a side effect of clearing a pin flag).
+  //
+  //    SCOPE (plan E7): the suppression is verified safe for brief-asia-web, wad-web, wtb-web
+  //    and dtw-web only. brief-asia/wad/dtw request pins with `flag=pinnedToLatest`, so
+  //    Central's query-time expiry governs. wtb-web instead pulls a raw list and picks the pin in
+  //    memory; it is safe only because it re-checks `pinnedUntil` at render time AND every
+  //    Central fetch is `cache: "no-store"`. That margin is one line wide — if wtb-web ever adds
+  //    `export const revalidate` to its home page, an expired pin would freeze for the whole
+  //    window with nothing left to bust it. Re-check this before assuming it still holds.
+  //    GCV is NOT audited (not available to the auditing session) — do not generalize this
+  //    suppression to it without running the same check.
   const unpinned: { id: number | string; slug?: string }[] = [];
+  const skipped: { id: number | string; reason: string }[] = [];
   const failed: { id: number | string; error: string }[] = [];
+  const nowMs = Date.parse(now);
 
   for (const raw of expired.docs as unknown as ExpiredPin[]) {
     try {
-      await payload.update({
-        collection: "articles",
-        id: raw.id,
-        overrideAccess: true,
-        // systemWrite: bookkeeping (version/lastEditedBy) không đổi;
-        // skipTranslationEnqueue: unpin không đổi nội dung nên không việc gì
-        // phải chạy vòng enqueue dịch (dù nó idempotent).
-        //
-        // disableRevalidate: this sweep is admin hygiene only. `pinnedUntil` is
-        // enforced at READ time — src/app/api/public/articles/route.ts filters
-        // expired pins out of `?flag=pinnedToLatest` — so readers never see the
-        // stale flag and have nothing to be busted for. Firing the webhook here
-        // dropped every reader's whole `articles:all` cache once an hour for a
-        // change no reader can observe.
-        //
-        // SCOPE (plan E7): verified safe for brief-asia-web, wad-web, wtb-web
-        // and dtw-web only. brief-asia/wad/dtw request pins with
-        // `flag=pinnedToLatest`, so Central's query-time expiry governs.
-        // wtb-web instead pulls a raw list and picks the pin in memory; it is
-        // safe only because it re-checks `pinnedUntil` at render time AND every
-        // Central fetch is `cache: "no-store"`. That margin is one line wide —
-        // if wtb-web ever adds `export const revalidate` to its home page, an
-        // expired pin would freeze for the whole window with nothing left to
-        // bust it. Re-check this before assuming it still holds.
-        // GCV is NOT audited (not available to the auditing session) — do not
-        // generalize this suppression to it without running the same check.
-        context: { systemWrite: true, skipTranslationEnqueue: true, disableRevalidate: true },
-        data: { pinnedToLatest: false, pinnedUntil: null },
-        // Draft-safe sweep: `payload.update` base-merges from the LATEST
-        // version. When the article has a pending draft on top of its live
-        // row (raw came from a draft:true find, so raw._status tells us), a
-        // plain update would publish that half-written draft as a side effect
-        // of clearing a pin flag. Sweep the draft surface instead — readers
-        // are already covered by the read-time expiry filter in the public
-        // articles route, so the live row's stale flag is harmless until the
-        // editor's next publish.
-        draft: raw._status === "draft",
-      });
+      const outcome = await unpinIfStillExpired(payload, raw, nowMs);
+      if (outcome.kind === "skipped") {
+        skipped.push({ id: raw.id, reason: outcome.reason });
+        continue;
+      }
       unpinned.push({ id: raw.id, slug: raw.slug });
       await logActivity({
         payload,
@@ -128,7 +123,7 @@ export async function GET(request: Request): Promise<Response> {
         actorType: "system",
         targetCollection: "articles",
         targetId: raw.id,
-        detail: { via: "cron/unpin-expired", pinnedUntil: raw.pinnedUntil },
+        detail: { via: "cron/unpin-expired", pinnedUntil: outcome.pinnedUntil ?? raw.pinnedUntil },
       });
     } catch (err) {
       const message = (err as Error).message;
@@ -146,5 +141,5 @@ export async function GET(request: Request): Promise<Response> {
     }
   }
 
-  return json({ ok: true, count: unpinned.length, unpinned, failed }, 200);
+  return json({ ok: true, count: unpinned.length, unpinned, skipped, failed }, 200);
 }
