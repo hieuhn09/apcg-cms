@@ -726,17 +726,22 @@ CMS admin) through one new narrow route. No migration (the three columns exist).
   columns in the article's source language, context `{hubFlags, engineId, skipTranslationEnqueue,
   disableRevalidate}` (bookkeeping skips: no `version` bump; `articleActivity` writes nothing) →
   post-write check on every column / locale (another column moved or the latest version diverged, e.g.
-  a human Save Draft mid-flight ⇒ rollback + 409 `draft_diverged`; our value missing ⇒ rollback + 500)
-  → COMMIT → then, outside the transaction, ONE `human_edit` ActivityLog row `{via:"hub", actor,
+  a human Save Draft mid-flight ⇒ rollback + 409 `draft_diverged`; our value missing ⇒ rollback + 500;
+  both write ONE `integration_error` row AFTER the rollback, `post_write_divergence` with the leg and
+  column names only, or `post_write_check`) → COMMIT → then, outside the transaction, ONE structured
+  info log line `hub_flags_changed` (article id, tenant, actor email / id / role, fields, from, to: the
+  audit fallback if the row insert fails), ONE `human_edit` ActivityLog row `{via:"hub", actor,
   action:"flags", fields, from, to}` and ONE revalidate webhook (`revalidateTenantDoc`,
-  `src/hooks/revalidate.ts`, tags `articles:all` + slug). Write errors: `ValidationError` (single-home
+  `src/hooks/revalidate.ts`, tags `articles:all` + slug). A failing log row or webhook is logged and
+  never changes the committed 200. Write errors: `ValidationError` (single-home
   V6: a Pressroom article cannot be `exclusive`) ⇒ 422 `fields.exclusive: invalid`; 55P03/40P01/40001 ⇒
   503 busy; else 500 (name + code logged only). The CMS records `actor` but never authorizes by it (the
   hub's `hubMayFlag` is the authority; `actor.role` must be admin | editor | marketer).
 - **Cron `unpin-expired` (changed):** each write is a compare-and-set (`src/lib/unpin-expired.ts`):
   under the hub article lock + the row lock the latest version is re-read and unpinned only if still
   pinned with `pinnedUntil <= now`; a pin re-set after the search is `skipped` (the response gains
-  `skipped: [{id, reason}]`). Residual: a CMS admin DRAFT save in the same milliseconds is not blocked.
+  `skipped: [{id, reason}]`); a row whose hub lock is held (a flags / live write in flight) is skipped
+  `busy`, logged by id, and retried on the next run; `maxDuration = 60`. Residual: a CMS admin DRAFT save in the same milliseconds is not blocked.
 - **Versions:** every flags write (and every unpin sweep) adds an `_articles_v` row; Articles keeps
   `maxPerDoc` 100 (Payload default), so frequent toggles can prune old versions of an article (see the
   plan's risks).

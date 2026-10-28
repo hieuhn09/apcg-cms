@@ -21,8 +21,7 @@
 import type { Payload, PayloadRequest } from "payload";
 import { toId } from "@/access/helpers";
 import { json } from "@/lib/http";
-import { withHubArticleLock } from "@/lib/hub-article-lock";
-import { defaultLockRow } from "@/lib/hub-author-live-core";
+import { defaultLockRow, withHubArticleLock } from "@/lib/hub-article-lock";
 
 type Doc = Record<string, unknown>;
 type Id = number | string;

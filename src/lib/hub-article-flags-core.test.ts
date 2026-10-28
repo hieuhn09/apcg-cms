@@ -67,9 +67,16 @@ function world(o: WorldOpts = {}) {
     exclusive: false, pinnedToLatest: false, pinnedUntil: null, views: 7, lastEditedBy: null,
   };
   const st = { main: { ...base, ...o.main } as Doc, latest: { ...base, ...o.main, ...o.latest } as Doc };
-  const log = { reads: [] as Doc[], updates: [] as Doc[], creates: [] as Doc[], events: [] as string[], revalidates: [] as unknown[][] };
+  const log = { reads: [] as Doc[], updates: [] as Doc[], creates: [] as Doc[], events: [] as string[], revalidates: [] as unknown[][], infos: [] as unknown[][] };
   const payload = {
-    logger: { info: () => {}, warn: (m: string) => log.events.push(`warn:${m}`), error: (m: string) => log.events.push(`error:${m}`) },
+    logger: {
+      info: (...a: unknown[]) => {
+        log.infos.push(a);
+        log.events.push("info");
+      },
+      warn: (m: string) => log.events.push(`warn:${m}`),
+      error: (m: string) => log.events.push(`error:${m}`),
+    },
     db: { sessions: {} },
     async findByID(a: Doc) {
       log.reads.push(a);
@@ -267,13 +274,42 @@ describe("POST …/flags — the write (D6 / D7 / D8)", () => {
     // Order: unlocked ownership read → lock → row lock → gate reads → pre → write → post + latest → COMMIT
     // → (after the commit only) the ONE audit row → the ONE webhook.
     assert.deepEqual(w.log.events.filter((e) => !e.startsWith("warn")), [
-      "read:main", "lock", "rowlock", "read:latest:tx", "read:main:tx", "read:main:tx:all", "update", "read:main:tx:all", "read:latest:tx", "commit", "create:activityLog:human_edit", "revalidate",
+      "read:main", "lock", "rowlock", "read:latest:tx", "read:main:tx", "read:main:tx:all", "update", "read:main:tx:all", "read:latest:tx", "commit", "info", "create:activityLog:human_edit", "revalidate",
+    ]);
+    // F1: ONE structured audit-fallback line right before the insert (no content, no token).
+    assert.equal(w.log.infos.length, 1);
+    assert.deepEqual(w.log.infos[0], [
+      { scope: "hub/articles/flags", event: "hub_flags_changed", articleId: 5, tenant: "gcv", actor: { email: ACTOR.email, id: null, role: ACTOR.role }, fields: hf.fields, from: hf.from, to: hf.to },
+      "[hub/articles/flags] flags changed (audit fallback)",
     ]);
     const he = humanEdits(w);
     assert.equal(he.length, 1);
     const d = he[0]!.data as Doc;
     assert.deepEqual([d.actorType, d.actorEngine, d.targetCollection, d.targetId, d.tenant, d.fromStatus, d.toStatus, d.detail], ["engine", 60, "articles", "5", 1, "published", "published", { via: "hub", ...hf, action: "flags" }]);
     assert.deepEqual(w.log.revalidates, [[1, ["articles:all"], "s-5"]]);
+  });
+
+  it("F3d: a throwing webhook, a throwing audit insert or a throwing logger never change the committed 200", async () => {
+    const until = iso(NOW + 3_600_000);
+    const OK = { ok: true, id: 5, tenant: "gcv", exclusive: true, pinnedToLatest: true, pinnedUntil: until, changed: ["exclusive", "pinnedToLatest", "pinnedUntil"] };
+    const set = { exclusive: true, pinnedToLatest: true, pinnedUntil: until };
+    const w1 = world();
+    const r1 = await callFlags(w1, flagsBody(set), { revalidate: async () => { throw new Error("webhook down"); } });
+    assert.deepEqual([r1.status, r1.body, humanEdits(w1).length], [200, OK, 1]);
+    const w2 = world();
+    const create = w2.payload.create.bind(w2.payload);
+    (w2.payload as unknown as { create: (a: Doc) => Promise<unknown> }).create = async (a: Doc) => {
+      if (a.collection === "activityLog") throw new Error("insert failed");
+      return create(a as never);
+    };
+    const r2 = await callFlags(w2, flagsBody(set));
+    assert.deepEqual([r2.status, r2.body, w2.log.revalidates.length], [200, OK, 1], "the webhook still goes out");
+    assert.equal(w2.log.events.some((e) => e.startsWith("error:[activity] failed to log human_edit")), true);
+    const w3 = world();
+    (w3.payload as unknown as { logger: { info: () => void } }).logger.info = () => { throw new Error("logger down"); };
+    const r3 = await callFlags(w3, flagsBody(set));
+    assert.deepEqual([r3.status, r3.body], [200, OK]);
+    assert.equal(w3.log.events.some((e) => e.startsWith("warn:[hub/articles/flags] after-commit step failed")), true);
   });
 
   it("M1 / L2: no audit row and no webhook when the COMMIT does not happen (lock helper answers 503 after the block)", async () => {
@@ -342,6 +378,11 @@ describe("POST …/flags — the write (D6 / D7 / D8)", () => {
     const w3 = world({ latestSlip: { _status: "draft", version: 5 } });
     assert.deepEqual((await callFlags(w3, flagsBody({ exclusive: true }))).body, DIVERGED);
     assert.deepEqual([...noSideEffects(w), ...noSideEffects(w2), ...noSideEffects(w3)], [0, 0, 0, 0, 0, 0]);
+    // F2: each divergence leaves ONE integration_error `post_write_divergence` (leg + column names only).
+    const div = (x: World) => x.log.creates.filter((c) => c.collection === "activityLog" && (c.data as Doc).eventType === "integration_error").map((c) => (c.data as Doc).detail);
+    assert.deepEqual(div(w), [{ scope: "hub/articles/flags", name: "post_write_divergence", leg: "fields", keys: ["title"] }]);
+    assert.deepEqual(div(w3), [{ scope: "hub/articles/flags", name: "post_write_divergence", leg: "latest", keys: ["latest._status", "latest.version"] }]);
+    assert.equal(JSON.stringify(div(w)).includes("SLIPPED"), false);
   });
 
   it("D8: our own value did not land ⇒ rollback + 500 + error log + integration_error (no audit row, no webhook)", async () => {

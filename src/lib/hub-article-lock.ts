@@ -208,6 +208,22 @@ async function killQuietly(ops: HubLockOps, tx: HubLockTx): Promise<void> {
   }
 }
 
+/**
+ * D16 (APCGHub P5.4; moved here from hub-author-live-core.ts so light callers — the unpin cron,
+ * the flags route — need not import the live-edit graph): `SELECT 1 FROM articles WHERE id = $1
+ * FOR NO KEY UPDATE` on the transaction's own session (`req.transactionID`, the way this file runs
+ * raw SQL). No session ⇒ throw (⇒ 500, no write). NO KEY: blocks every `UPDATE articles` of this
+ * row (Hide / Republish / Publish / intake / crons) but not an INSERT with a foreign key to it
+ * (`_articles_v`, `translation_jobs`). Callers must check the article's tenant BEFORE taking it.
+ */
+export async function defaultLockRow(payload: Payload, id: number | string, req: PayloadRequest | undefined): Promise<void> {
+  const adapter = payload.db as unknown as { sessions?: Record<string, { db?: Executor } | undefined> };
+  const txId = req?.transactionID;
+  const exec = txId != null ? adapter.sessions?.[String(txId)]?.db : undefined;
+  if (!exec) throw new Error("hub live: no transaction session for the row lock");
+  await exec.execute(sql`SELECT 1 FROM articles WHERE id = ${Number(id)} FOR NO KEY UPDATE`);
+}
+
 export async function withHubArticleLock(
   args: { tenantId: TenantId; articleId?: number },
   fn: (ctx: HubLockCtx) => Promise<HubLockResult>,

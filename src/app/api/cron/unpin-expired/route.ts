@@ -34,6 +34,9 @@ import { unpinIfStillExpired } from "@/lib/unpin-expired";
  * this was verified against.
  */
 
+/** One sweep can wait up to 3 s per busy article (the hub lock's lock_timeout); same budget as the other long cron. */
+export const maxDuration = 60;
+
 interface ExpiredPin {
   id: number | string;
   tenant?: unknown;
@@ -140,6 +143,10 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
   }
+
+  // Review F4: a busy article (a hub write held its lock past lock_timeout) is retried next hour — say so.
+  const busy = skipped.filter((x) => x.reason === "busy").map((x) => String(x.id));
+  if (busy.length) payload.logger.warn(`[cron/unpin-expired] skipped busy (retried next run): ${busy.join(",")}`);
 
   return json({ ok: true, count: unpinned.length, unpinned, skipped, failed }, 200);
 }

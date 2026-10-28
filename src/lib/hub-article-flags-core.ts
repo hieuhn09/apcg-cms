@@ -23,10 +23,12 @@
  *     the main row's values ⇒ 409 flags_conflict + `current` → nothing to change ⇒ 200
  *     `changed: []`, NO write → `pre` (main, every locale) → the write → `post` + latest →
  *     D8 (another column moved or the latest version diverged — e.g. a human Save Draft landed
- *     mid-flight — ⇒ rollback + 409 draft_diverged; our own value missing / not as asked ⇒
- *     rollback + 500; logged by leg + column NAMES) → COMMIT → 200 `{ok, id, tenant, exclusive,
+ *     mid-flight — ⇒ rollback + 409 draft_diverged + one `integration_error`
+ *     `post_write_divergence`; our own value missing / not as asked ⇒ rollback + 500 +
+ *     `integration_error` `post_write_check`; logged by leg + column NAMES) → COMMIT → 200 `{ok, id, tenant, exclusive,
  *     pinnedToLatest, pinnedUntil, changed}` with the values re-read in the transaction
- *   → AFTER the commit only: the one `human_edit` ActivityLog row and the revalidate webhook.
+ *   → AFTER the commit only: one structured `logger.info` audit line, the one `human_edit`
+ *     ActivityLog row and the revalidate webhook (none of them can change the 200).
  *
  * D7 — the write: ONE non-draft `payload.update` on the transaction's `req`, in the article's
  * source language (`writeLocaleOf`; the three columns are not localized, but Payload validates
@@ -54,11 +56,11 @@ import { json } from "@/lib/http";
 import { toId } from "@/access/helpers";
 import { logActivity } from "@/lib/activity";
 import { authenticateHubWriteEngine } from "@/lib/hub-write-auth";
-import { busyResponse, withHubArticleLock, type HubLockCtx, type HubLockResult } from "@/lib/hub-article-lock";
+import { busyResponse, defaultLockRow, withHubArticleLock, type HubLockCtx, type HubLockResult } from "@/lib/hub-article-lock";
 import { internalError, invalid, logInternal, mapWriteError, notFound, resolveTenant } from "@/lib/hub-author-handlers";
 import { readSmallBody } from "@/lib/hub-author-preview-pure";
 import { revalidateTenantDoc } from "@/hooks/revalidate";
-import { defaultFindMainTx, defaultLockRow, readMainAll, type FindMainTx } from "@/lib/hub-author-live-core";
+import { defaultFindMainTx, readMainAll, type FindMainTx } from "@/lib/hub-author-live-core";
 import {
   editorialFlagsTenants,
   flagsChange,
@@ -137,6 +139,7 @@ async function flagsWriteFailed(payload: Payload, engineId: Id, err: unknown): P
 interface CommittedFlagsWrite {
   articleId: number;
   tenantId: Id;
+  tenantSlug: string;
   slug: string | undefined;
   actor: HubFlagsInput["actor"];
   fields: string[];
@@ -203,8 +206,15 @@ export async function handleHubFlagsWith(
   }
 
   // After the COMMIT only (the lock helper returned the success Response): the ActivityLog row
-  // and the revalidate webhook. A rolled-back or failed write reaches neither.
-  if (committed && res.status === 200) await afterCommit(committed);
+  // and the revalidate webhook. A rolled-back or failed write reaches neither. Nothing in here
+  // can change the committed 200 (review F3d).
+  if (committed && res.status === 200) {
+    try {
+      await afterCommit(committed);
+    } catch (err) {
+      payload.logger.warn(`[${SCOPE}] after-commit step failed: name=${(err as { name?: unknown } | null)?.name ?? typeof err}`);
+    }
+  }
   return res;
 
   /**
@@ -217,6 +227,13 @@ export async function handleHubFlagsWith(
    * commit, so the frontend can only re-cache the NEW state, and no lock is held while it waits.
    */
   async function afterCommit(c: CommittedFlagsWrite): Promise<void> {
+    // Review F1: `logActivity` swallows an insert failure (it only logs its message), so the audit
+    // fact would vanish silently — ONE structured line first, so the platform logs hold it. It
+    // carries the actor e-mail on purpose (the same fact the ActivityLog row stores), never content.
+    payload.logger.info(
+      { scope: SCOPE, event: "hub_flags_changed", articleId: c.articleId, tenant: c.tenantSlug, actor: { email: c.actor.email, id: c.actor.id ?? null, role: c.actor.role }, fields: c.fields, from: c.from, to: c.to },
+      `[${SCOPE}] flags changed (audit fallback)`,
+    );
     await logActivity({
       payload,
       eventType: "human_edit",
@@ -308,6 +325,18 @@ export async function handleHubFlagsWith(
       // route. `missing` / `values` = our own write did not land as asked: rollback + 500.
       if (check.leg === "fields" || check.leg === "latest") {
         payload.logger.warn(`[${SCOPE}] post-write check failed: article=${articleId} tenant=${tenant.slug} leg=${check.leg} keys=${check.detail.join(",")}`);
+        // Review F2: a deterministic divergence on one article must stay visible — one row,
+        // written OUTSIDE the transaction (it survives the rollback), column NAMES only.
+        await logActivity({
+          payload,
+          eventType: "integration_error",
+          tenantId: tenant.id,
+          actorType: "engine",
+          actorEngineId: engine.id,
+          targetCollection: "articles",
+          targetId: articleId,
+          detail: { scope: SCOPE, name: "post_write_divergence", leg: check.leg, keys: check.detail },
+        });
         return fail(draftDiverged());
       }
       payload.logger.error(`[${SCOPE}] post-write check failed: article=${articleId} tenant=${tenant.slug} leg=${check.leg} keys=${check.detail.join(",")}`);
@@ -327,6 +356,7 @@ export async function handleHubFlagsWith(
     committed = {
       articleId,
       tenantId: tenant.id,
+      tenantSlug: tenant.slug,
       slug: typeof main.slug === "string" ? main.slug : undefined,
       actor: v.actor,
       fields: change.changed,

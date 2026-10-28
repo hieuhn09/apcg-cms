@@ -12384,9 +12384,11 @@ async function check11() {
 //       C (the flags route: engine / translation tenant / hub article, the webhook AFTER the
 //       commit (review M1: the webhook handler reads the row from another connection and must
 //       already see the new values), ONE ActivityLog row, only the three columns + updatedAt
-//       move, public feeds), R (review M2, in-process `handleHubFlagsWith` with the REAL lock +
-//       row lock: a draft saved mid-flight ⇒ 409 + rollback + no phantom audit row; a concurrent
-//       UPDATE ⇒ 55P03; another tenant's id ⇒ 404 with no lock taken), D (errors), E (reads).
+//       move, public feeds), R (review M2 / F3, in-process `handleHubFlagsWith` with the REAL lock +
+//       row lock: a localized and a non-localized draft saved mid-flight ⇒ 409 + rollback + no
+//       phantom audit row + `_articles_v` delta 0; a concurrent UPDATE ⇒ 55P03; another tenant's id
+//       ⇒ 404 with no lock taken; the REAL cron during a flags write ⇒ `skipped` busy; a throwing
+//       webhook / audit insert ⇒ the 200 stands), D (errors), E (reads).
 //       Fresh drafts each run; prints `groups executed N/7` and exits ≠ 0 unless all seven ran
 //       and passed.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -12838,19 +12840,39 @@ async function check12() {
       }
     };
 
+    const divergence = async (id: number) =>
+      (await acts(id)).filter((x) => x.eventType === "integration_error" && (x.detail as Doc | undefined)?.name === "post_write_divergence").map((x) => sortKeys6(x.detail));
+    /** Run a mid-flight Save Draft through the seam; record the version-row count right after it. */
+    const slipDraft = async (id: number, data: Doc, out: { v: number }) => {
+      await payload.update({ collection: "articles", id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: data as never });
+      out.v = await vCount(id);
+    };
+
     // (a) a human Save Draft lands between the gate and the write (2nd connection; a draft save
-    // inserts a version row, which the row lock does not block).
+    // inserts a version row, which the row lock does not block). Which D8 leg catches it is read
+    // back from the F2 `post_write_divergence` row.
     const a = await mkPub();
     const s0 = await snap(a);
     const h0 = await humanEdits(a);
-    const ra = await inproc(a, P12_HOOK_TENANT, { exclusive: true }, {
-      beforeWrite: async () => {
-        await payload.update({ collection: "articles", id: a, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P12 R-a SLIPPED DRAFT ${run}` } as never });
-      },
-    });
-    expect("R1 (M2a) a draft saved mid-flight (2nd connection, REAL lock + row lock) ⇒ 409 draft_diverged + rollback: main row unchanged on every locale, the draft kept, NO phantom human_edit row (L2)", [
-      ra.status, ra.body.status, (await snap(a)) === s0, (await latest(a))?._status, (await humanEdits(a)) - h0, flagsOf(await raw(a))?.exclusive,
-    ], [409, "draft_diverged", true, "draft", 0, false]);
+    const va = { v: -1 };
+    const ra = await inproc(a, P12_HOOK_TENANT, { exclusive: true }, { beforeWrite: () => slipDraft(a, { title: `P12 R-a SLIPPED DRAFT ${run}` }, va) });
+    const la = await latest(a);
+    expect("R1 (M2a) a LOCALIZED-field draft (title) saved mid-flight (2nd connection, REAL lock + row lock) ⇒ 409 draft_diverged + rollback: main row unchanged on every locale, the draft kept as the latest version, NO phantom human_edit row (L2), _articles_v delta 0 counted from after the seam's draft (F3b)", [
+      ra.status, ra.body.status, (await snap(a)) === s0, la?._status, String(la?.title).startsWith("P12 R-a SLIPPED"), (await humanEdits(a)) - h0, flagsOf(await raw(a))?.exclusive, (await vCount(a)) - va.v,
+    ], [409, "draft_diverged", true, "draft", true, 0, false, 0]);
+    obs("R1-leg (F3) the D8 leg + columns that caught the localized-title draft (from the F2 integration_error row)", await divergence(a));
+
+    // (a') the same with a NON-localized field only (readMin) — what actually happens (F3a).
+    const a2 = await mkPub();
+    const s2 = await snap(a2);
+    const before2 = Number((await raw(a2))?.readMin ?? 2);
+    const va2 = { v: -1 };
+    const ra2 = await inproc(a2, P12_HOOK_TENANT, { exclusive: true }, { beforeWrite: () => slipDraft(a2, { readMin: before2 + 15 }, va2) });
+    const la2 = await latest(a2);
+    expect("R1b (F3a) a NON-localized-field draft (readMin) saved mid-flight ⇒ 409 draft_diverged + rollback: main row unchanged, the human draft STILL the latest version (with its readMin), no phantom row, _articles_v delta 0", [
+      ra2.status, ra2.body.status, (await snap(a2)) === s2, la2?._status, la2?.readMin, await humanEdits(a2), flagsOf(await raw(a2))?.exclusive, (await vCount(a2)) - va2.v,
+    ], [409, "draft_diverged", true, "draft", before2 + 15, 0, false, 0]);
+    obs("R1b-leg (F3a) the D8 leg + columns that caught the non-localized draft", await divergence(a2));
 
     // (b) a concurrent UPDATE of the row from a 2nd connection waits on the row lock.
     const b = await mkPub();
@@ -12897,6 +12919,73 @@ async function check12() {
     const own = await mkPub();
     const rown = await inproc(own, P12_HOOK_TENANT, { exclusive: true }, spies);
     expect("R4 positive control of the spies: an id of THIS tenant ⇒ 200, one advisory lock, one row lock on that id", [rown.status, lockCalls, lockRowIds], [200, 1, [own]]);
+
+    // (c) F3c — the REAL unpin cron runs while the flags write holds the article lock: the cron's
+    // compare-and-set cannot take the hub lock (lock_timeout 3 s) ⇒ `skipped` busy, nothing cleared;
+    // the next run (lock free) unpins it.
+    const cronMod = await import("../src/app/api/cron/unpin-expired/route");
+    const runCron = async () => {
+      const res = await cronMod.GET(new Request(`${BASE}/api/cron/unpin-expired`, { headers: cronHeaders ? { authorization: `Bearer ${cronHeaders}` } : {} }));
+      return { status: res.status, body: (await res.json()) as Doc };
+    };
+    const cId = await mkPub();
+    const past = new Date(Math.floor((Date.now() - 120_000) / 1000) * 1000).toISOString();
+    await payload.update({ collection: "articles", id: cId, overrideAccess: true, context: { systemWrite: true, disableRevalidate: true, skipTranslationEnqueue: true }, data: { pinnedToLatest: true, pinnedUntil: past } as never });
+    let during: { status: number; body: Doc } | null = null;
+    const reqC = new Request(`${BASE}/api/hub/articles/${cId}/flags`, { method: "POST", headers: { authorization: `Bearer ${T.write}`, "content-type": "application/json" }, body: JSON.stringify(fb(P12_HOOK_TENANT, { exclusive: false, pinnedToLatest: true, pinnedUntil: past }, { exclusive: true })) });
+    const resC = await core.handleHubFlagsWith(reqC, { params: Promise.resolve({ id: String(cId) }) }, {
+      getPayload: async () => payload, flagsTenants: [...P12_ON], revalidate: async () => {},
+      beforeWrite: async () => {
+        during = await runCron();
+      },
+    } as never);
+    const d = during as { status: number; body: Doc } | null;
+    const inList = (b: Doc | undefined, k: string) => ((b?.[k] as Doc[] | undefined) ?? []).filter((x) => Number(x.id) === cId).map((x) => x.reason ?? "listed");
+    const afterC = flagsOf(await raw(cId));
+    const next = await runCron();
+    expect("R5 (F3c) the REAL cron during a flags write on an expired pin ⇒ cron 200 with this article `skipped` busy (not unpinned); the flags write 200; the pin still set; the next cron run (lock free) unpins it", [
+      d?.status, inList(d?.body, "skipped"), inList(d?.body, "unpinned"), resC.status, afterC, inList(next.body, "unpinned"), flagsOf(await raw(cId))?.pinnedToLatest,
+    ], [200, ["busy"], [], 200, { exclusive: true, pinnedToLatest: true, pinnedUntil: past }, ["listed"], false]);
+
+    // (d) F3d — after the COMMIT a throwing webhook and a throwing audit insert leave the 200 intact;
+    // the audit-fallback log line (F1) is still emitted.
+    const dId = await mkPub();
+    const rw = await inproc(dId, P12_HOOK_TENANT, { exclusive: true }, {
+      revalidate: async () => {
+        throw new Error("probe: webhook down");
+      },
+    });
+    const eId = await mkPub();
+    const infos: unknown[][] = [];
+    const proxied = new Proxy(payload as unknown as Record<string | symbol, unknown>, {
+      get(t, k) {
+        if (k === "create") {
+          return async (x: Doc) => {
+            if (x.collection === "activityLog" && (x.data as Doc | undefined)?.eventType === "human_edit") throw new Error("probe: audit insert failed");
+            return (t.create as (y: Doc) => Promise<unknown>).call(t, x);
+          };
+        }
+        if (k === "logger") {
+          const lg = t.logger as Record<string, (...y: unknown[]) => unknown>;
+          return {
+            info: (...y: unknown[]) => {
+              infos.push(y);
+              return lg.info!.apply(lg, y);
+            },
+            warn: (...y: unknown[]) => lg.warn!.apply(lg, y),
+            error: (...y: unknown[]) => lg.error!.apply(lg, y),
+          };
+        }
+        const v = t[k];
+        return typeof v === "function" ? (v as (...y: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const reqE = new Request(`${BASE}/api/hub/articles/${eId}/flags`, { method: "POST", headers: { authorization: `Bearer ${T.write}`, "content-type": "application/json" }, body: JSON.stringify(fb(P12_HOOK_TENANT, E0, { exclusive: true })) });
+    const resE = await core.handleHubFlagsWith(reqE, { params: Promise.resolve({ id: String(eId) }) }, { getPayload: async () => proxied, flagsTenants: [...P12_ON], revalidate: async () => {} } as never);
+    const fallback = infos.filter((x) => (x[0] as Doc | undefined)?.event === "hub_flags_changed").map((x) => [(x[0] as Doc).articleId, (x[0] as Doc).tenant, ((x[0] as Doc).actor as Doc).email, (x[0] as Doc).fields]);
+    expect("R6 (F3d) throwing webhook ⇒ 200, flag committed, audit row written; throwing audit insert ⇒ 200, flag committed, no audit row BUT the structured audit-fallback line (F1) was emitted", [
+      rw.status, flagsOf(await raw(dId))?.exclusive, await humanEdits(dId), resE.status, flagsOf(await raw(eId))?.exclusive, await humanEdits(eId), fallback,
+    ], [200, true, 1, 200, true, 0, [[eId, P12_HOOK_TENANT, P12_ACTOR.email, ["exclusive"]]]]);
   });
 
   // ══ D — errors (probe d) ═════════════════════════════════════════════════

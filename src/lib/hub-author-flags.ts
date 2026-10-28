@@ -354,7 +354,9 @@ export type FlagsPostWriteResult = { ok: true } | { ok: false; leg: "missing" | 
  * `flagsPostWriteDiff(pre, post)` empty; (values) the three stored values of `post` equal
  * `want` (= current ⊕ set); (latest) the latest version is still `_status: published` with
  * the SAME `version` as `post` (no pending draft created, no bump). Any leg failing ⇒ the
- * caller rolls back and answers 500.
+ * caller rolls back: `fields` / `latest` (something landed on the article mid-flight, e.g. a human
+ * Save Draft that the non-draft write merged) ⇒ 409 `draft_diverged`; `missing` / `values` (our
+ * own write did not land as asked) ⇒ 500. Both also write one `integration_error` row.
  */
 export function flagsPostWriteCheck(a: { pre: Doc; post: Doc | null | undefined; latest: Doc | null | undefined; want: HubEditorialValues }): FlagsPostWriteResult {
   const { pre, post, latest } = a;

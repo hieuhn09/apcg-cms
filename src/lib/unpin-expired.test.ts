@@ -108,5 +108,11 @@ describe("unpinIfStillExpired (compare-and-set under the hub article lock + row 
     const src = readFileSync(path.resolve(process.cwd(), "src/app/api/cron/unpin-expired/route.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
     assert.equal(/payload\.update\(/.test(src), false);
     assert.match(src, /await unpinIfStillExpired\(payload, raw, nowMs\)/);
+    // F4: a budget for a sweep that can wait up to 3 s per busy article, and the busy ids are logged.
+    assert.match(src, /export const maxDuration = 60;/);
+    assert.match(src, /skipped busy \(retried next run\): \$\{busy\.join\(","\)\}/);
+    // N-c: the cron's graph never imports the live-edit core.
+    const lib = readFileSync(path.resolve(process.cwd(), "src/lib/unpin-expired.ts"), "utf8");
+    assert.equal(/hub-author-live-core/.test(lib.replace(/\/\*[\s\S]*?\*\//g, "")), false);
   });
 });
