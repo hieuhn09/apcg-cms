@@ -1,0 +1,28 @@
+{
+  "id": "amb",
+  "tenant": "amb",
+  "legacySiteSlugs": [],
+  "markerSourceName": "legacy:asiamaterialsbrief",
+  "legacyDbEnv": "LEGACY_DB_URL",
+  "readTokenEnv": "CENTRAL_READ_TOKEN",
+  "mappingPath": "scripts/migrate/network/mappings/amb.mapping.json",
+  "fixtureSiteId": "00000000-0000-0000-0000-00000000ab01",
+  "pillarSlugs": ["briefing", "materials", "interiors-ffe", "lighting-tech", "projects", "press-room"],
+  "singleHomePillars": ["press-room"],
+  "extraOwnerDecisionKeys": {
+    "status.map": "AMB-status",
+    "categories.map": "AMB-section-map",
+    "authors.distribute": "AMB-bylines",
+    "tags.keepOnly": "AMB-tags",
+    "media.bodyImages": "AMB-body-images",
+    "body.reflowMaxChars": "AMB-body-reflow"
+  },
+  "reservedSlugs": [
+    "briefing", "materials", "interiors-ffe", "lighting-tech", "projects", "press-room", "intelligence", "pro", "exhibition",
+    "press-room-submit", "events-awards", "studio", "about", "editorial-standards", "team", "contact", "corrections", "privacy",
+    "terms", "licensing", "newsletters", "search", "sitemap", "robots", "preview", "api", "article", "advertise"
+  ],
+  "mediaPrefix": "amb",
+  "redirectNonPillarSectionsToMappedPillar": true,
+  "requiredImageHosts": ["mbolvnwkmkeroqmvbvmt.supabase.co"]
+}

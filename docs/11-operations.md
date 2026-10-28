@@ -246,6 +246,35 @@ and status.
   to `PUBLIC_API_ALLOWED_ORIGINS`. Same guards, never-overwrite and refuse behaviour as
   the vowasia script. Rollback of the schema: revert the PR AND run the migration `down`
   (drops the three booths tables, enums and the two columns) only after the owner agrees.
+  Since 27-10-26 the collection also serves amb (see "AsiaMaterialsBrief rollout"):
+  running the 20261022 `down` would drop amb booths too.
+
+- **AsiaMaterialsBrief rollout (owner-run; tenant `amb`):** the rule ships in code
+  (`ENGINE_BLOCKED_PILLARS.amb = ["press-room"]`; `SINGLE_HOME_PILLARS.amb = ["press-room"]`)
+  and is inert until the tenant exists. The Exhibition reuses the abb `booths` collection;
+  **this one HAS a migration** (`20261027_000000_add_amb_booth_halls`: four
+  `ALTER TYPE "enum_booths_hall" ADD VALUE IF NOT EXISTS` (`brands`, `design-studios`,
+  `distributors-showrooms`, `country-pavilions`), nothing else; `down` is a documented
+  no-op because Postgres cannot drop enum values). Like every migration it runs at the
+  production build once merged (`vercel-build` -> `scripts/migrate-prod.mjs`, production
+  only); Preview shares the DB and does not migrate, so until then saving an amb booth with
+  a new hall fails at the DB (abb is unaffected). **Status 27-10-26: code only, nothing
+  applied.** Steps: (1) owner approves the migration SQL verbatim, merge + deploy;
+  (2) create the tenant by hand in /admin from `AMB_TENANT_FIELDS`
+  (`docs/07-website-management.md`; slug `amb`, `autoPublishEngineDrafts` off, features
+  Articles + Newsletters + Corrections + Exhibition, frontend URL empty); (3) print host and
+  database name: `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-amb-taxonomy -- --confirm-host=<hostname>` (6 pillars, 18 sub-sections,
+  3 newsletters, 6 authors, 6 tags = 39 rows, all `create`); (5) apply from an interactive
+  terminal: `npm run audit:add-amb-taxonomy -- --apply --confirm-host=<hostname>`;
+  (6) re-run the dry run: all 39 rows must read `exists`; (7) read token:
+  `npx tsx scripts/mint-token.ts read --tenant amb --label frontend-preview`; (8) engine
+  record `content-engine-amb` in Console `/console/engines/new`: writer, allowed tenant only
+  `amb`, actions only `create_article` + `update_article`, hub flags off; (9) add the amb-web
+  origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import: `scripts/migrate/network/NETWORK-LEGACY.md`
+  "AsiaMaterialsBrief" (old site `asiamaterialsbrief` found 27-10-26; mapping FINAL, owner 27-10-26: published only, 252 rows). Author bios, contacts
+  and the tag set are PENDING OWNER wording.
 
 ## Token rotation
 

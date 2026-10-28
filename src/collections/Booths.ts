@@ -3,23 +3,14 @@ import { tenantManagedAccess } from "@/access/collections";
 import { featureGatedAccess } from "@/access/features";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
 import { revalidateHooks } from "@/hooks/revalidate";
+import { boothHallValidate } from "@/hooks/booth-hall";
+import { BOOTH_HALLS } from "@/lib/booth-halls";
 
 const { afterChange, afterDelete } = revalidateHooks(["booths:all"]);
 
-/**
- * The six halls of AsiaBeautyBrief's "The Beauty Exhibition" (abb launch,
- * 22-10-26). Slugs mirror `ABB_EXHIBITION_HALLS` in scripts/lib/abb-taxonomy.ts
- * (the canonical taxonomy JSON); keep both in sync. Changing a value here is a
- * schema change (Postgres enum) and needs a migration.
- */
-export const BOOTH_HALLS = [
-  { label: "Manufacturers (OEM/ODM)", value: "manufacturers" },
-  { label: "Ingredients & Fragrance", value: "ingredients-fragrance" },
-  { label: "Packaging & Machinery", value: "packaging-machinery" },
-  { label: "Brands for Distribution", value: "brands-for-distribution" },
-  { label: "Distributors & Retail", value: "distributors-retail" },
-  { label: "Services", value: "services" },
-] as const;
+// Halls (select options, per-tenant allowlist, decision) live in the pure
+// src/lib/booth-halls.ts; re-exported here for existing importers.
+export { BOOTH_HALLS } from "@/lib/booth-halls";
 
 export const BOOTH_TIERS = [
   { label: "Basic", value: "basic" },
@@ -35,8 +26,9 @@ const sameTenantArticles: FilterOptions = ({ data }) => {
 };
 
 /**
- * Booths: exhibitor listings of "The Beauty Exhibition" directory. Per-tenant,
- * feature-gated on `exhibition` (in practice only tenant `abb` turns it on), so
+ * Booths: exhibitor listings of "The Beauty Exhibition" (abb) and "The
+ * Exhibition" (amb) directories. Per-tenant, feature-gated on `exhibition`
+ * (in practice only tenants `abb` and `amb` turn it on), so
  * the collection is hidden in admin and 404s in the public API for every other
  * tenant. Editor-managed ONLY: content engines have no write path to booths
  * (engine intake only writes articles; there is no `booths` engine action).
@@ -70,7 +62,14 @@ export const Booths: CollectionConfig = {
       index: true,
       admin: { position: "sidebar", description: "Only published booths appear on the website." },
     },
-    { name: "hall", type: "select", options: [...BOOTH_HALLS], index: true },
+    {
+      name: "hall",
+      type: "select",
+      options: [...BOOTH_HALLS],
+      index: true,
+      validate: boothHallValidate,
+      admin: { description: "Each title uses six of these halls (AsiaBeautyBrief / AsiaMaterialsBrief); another title's hall is refused." },
+    },
     { name: "typeLine", type: "text", admin: { description: 'e.g. "OEM/ODM Manufacturer".' } },
     { type: "row", fields: [{ name: "city", type: "text" }, { name: "country", type: "text" }] },
     { type: "row", fields: [

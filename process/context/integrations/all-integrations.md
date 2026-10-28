@@ -797,6 +797,31 @@ description; Console shows it fully).
   rows, read token and engine record `content-engine-aer` do not exist. Runbook:
   `docs/11-operations.md` "Asia Economic Review rollout".
 
+## AMB tenant rules (AsiaMaterialsBrief, amb launch W2, 2026-10-27)
+
+- Tenant slug `amb` (name "AsiaMaterialsBrief", domain `asiamaterialsbrief.com`, web repo `amb-web`).
+  `ENGINE_BLOCKED_PILLARS.amb = SINGLE_HOME_PILLARS.amb = ["press-room"]` (hyphenated; `pressroom` is
+  not special for amb, pinned in `scripts/lib/amb-taxonomy.test.ts` and `src/lib/single-home-pillars.test.ts`).
+  Central has NO sub-section block: the engine-side amb publication keeps the engine off
+  `projects/specified` and `projects/design-voices` (`AMB_ENGINE_EXCLUDED_SUBSECTIONS`).
+- Taxonomy source of truth: `scripts/lib/amb-taxonomy.ts` (6 pillars, 18 sub-sections with informational
+  design descriptions, 3 newsletters, 6 authors, 6 tags = 39 rows); OWNER-RUN `npm run audit:add-amb-taxonomy`
+  (dry run default, host + `/neondb` name guard; rehearsed on a disposable local PG16 27-10-26: 39 create,
+  39 created, 39 exists). Tenant needs feature `exhibition` ON.
+- The Exhibition reuses `booths` (abb, 20261022): four new `enum_booths_hall` values (migration
+  `20261027_000000_add_amb_booth_halls`, additive, down no-op) and a per-tenant allowlist
+  `BOOTH_HALLS_BY_TENANT` (`src/lib/booth-halls.ts`) enforced by the `hall` field validate
+  (`src/hooks/booth-hall.ts`; another title's hall is refused, unmapped tenants allow all). AMB hall order
+  (website Hall 01..06): `manufacturers`, `brands`, `design-studios`, `distributors-showrooms`, `services`,
+  `country-pavilions`.
+- Legacy import profile `scripts/migrate/network/profiles/amb.json` + mapping `mappings/amb.mapping.json`
+  (FINAL, owner 27-10-26, `_provisional` empty: published only (252 of 440), `projects/design-voices` ->
+  `projects` with no sub-section, only the 6 approved tags; `intelligence`, `exhibition`, `events-awards`
+  unmapped on purpose); old site `asiamaterialsbrief` (id in the owner overlay), discovery 27-10-26.
+  Booths are a separate later step (`sql/01b-inspect-amb-booths.sql`, read-only).
+- Status 27-10-26: code only, branch `claude/sharp-ramanujan-6bxu4n`, not pushed; tenant, rows, read token and engine record
+  `content-engine-amb` do not exist. Runbook: `docs/11-operations.md` "AsiaMaterialsBrief rollout".
+
 ## AGR tenant rules (AsiaGolfReview, agr launch W2, 2026-10-23)
 
 - Tenant slug `agr` (name "AsiaGolfReview", domain `asiagolfreview.com`, web repo `agr-web`).

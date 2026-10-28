@@ -72,6 +72,15 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // `pressroom` (unhyphenated, like BriefAsia/GCV/WAD; single-home too, see below)
 // is editor-only. abb has no `events-awards` pillar; `press-room` on abb is NOT
 // blocked (exact slug match). Its five other pillars stay engine-writable.
+//
+// AsiaMaterialsBrief (tenant `amb`, amb launch W2, owner decision 27-10-26):
+// only `press-room` (hyphenated slug, like gtp/vowasia/agr; single-home too, see
+// below) is editor-only. `briefing`, `materials`, `interiors-ffe`,
+// `lighting-tech` and `projects` stay engine-writable. The plan also keeps the
+// engine off the `projects` sub-sections `specified` and `design-voices`
+// (named suppliers / real interviews); there is no sub-section block here, that
+// rule lives in the content-engine amb publication. The unhyphenated
+// `pressroom` means nothing for amb.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   abb: ["pressroom"],
   gcv: ["exclusive", "pressroom"],
@@ -81,6 +90,7 @@ export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   wad: ["pressroom"],
   aer: ["long-view", "interviews", "in-focus"],
   agr: ["course-reviews", "rankings", "press-room"],
+  amb: ["press-room"],
 };
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */
@@ -121,6 +131,9 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // `pressroom` (unhyphenated) is NOT single-home.
 // AsiaBeautyBrief `pressroom` (abb launch, owner decision 22-10-26) is
 // single-home with an optional author, like the other Pressroom pillars.
+// AsiaMaterialsBrief `press-room` (amb launch W2, owner decision 27-10-26) is
+// single-home with an optional author, exactly like GTP/AGR `press-room`; amb
+// `pressroom` (unhyphenated) is NOT single-home.
 export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
   abb: ["pressroom"],
   "brief-asia": ["pressroom"],
@@ -129,6 +142,7 @@ export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
   vowasia: ["press-room"],
   wad: ["pressroom"],
   agr: ["press-room"],
+  amb: ["press-room"],
 };
 
 // ── Top-level user role (global identity) ───────────────────────────────────

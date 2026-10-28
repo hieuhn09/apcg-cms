@@ -218,3 +218,194 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   4. `--apply --run-id agr-real-3`, rồi `timestamps-fix --run-id agr-real-3` + `psql "$DIRECT_URL" -f scripts/migrate/out/agr-real-3/timestamps-fix.sql`, rồi `verify --run-id agr-real-3`.
   5. Dựng redirect (`redirects --run-id agr-real-3 --known-routes ~/agr-private/known-routes.json`), chạy file 03 (`CLEANUP OK`), xoá khoá R2 tạm.
   - Giới hạn: lượt bù chỉ THÊM bài mới đăng (kể cả bài lúc trước là nháp nay đã đăng). Bài đã nhập mà site cũ sửa sau đó KHÔNG được cập nhật lại; bài site cũ gỡ đi vẫn còn trên Central (biên tập tự ẩn nếu cần).
+
+## AsiaMaterialsBrief (`--tenant amb`)
+
+- Slug Central: **`amb`** (mặc định agent điền, chủ dự án sửa được trước khi merge; plan
+  delta 27-10-26). Role DB cũ: `amb_migrator`; schema view: `amb_ro`; overlay riêng:
+  `~/amb-private/overlay.json`; run-id: `amb-real-1`, `amb-real-2`, ...
+- Tenant tạo tay trong /admin với feature **`exhibition` BẬT** (The Exhibition dùng chung
+  collection `booths` với abb; danh sách trường: `AMB_TENANT_FIELDS` trong
+  `scripts/lib/amb-taxonomy.ts`, `docs/07-website-management.md`).
+- File SQL Editor của amb là bản riêng: `sql/01-discover-amb.sql`,
+  `sql/01b-inspect-amb-booths.sql`, `sql/02-create-readonly-role-views-amb.sql`,
+  `sql/02p-set-password-amb.sql`, `sql/03-drop-role-and-views-amb.sql`. Đã chạy thử cả năm
+  file trên Postgres 16 giả trong máy (27-10-26): khám phá ra đúng 1 site (2 site khớp thì
+  không mô tả bài, 02 dừng `SITE STOP`), `SELF-CHECK OK`, `CLEANUP OK`; 01b: bảng thiếu in
+  `missing`, cột giống bí mật chỉ in tên.
+- Dòng site cũ: slug `asiamaterialsbrief`, id `149a9792-a169-47ca-b592-ea1ff1a9ea82`, tên
+  AsiaMaterialsBrief (khám phá 27-10-26, DB có 14 site): 440 bài = 252 published, 164 archived
+  (161 chưa từng có ngày đăng), 24 draft; created_at 08-08-26 → 27-10-26, 439/440 có phần
+  micro giây khác 0, 0 trùng thời điểm; 0 slug rỗng/trùng/sai; 2.258 tag cũ (3.222 lượt, 439
+  bài), không tag nào trùng 6 tag đã duyệt; 428 ảnh đại diện ở
+  `mbolvnwkmkeroqmvbvmt.supabase.co`, 12 bài không ảnh (hoặc đường dẫn tương đối); 1.684 mục
+  thân bài, 0 ảnh trong thân; `media_assets` của site này: 0 dòng (6.769 của mọi site) ⇒
+  không có gì chuyển sang Media Engine của content engine. Giá trị section/subsection là
+  SLUG (không phải tên hiển thị `?sub=`). Không có bài `intelligence`, `exhibition`,
+  `events-awards`, `press-room`. Bảng danh bạ: `amb_booths` 6 dòng, `amb_booth_applications`
+  1 dòng (còn `press_submissions` 1, `scraping_sources` 29: không chuyển). Kiểm trước của
+  file 02: role/schema chưa có, 0 bảng PUBLIC đọc được ngoài danh sách cho phép, 0 hàm
+  SECURITY DEFINER PUBLIC gọi được, không schema nào PUBLIC tạo được.
+- Mapping `mappings/amb.mapping.json` **đã chốt** (chủ dự án "ok" 27-10-26, `_provisional`
+  rỗng, `validate-mapping --require-final` OK):
+  - chỉ chuyển bài `published` (252); `archived`/`draft`/`scheduled`/`rejected` bỏ qua. Lượt
+    chạy bù trước khi chuyển tên miền lấy thêm bài site cũ đăng sau lần chạy đầu;
+  - mục con cũ trùng slug giữ nguyên (`briefing/*` cả 4, `interiors-ffe/*` cả 4,
+    `lighting-tech/building-systems`, `lighting-tech/lighting`, `materials/architectural`,
+    `materials/surfaces`, `materials/wood-panels`, `projects/home-renovation`);
+    `lighting-tech/smart-building` → `smart-building-home`; `materials/new-sustainable` →
+    `new-sustainable-materials`; `projects` không mục con → pillar `projects`; mỗi pillar giữ
+    dòng dự phòng `<pillar>/*` → pillar đó, không mục con;
+  - `projects/design-voices` (59 bài published, tin dự án do AI viết, không phải phỏng vấn) →
+    `projects` KHÔNG mục con (Design Voices để dành cho chân dung/Q&A biên tập viết);
+    `projects/specified` (không có bài) cũng → `projects` không mục con, cùng lý do;
+  - `press-room/*` → `press-room` không mục con (một nhà); `intelligence`, `exhibition`,
+    `events-awards`: không có dòng (trang, không phải pillar; không có bài);
+  - tác giả chia đều 6 người trang Team (`mode: even`, lệch tối đa 1 bài: 252 bài = 42 mỗi
+    người), không giữ byline cũ; chỉ giữ 6 tag đã duyệt, bỏ hết 2.258 tag cũ (không có
+    `renames`); không ảnh trong thân (`bodyImages: drop`);
+  - bài cũ không chuyển → 301 về trang chuyên mục (`archivedAs: section`, như agr); thân bài
+    `reflowMaxChars: 380` như AER/AGR (cùng nền tảng cũ); gốc cũ
+    `https://asiamaterialsbrief.com`, bài `/article/{slug}`, chuyên mục `/briefing`,
+    `/materials`, `/interiors-ffe`, `/lighting-tech`, `/projects`, `/press-room`.
+- Trang cũ không có bài: mapping không sinh rule (như agr, `extraLegacyPaths` và
+  `gonePaths` rỗng). `/intelligence`, `/exhibition`, `/exhibition/get-listed`,
+  `/events-awards`, `/press-room-submit`, `/editorial-standards` giữ nguyên đường dẫn ở
+  amb-web (không cần redirect); `/pro` → 301 `/intelligence` và `/studio` → 301 `/about`
+  viết tay ở amb-web lúc cutover. Trang gian hàng cũ `/exhibition/<booth>` thuộc bước gian
+  hàng riêng.
+- Gian hàng (`amb_booths`, `amb_booth_applications`): NGOÀI phạm vi lượt nhập bài này, làm
+  ở bước riêng sau. Chuẩn bị: `sql/01b-inspect-amb-booths.sql` (chỉ đọc, một bảng kết quả)
+  in danh sách cột, số dòng của site này, và từng dòng gian hàng/đơn đăng ký dạng JSON; cột
+  có tên giống email/phone/password/token/secret chỉ in TÊN, không in giá trị.
+- Overlay của chủ dự án `~/amb-private/overlay.json` (ngoài repo):
+  ```
+  {
+    "source": { "siteFilter": "149a9792-a169-47ca-b592-ea1ff1a9ea82" },
+    "media": { "hostAllowlist": ["mbolvnwkmkeroqmvbvmt.supabase.co"], "hostRewrite": {} }
+  }
+  ```
+
+### Các bước của chủ dự án (amb), mỗi lần một bước
+
+Giống hệt AER ở trên, với tên amb. **Trước khi ngồi làm:** `~/apcg-cms/.env.local` phải có
+đủ 4 biến R2 của bucket production (`R2_BUCKET`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`; như agr: tạo khoá R2 tạm Object Read & Write chỉ cho
+`apcg-central-media`, ghi bằng `read -s`, xoá khoá khi xong). Mac cần `psql`. `HOST_CENTRAL`
+(host của URL Central, từ bước 9) là chữ giữ chỗ: agent điền giá trị thật trước khi gửi
+lệnh. Mỗi khối là đúng một lệnh.
+
+1. **Khám phá** (`sql/01-discover-amb.sql`): XONG 27-10-26 (số liệu ở trên).
+1b. **Xem gian hàng** (không bắt buộc cho lượt nhập bài; cho bước gian hàng sau): SQL Editor,
+    chạy `sql/01b-inspect-amb-booths.sql`, "Download CSV" và gửi. Hàng `1 site` phải in
+    `slug=asiamaterialsbrief`.
+2. **Chốt mapping**: XONG 27-10-26.
+3. **Tạo role chỉ-đọc**: SQL Editor, chạy `sql/02-create-readonly-role-views-amb.sql`. Ô kết
+   quả phải là `SELF-CHECK OK` kèm số bài thấy được (440). Lỗi `... STOP ...`: không có gì
+   được tạo, gửi nguyên văn dòng lỗi.
+4. **Đặt mật khẩu**: chạy `sql/02p-set-password-amb.sql`. Bấm nút copy của ô `new_secret`
+   (không chụp màn hình). Đóng tab truy vấn sau bước 6.
+5. **Overlay riêng** trên Mac (Terminal mới trên Mac, không phải cửa sổ SSH):
+   ```
+   mkdir -p ~/amb-private
+   ```
+   ```
+   chmod 700 ~/amb-private
+   ```
+   ```
+   nano ~/amb-private/overlay.json
+   ```
+   Dán nội dung overlay ở trên, lưu (Ctrl+O, Enter, Ctrl+X).
+6. **Đưa URL DB cũ vào Terminal** (không hiện lên màn hình):
+   ```
+   cd ~/apcg-cms
+   ```
+   ```
+   read -s LEGACY_PW
+   ```
+   Dán mật khẩu vừa copy, Enter. Rồi:
+   ```
+   export LEGACY_DB_URL="postgresql://amb_migrator.mbolvnwkmkeroqmvbvmt:$LEGACY_PW@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+   ```
+   Host **Session pooler, cổng 5432** (Supabase > Connect); không dùng cổng 6543.
+7. **Khám phá bằng công cụ** (chỉ đọc):
+   ```
+   npm run migrate:network -- discover --tenant amb --site 149a9792-a169-47ca-b592-ea1ff1a9ea82 --mapping-overlay ~/amb-private/overlay.json
+   ```
+8. **Kiểm mapping đã chốt**:
+   ```
+   npm run migrate:network -- validate-mapping --tenant amb --mapping-overlay ~/amb-private/overlay.json --require-final
+   ```
+   Phải in `[validate-mapping] OK` và `PROVISIONAL: none`.
+9. **Đưa URL Central vào Terminal** (không hiện lên màn hình):
+   ```
+   read -s DATABASE_URL
+   ```
+   Dán URL Central, Enter. Rồi:
+   ```
+   export DATABASE_URL
+   ```
+   Phải in đúng `/neondb` (khác thì dừng và báo):
+   ```
+   node -e 'console.log(new URL(process.env.DATABASE_URL).pathname)'
+   ```
+   Rồi **chạy khô** (cần thấy 252 bài sẽ tạo, 0 bài bị từ chối vì mapping; tác giả chia đều,
+   42 bài mỗi người):
+   ```
+   npm run migrate:network -- import --tenant amb --site 149a9792-a169-47ca-b592-ea1ff1a9ea82 --mapping-overlay ~/amb-private/overlay.json --confirm-host=HOST_CENTRAL
+   ```
+10. **Ghi thử 50 bài**, rồi mở xem bằng mắt (đoạn văn tách đúng như site cũ, ảnh, chuyên mục):
+    ```
+    npm run migrate:network -- import --tenant amb --site 149a9792-a169-47ca-b592-ea1ff1a9ea82 --mapping-overlay ~/amb-private/overlay.json --apply --limit 50 --run-id amb-real-1 --confirm-host=HOST_CENTRAL
+    ```
+11. **Chạy toàn bộ** (Mac không ngủ). Dừng giữa chừng: chạy lại đúng lệnh này.
+    ```
+    caffeinate -i npm run migrate:network -- import --tenant amb --site 149a9792-a169-47ca-b592-ea1ff1a9ea82 --mapping-overlay ~/amb-private/overlay.json --apply --resume --run-id amb-real-1 --confirm-host=HOST_CENTRAL
+    ```
+12. **Sửa link trong bài**:
+    ```
+    npm run migrate:network -- rewrite-links --tenant amb --run-id amb-real-1 --apply --confirm-host=HOST_CENTRAL
+    ```
+13. **Sửa ngày tạo/sửa** bằng psql với URL **direct** của Neon (console.neon.tech, project
+    **apcg-master-db**, **Connect**, database **neondb**, TẮT **Connection pooling**, copy):
+    ```
+    read -s DIRECT_URL
+    ```
+    ```
+    export DIRECT_URL
+    ```
+    Phải in đúng `/neondb`; host KHÔNG có chữ `-pooler`:
+    ```
+    node -e 'console.log(new URL(process.env.DIRECT_URL).pathname)'
+    ```
+    ```
+    npm run migrate:network -- timestamps-fix --tenant amb --run-id amb-real-1
+    ```
+    ```
+    psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f scripts/migrate/out/amb-real-1/timestamps-fix.sql
+    ```
+14. **Kiểm 12 phép**:
+    ```
+    npm run migrate:network -- verify --tenant amb --site 149a9792-a169-47ca-b592-ea1ff1a9ea82 --run-id amb-real-1 --mapping-overlay ~/amb-private/overlay.json --confirm-host=HOST_CENTRAL
+    ```
+15. **Chạy bù trước cutover** (chủ dự án tắt pipeline cũ NGAY TRƯỚC lượt này): run-id MỚI
+    (`amb-real-2`, `amb-real-3`), không `--resume` run-id cũ; chạy khô trước để xem số bài mới
+    (bài đã có là `skippedExisting`, tác giả bài cũ giữ nguyên), rồi `--apply`,
+    `timestamps-fix` + `psql`, `verify` với cùng run-id. Nếu đã xoá role ở bước 16 thì tạo
+    lại bằng bước 3, 4, 6. Giới hạn như agr: chỉ THÊM bài mới đăng; bài đã nhập mà site cũ sửa
+    sau đó không cập nhật lại.
+16. **Lúc cutover**: dựng redirect từ known-routes của web (thoát mã 3 nếu có chuỗi, vòng lặp
+    hoặc đích không tồn tại), rồi xoá role bằng `sql/03-drop-role-and-views-amb.sql` (ô kết quả
+    `CLEANUP OK`) và xoá khoá R2 tạm. Giữ project cũ tới khi cutover xong.
+    ```
+    npm run migrate:network -- redirects --tenant amb --run-id amb-real-1 --known-routes ~/amb-private/known-routes.json --mapping-overlay ~/amb-private/overlay.json
+    ```
+
+Rủi ro như AER: role `amb_migrator` đọc được hai bảng pg_net (`net._http_response`,
+`net.http_request_queue`); làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role tự
+hết hạn sau 14 ngày.
+
+- Lưu ý chung (phát hiện 27-10-26 khi chạy thử): mục `8 other tables of this site` của
+  `01-discover-aer.sql` / `01-discover-agr.sql` luôn để trống cột `detail`, vì
+  `query_to_xml(..., tableforest => false)` bọc kết quả trong `<table>` mà xpath lại tìm
+  `/row/n`. File amb dùng `/table/row/n` (đã thử).

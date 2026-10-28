@@ -43,8 +43,8 @@ const V4 = 'pillar rule: "pressroom" is a single-home pillar: it cannot have sub
 const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed there cannot be marked exclusive.';
 
 describe("constants", () => {
-  it("SINGLE_HOME_PILLARS = { abb: [pressroom], brief-asia: [pressroom], gcv: [pressroom], gtp: [press-room], vowasia: [press-room], wad: [pressroom], agr: [press-room] } beside ENGINE_BLOCKED_PILLARS (incl. aer, no single-home)", () => {
-    assert.deepEqual(SINGLE_HOME_PILLARS, { abb: ["pressroom"], "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"], agr: ["press-room"] });
+  it("SINGLE_HOME_PILLARS = { abb: [pressroom], brief-asia: [pressroom], gcv: [pressroom], gtp: [press-room], vowasia: [press-room], wad: [pressroom], agr: [press-room], amb: [press-room] } beside ENGINE_BLOCKED_PILLARS (incl. aer, no single-home)", () => {
+    assert.deepEqual(SINGLE_HOME_PILLARS, { abb: ["pressroom"], "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"], agr: ["press-room"], amb: ["press-room"] });
     assert.deepEqual(ENGINE_BLOCKED_PILLARS, {
       abb: ["pressroom"],
       gcv: ["exclusive", "pressroom"],
@@ -54,6 +54,7 @@ describe("constants", () => {
       wad: ["pressroom"],
       aer: ["long-view", "interviews", "in-focus"],
       agr: ["course-reviews", "rankings", "press-room"],
+      amb: ["press-room"],
     });
     assert.deepEqual(singleHomeSlugUnion(), ["pressroom", "press-room"]);
   });
@@ -73,6 +74,19 @@ describe("constants", () => {
     }
     // agr's press-room does not leak to a tenant without it.
     assert.equal(isEngineBlockedPillar("aer", "press-room"), false);
+  });
+  it("amb: press-room is single-home and engine-blocked; unhyphenated pressroom is neither; five pillars stay writable", () => {
+    assert.equal(isSingleHomePillar("amb", "press-room"), true);
+    assert.equal(isEngineBlockedPillar("amb", "press-room"), true);
+    assert.equal(isEngineBlockedPillar("amb", " Press-Room "), true);
+    assert.equal(isSingleHomePillar("amb", "pressroom"), false);
+    assert.equal(isEngineBlockedPillar("amb", "pressroom"), false);
+    for (const s of ["briefing", "materials", "interiors-ffe", "lighting-tech", "projects"]) {
+      assert.equal(isEngineBlockedPillar("amb", s), false, s);
+      assert.equal(isSingleHomePillar("amb", s), false, s);
+    }
+    // Sub-section slugs are not pillars: no sub-level block in Central (engine-side rule).
+    for (const s of ["specified", "design-voices"]) assert.equal(isEngineBlockedPillar("amb", s), false, s);
   });
   it("brief-asia, gcv and wad pressroom are engine-blocked; world-travel-brief is not; gcv keeps exclusive", () => {
     assert.ok(ENGINE_BLOCKED_PILLARS["brief-asia"]?.includes("pressroom"));
