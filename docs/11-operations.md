@@ -275,6 +275,19 @@ and status.
   origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import: `scripts/migrate/network/NETWORK-LEGACY.md`
   "AsiaMaterialsBrief" (old site `asiamaterialsbrief` found 27-10-26; mapping FINAL, owner 27-10-26: published only, 252 rows). Author bios, contacts
   and the tag set are PENDING OWNER wording.
+  **AsiaMaterialsBrief legacy booths (owner-run, 28-10-26):** the six old-site
+  `amb_booths` rows are embedded in `scripts/lib/amb-legacy-booths.ts` (public company
+  info; the one legacy booth application holds personal contact data and is NOT migrated).
+  Run after steps (1)-(2) (tenant `amb` with Exhibition ON, and migration 20261027 applied
+  in production; the script checks both read-only and refuses otherwise). Same database
+  guards as the taxonomy script. Dry run:
+  `npm run audit:add-amb-booths -- --confirm-host=<hostname>` (expected: `plan: 6 create,
+  0 exists`); apply from an interactive terminal:
+  `npm run audit:add-amb-booths -- --apply --confirm-host=<hostname>` (`created 6 booth(s)`);
+  re-run the dry run: `plan: 0 create, 6 exists` and `DRY RUN: nothing to create.`
+  Mapping (owner 27/28-10-26): legacy slugs kept, `published`, tier `basic`, not verified,
+  hall `studios` -> `design-studios` (others unchanged); no logo, catalog, inquiry email or
+  related articles (the site falls back to info@). Existing booths are never overwritten.
 
 ## Token rotation
 
