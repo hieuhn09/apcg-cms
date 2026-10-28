@@ -53,6 +53,7 @@ export const HUB_ARTICLE_EDIT_SELECT = {
   longHaul: true,
   pinnedToLatest: true,
   exclusive: true,
+  pinnedUntil: true, // hub-pin-exclusive-flags (Public Contracts CMS 2): `edit.pinnedUntil`
   sponsor: true,
   scheduledFor: true, // K10 (P5.2): the hour of a hub-scheduled latest version
   leadImageCaption: true, // P5.3 T9 (heroImage already comes from the detail select)
@@ -115,11 +116,13 @@ export interface HubArticleEditYes {
     affiliate: boolean;
     deepDive: boolean;
     longHaul: boolean;
-    /** Read-only in P5.1. */
+    /** hub-pin-exclusive-flags: settable from the hub as the ROOT key `pinnedToLatest` (drafts) or via `POST …/flags` (published), when the tenant is on HUB_EDITORIAL_FLAGS_TENANTS; never under `flags` in a write. */
     pinnedToLatest: boolean;
-    /** Read-only in P5.1. */
+    /** hub-pin-exclusive-flags: as `pinnedToLatest` (ROOT key `exclusive`). */
     exclusive: boolean;
   };
+  /** hub-pin-exclusive-flags (CMS 2): UTC `YYYY-MM-DDTHH:mm:ss.fffZ`, or null (no expiry). */
+  pinnedUntil: string | null;
   sponsor: string | null;
 }
 
@@ -177,6 +180,12 @@ export type HubArticleEditLive = HubArticleEditLiveNo | HubArticleEditLiveYes;
 export const HUB_EDIT_BODY_MEDIA_MAX = 30;
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+/** A stored date (string / Date) → `YYYY-MM-DDTHH:mm:ss.fffZ`; null / absent / unparseable → null. */
+const isoOrNull = (v: unknown): string | null => {
+  if (v == null) return null;
+  const t = new Date(v as string).getTime();
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
+};
 
 /** A populated media doc of THIS tenant (depth 2 read), else null — another tenant's media is never shown. */
 function ownMedia(v: unknown, tenantId: number | string): Doc | null {
@@ -262,6 +271,7 @@ export function sanitizeHubArticleEdit(
       pinnedToLatest: bool(doc.pinnedToLatest),
       exclusive: bool(doc.exclusive),
     },
+    pinnedUntil: isoOrNull(doc.pinnedUntil),
     sponsor: str(doc.sponsor),
   };
 }
@@ -324,7 +334,8 @@ export async function loadHubArticleEdit(args: {
   const editorConfig = (await loadHubEditorConfig(payload.config)) as HubEditorConfig;
   const media = hubEditMediaBlock(latest, tenantId);
   const bodyEditable = !media.tooMany && isRoundTripSafeBody(editorConfig, latest.body);
-  // P5.3 T9: the media keys are attached AFTER the sanitizer (its 15 keys stay pinned by --check6).
+  // P5.3 T9: the media keys are attached AFTER the sanitizer (its 16 keys — 15 + `pinnedUntil`
+  // since hub-pin-exclusive-flags — stay pinned by --check6).
   const edit = sanitizeHubArticleEdit(latest, { bodyEditable, editable: true, editableReason: "ok" }) as HubArticleEditYes;
   // Review M1 (CMS-2): `article.heroImage` comes from the same latest doc; a hero that is
   // not THIS tenant's media (edit.hero null) is withheld there too — never only in `edit`.

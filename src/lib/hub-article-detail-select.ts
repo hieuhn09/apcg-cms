@@ -43,6 +43,10 @@ export const HUB_ARTICLE_DETAIL_SELECT = {
   videoCaption: true,
   videoCredit: true,
   videoDescription: true,
+  // hub-pin-exclusive-flags (Public Contracts CMS 3): the two editorial flags + the pin expiry.
+  exclusive: true,
+  pinnedToLatest: true,
+  pinnedUntil: true,
 } as const;
 
 /** Depth 2: body Upload nodes need ≥1 (FEASIBILITY H2); `resolveArticleVideo`
@@ -74,6 +78,13 @@ export interface HubArticleDetail {
   video: ResolvedArticleVideo | null;
   bodyMarkdown: string;
   bodyState: HubBodyState;
+  /** hub-pin-exclusive-flags: the stored flags (absent / non-boolean ⇒ false). */
+  exclusive: boolean;
+  pinnedToLatest: boolean;
+  /** UTC `YYYY-MM-DDTHH:mm:ss.fffZ`, or null (no expiry / not set). Stored as-is: an expired pin is NOT cleared here. */
+  pinnedUntil: string | null;
+  /** The CMS switch HUB_EDITORIAL_FLAGS_TENANTS for THIS tenant (the hub locks both flags when false). */
+  editorialFlags: boolean;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
@@ -94,6 +105,13 @@ function list<T>(v: unknown, pick: (x: unknown) => T | null): T[] {
   return Array.isArray(v) ? v.map(pick).filter((x): x is T => x !== null) : [];
 }
 
+/** A stored date (string / Date) → `YYYY-MM-DDTHH:mm:ss.fffZ`; null / absent / unparseable → null. */
+function isoOrNull(v: unknown): string | null {
+  if (v == null) return null;
+  const t = new Date(v as string).getTime();
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
+}
+
 /** Stored as one textarea, one takeaway per line (intake joins an array with "\n"). */
 function takeaways(v: unknown): string[] {
   return typeof v === "string" ? v.split("\n").map((s) => s.trim()).filter(Boolean) : [];
@@ -108,6 +126,8 @@ export function sanitizeHubArticleDetail(
   doc: Record<string, unknown>,
   tenantSlug: string,
   body: { bodyMarkdown: string; bodyState: HubBodyState },
+  /** hub-pin-exclusive-flags D4: the tenant's switch, computed by the route (absent ⇒ false, fail-closed). */
+  opts: { editorialFlags?: boolean } = {},
 ): HubArticleDetail {
   return {
     id: doc.id as number | string,
@@ -132,5 +152,9 @@ export function sanitizeHubArticleDetail(
     video: resolveArticleVideo(doc),
     bodyMarkdown: body.bodyMarkdown,
     bodyState: body.bodyState,
+    exclusive: doc.exclusive === true,
+    pinnedToLatest: doc.pinnedToLatest === true,
+    pinnedUntil: isoOrNull(doc.pinnedUntil),
+    editorialFlags: opts.editorialFlags === true,
   };
 }

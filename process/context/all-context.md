@@ -406,6 +406,7 @@ independent verification, not from guessing.
 - **Cron auth:** `CRON_SECRET` (bearer for the three `/api/cron/*` routes; unset + production = the
   route fails closed with 503, never silently opens)
 - **Hub live edit (P5.4, branch-only until `apcg-cms#36` merges):** `HUB_LIVE_EDIT_TENANTS` — CSV of tenant slugs (exact match), default OFF/unset, read on every `PATCH /api/hub/articles/{id}/live` call; set ONLY by the owner on this repo's Vercel project; not in `.env.example`. A tenant not listed gets 403 `feature_disabled` before any article read.
+- **Hub editorial flags (branch `claude/hub-pin-exclusive-cms`, not merged, 28-10-26):** `HUB_EDITORIAL_FLAGS_TENANTS` — CSV of CMS tenant slugs (exact match, `*` is not a wildcard), default OFF/unset, read on every call; set ONLY by the owner on this repo's Vercel project, then Redeploy; not in the example env file. Gates the editorial root keys (`exclusive`, `pinnedToLatest`, `pinnedUntil`) of the hub draft routes (422 `not_enabled`) and `POST /api/hub/articles/{id}/flags` (403 `feature_disabled`), and is reported as `editorialFlags` by `/api/hub/taxonomy` and `/api/hub/articles/{id}`. See `integrations/all-integrations.md` §HUB EDITORIAL FLAGS.
 - **Misc:** `PORT` (dev server port, `3508` in `.env.example`)
 
 **npm scripts (real, from `package.json` — no `npm test`; the scoped test scripts are `test:media-redirect`, `test:single-home`, and — on the unmerged branch only — `test:hub-media`, `test:hub-live`, `test:hub-p56`):**

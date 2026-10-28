@@ -37,8 +37,15 @@ interface EngineContext {
    *  APCGHub P4 / CMS-3): hub-asserted operator + mandatory reason. */
   hubWrite?: { actor: { email: string; role: string; id?: number | string }; reason: string };
   /** Set only by the hub AUTHOR routes (POST / PATCH /api/hub/articles, APCGHub
-   *  P5.1): hub-asserted operator + action; `fields` = request keys that changed. */
+   *  P5.1): hub-asserted operator + action; `fields` = request keys that changed
+   *  (on create: the editorial keys sent — hub-pin-exclusive-flags D11). */
   hubAuthor?: { actor: { email: string; role: string; id?: number | string }; action: "create" | "update"; fields?: string[] };
+  /** Set only by the hub FLAGS route (POST /api/hub/articles/{id}/flags,
+   *  hub-pin-exclusive-flags D7): hub-asserted operator + the changed editorial
+   *  keys with their values before / after (booleans and an instant, no content).
+   *  Bookkeeping skips; `articleActivity` writes NOTHING for it — the route writes
+   *  the one `human_edit` row itself AFTER its transaction commits (review L2). */
+  hubFlags?: { actor: { email: string; role: string; id?: number | string }; fields: string[]; from: Record<string, unknown>; to: Record<string, unknown> };
 }
 
 function engineCtx(context: unknown): EngineContext {
@@ -196,6 +203,10 @@ export const articleBookkeeping: CollectionBeforeChangeHook = ({
   // would make enqueueTranslations treat up-to-date translations as stale and
   // re-queue them on republish, with no word of the article changed.
   if ((req.context as { hubWrite?: unknown })?.hubWrite) return data;
+  // Hub flags writes (exclusive / pinnedToLatest / pinnedUntil on a published
+  // article) change no content either: same exemption — no `version` bump (the
+  // hub's `expectedVersion` stays valid), no `lastEditedBy`, no stale-marking.
+  if ((req.context as { hubFlags?: unknown })?.hubFlags) return data;
 
   const ctx = engineCtx(req.context);
   const isHuman = Boolean(req.user);
@@ -243,6 +254,10 @@ export const articleActivity: CollectionAfterChangeHook = async ({
   operation,
 }) => {
   const ctx = engineCtx(req.context);
+  // Hub flags writes (review L2): this hook runs INSIDE the route's transaction but
+  // `logActivity` does not, so a row written here would survive a rolled-back write.
+  // The flags route writes its one `human_edit` row itself, after the commit.
+  if (ctx.hubFlags) return doc;
   // A hub write has an authenticated engine key behind it → "engine".
   const actorType = ctx.hubWrite || ctx.hubAuthor ? "engine" : req.user ? "human" : ctx.engineWrite ? "engine" : "system";
   const tenantId = toId(doc.tenant);
@@ -261,7 +276,11 @@ export const articleActivity: CollectionAfterChangeHook = async ({
       targetCollection: "articles",
       targetId: doc.id,
       toStatus: next,
-      detail: ctx.hubAuthor ? { via: "hub", actor: ctx.hubAuthor.actor, action: "create" } : undefined,
+      detail: ctx.hubAuthor
+        ? ctx.hubAuthor.fields?.length
+          ? { via: "hub", actor: ctx.hubAuthor.actor, action: "create", fields: ctx.hubAuthor.fields }
+          : { via: "hub", actor: ctx.hubAuthor.actor, action: "create" }
+        : undefined,
     });
   } else if (prev !== next) {
     await logActivity({

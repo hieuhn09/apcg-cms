@@ -10,7 +10,7 @@ metadata:
 
 # Integrations Context
 
-Last updated: 2026-10-22 (AsiaBeautyBrief `abb`, branch only, not merged: `abb: ["pressroom"]` in SINGLE_HOME_PILLARS + ENGINE_BLOCKED_PILLARS; new public read routes `GET /api/public/booths` + `/api/public/booths/{slug}` gated on the new `exhibition` feature; see §AsiaBeautyBrief booths API) Previously: 2026-10-20 (`Articles.exclusive` checkbox description and comment made tenant-neutral, apcg-cms#46 `aa0e692`, copy only, no migration; used by brief-asia and by dtw/Opentechwire (dtw-web#60); unrelated to GCV's `exclusive` pillar; see §Exclusive flag) Previously: 2026-10-15 (APCGHub P5.1b–P5.6 reconciled: P5.1b + P5.2 publish/schedule routes are on `main`; P5.3 `POST /api/hub/media`, P5.4 `PATCH /api/hub/articles/{id}/live` (env switch `HUB_LIVE_EDIT_TENANTS`), P5.6 `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` exist ONLY on the unmerged draft PR apcg-cms#36 (head `5d5b28c`); none is VERIFIED; see §Cross-tenant reads → HUB AUTHORING P5.1b–P5.6) Previously: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+Last updated: 2026-10-28 (hub editorial flags — "Ghim lên Mới nhất" / "Độc quyền" from APCGHub, branch `claude/hub-pin-exclusive-cms`, NOT merged, NOT deployed: the draft routes accept root keys `exclusive` / `pinnedToLatest` / `pinnedUntil`; NEW `POST /api/hub/articles/{id}/flags`; `editorialFlags` discovery; env switch `HUB_EDITORIAL_FLAGS_TENANTS`; the unpin cron is now compare-and-set; see §Cross-tenant reads → HUB EDITORIAL FLAGS) Previously: 2026-10-22 (AsiaBeautyBrief `abb`, branch only, not merged: `abb: ["pressroom"]` in SINGLE_HOME_PILLARS + ENGINE_BLOCKED_PILLARS; new public read routes `GET /api/public/booths` + `/api/public/booths/{slug}` gated on the new `exhibition` feature; see §AsiaBeautyBrief booths API) Previously: 2026-10-20 (`Articles.exclusive` checkbox description and comment made tenant-neutral, apcg-cms#46 `aa0e692`, copy only, no migration; used by brief-asia and by dtw/Opentechwire (dtw-web#60); unrelated to GCV's `exclusive` pillar; see §Exclusive flag) Previously: 2026-10-15 (APCGHub P5.1b–P5.6 reconciled: P5.1b + P5.2 publish/schedule routes are on `main`; P5.3 `POST /api/hub/media`, P5.4 `PATCH /api/hub/articles/{id}/live` (env switch `HUB_LIVE_EDIT_TENANTS`), P5.6 `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` exist ONLY on the unmerged draft PR apcg-cms#36 (head `5d5b28c`); none is VERIFIED; see §Cross-tenant reads → HUB AUTHORING P5.1b–P5.6) Previously: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
 hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
 Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
 new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
@@ -128,6 +128,7 @@ Update this group when:
 | `POST /api/hub/articles/{id}/publish`, `POST /api/hub/articles/{id}/schedule` | Hub WRITE engine bearer token (`authenticateHubWriteEngine`: `hubRead` + `hubWrite`) | **Internal** — APCGHub composer (content-engine P5.2) | Publish / schedule / unschedule ONE hub-authored draft; merged (`#33`, `#34`). See §HUB AUTHORING P5.1b–P5.6. |
 | `POST /api/hub/media`, `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` | Hub AUTHOR engine bearer token (`hubRead` + `hubAuthor`) | **Internal** — APCGHub composer (content-engine P5.3 / P5.6) | Image upload; signed 10-minute preview link; create a pen name / a tag. **Only on unmerged draft PR apcg-cms#36**, not deployed. See §HUB AUTHORING P5.1b–P5.6. |
 | `PATCH /api/hub/articles/{id}/live` | Hub WRITE engine bearer token (`hubRead` + `hubWrite`; a key that also has `hubAuthor` is refused) | **Internal** — APCGHub composer (content-engine P5.4) | Edit a PUBLISHED hub-authored article in place; OFF unless env `HUB_LIVE_EDIT_TENANTS` lists the tenant. **Only on unmerged draft PR apcg-cms#36.** |
+| `POST /api/hub/articles/{id}/flags` | Hub WRITE engine bearer token (`hubRead` + `hubWrite`; a key that also has `hubAuthor` is refused, logged `engine_action_denied`) | **Internal** — APCGHub Thư viện article page (content-engine plan `hub-pin-exclusive-flags_PLAN_28-10-26.md`) | Set `exclusive` / `pinnedToLatest` / `pinnedUntil` on ONE PUBLISHED article of ANY origin; OFF unless env `HUB_EDITORIAL_FLAGS_TENANTS` lists the tenant. **Branch only (`claude/hub-pin-exclusive-cms`), not merged.** See §Cross-tenant reads → HUB EDITORIAL FLAGS. |
 | `/(payload)` route group | Payload's own admin session | **Framework-managed** | Payload-generated `/admin` UI + its own REST/GraphQL under `/api` — not a hand-written contract, changes with the Payload version. |
 | `/(console)/console/*` | Payload human session (reused, `src/console/auth.ts`) | **Internal** — staff-only alternate admin UI | See §Cross-tenant reads — this is the one surface with an existing "see multiple tenants at once" shape, and it is human-session-only. |
 
@@ -684,6 +685,70 @@ context pass; probes `hub-probe.ts --setup7/--check7` (P5.2), `--setup8/--check8
 were NOT re-run by the context pass (they need a disposable DB + dev server; counts come from the
 independent EVL reports in the content-engine repo). `--check10` has a hidden precondition:
 `HUB_LIVE_EDIT_TENANTS=dtw,gcv,world-travel-brief,p54-hook` must be in the server's environment.
+
+### HUB EDITORIAL FLAGS (2026-10-28, branch only) — "Ghim lên Mới nhất" + "Độc quyền" from the hub
+
+Answer first: the hub can set `exclusive` and the pin (`pinnedToLatest` + `pinnedUntil`) without CMS
+admin — on drafts through the existing draft routes, on published articles of ANY origin (hub, engine,
+CMS admin) through one new narrow route. No migration (the three columns exist). **Branch
+`claude/hub-pin-exclusive-cms` only, NOT merged, NOT deployed.** Plan (content-engine repo):
+`process/features/apcg-hub/active/hub-pin-exclusive-flags_PLAN_28-10-26.md`.
+
+- **Switch:** env `HUB_EDITORIAL_FLAGS_TENANTS` — CSV of CMS tenant slugs (exact, case-sensitive; `*` is
+  not a wildcard), default OFF, read on every call (`editorialFlagsTenants`, `src/lib/hub-author-flags.ts`).
+  Set ONLY by the owner on this repo's Vercel project, not in the example env file; Vercel needs a
+  Redeploy. Kill switch = remove the tenant / delete the variable + Redeploy; values already set stay.
+  Preview shares the production DB.
+- **Discovery (additive):** `GET /api/hub/taxonomy` → `tenants[i].editorialFlags`; `GET
+  /api/hub/articles/{id}` (also `view=edit`) → `article.exclusive`, `article.pinnedToLatest`,
+  `article.pinnedUntil` (UTC ISO or null) and `article.editorialFlags`; `view=edit` editable block →
+  `edit.pinnedUntil`; `GET /api/hub/articles` rows → the three fields. An expired pin is NOT cleared on
+  read (the hub compares with now; the public feed already filters it).
+- **Draft routes (`POST /api/hub/articles`, `PATCH …/{id}`):** three new ROOT keys (never under `flags`:
+  `flags.exclusive` stays 400; `HUB_FLAG_KEYS` and the 15 live keys unchanged). Pure checks at parse
+  (422): booleans; the pin pair travels together (missing one ⇒ `required`); `pinnedUntil` null or K7 UTC
+  (`format`); `pinnedToLatest:false` + a date ⇒ `pinnedUntil: invalid`. After tenant + `features.articles`,
+  ONLY when an editorial key is present: tenant off the switch ⇒ 422 `not_enabled` on every key sent;
+  then the window now + 60 s < t ≤ now + 365 d ⇒ `out_of_range`. PATCH compares with the latest version
+  (`pinnedUntil` by instant); `changed` / `human_edit.fields` name the keys; create adds
+  `article_created.detail.fields`.
+- **`POST /api/hub/articles/{id}/flags`** (`src/lib/hub-article-flags-core.ts`). Body EXACTLY `{tenant,
+  actor, expected, set}` (≤ 16,384 bytes, 413 before JSON); `expected` = the three stored values the page
+  showed; `set` = a non-empty subset (draft pair rules + window; errors named `fields.<key>`, `expected`
+  errors `fields["expected.<key>"]`). Order: auth (401/403) → author key ⇒ 403 `author key cannot change
+  flags` (logged `engine_action_denied`) → 413/400/422 → tenant ∈ grant (403) → `features.articles` (403)
+  → switch (403 `feature_disabled` "editorial flags disabled for tenant") → id shape + int4 (404) → an
+  UNLOCKED tenant-only read (404, same body: no lock is ever taken on another tenant's row) →
+  `withHubArticleLock` + `FOR NO KEY UPDATE` → latest + main of that tenant (404) → gate (422
+  `not_flaggable` `scheduled` | `status` | `legacy_status` (imported `_status:draft` +
+  `workflowStatus:published`); 409 `draft_diverged`) → `expected` ≠ main ⇒ 409 `flags_conflict` +
+  `current` → nothing to change ⇒ 200 `changed: []`, no write → ONE non-draft update of the changed
+  columns in the article's source language, context `{hubFlags, engineId, skipTranslationEnqueue,
+  disableRevalidate}` (bookkeeping skips: no `version` bump; `articleActivity` writes nothing) →
+  post-write check on every column / locale (another column moved or the latest version diverged, e.g.
+  a human Save Draft mid-flight ⇒ rollback + 409 `draft_diverged`; our value missing ⇒ rollback + 500;
+  both write ONE `integration_error` row AFTER the rollback, `post_write_divergence` with the leg and
+  column names only, or `post_write_check`) → COMMIT → then, outside the transaction, ONE structured
+  info log line `hub_flags_changed` (article id, tenant, actor email / id / role, fields, from, to: the
+  audit fallback if the row insert fails), ONE `human_edit` ActivityLog row `{via:"hub", actor,
+  action:"flags", fields, from, to}` and ONE revalidate webhook (`revalidateTenantDoc`,
+  `src/hooks/revalidate.ts`, tags `articles:all` + slug). A failing log row or webhook is logged and
+  never changes the committed 200. Write errors: `ValidationError` (single-home
+  V6: a Pressroom article cannot be `exclusive`) ⇒ 422 `fields.exclusive: invalid`; 55P03/40P01/40001 ⇒
+  503 busy; else 500 (name + code logged only). The CMS records `actor` but never authorizes by it (the
+  hub's `hubMayFlag` is the authority; `actor.role` must be admin | editor | marketer).
+- **Cron `unpin-expired` (changed):** each write is a compare-and-set (`src/lib/unpin-expired.ts`):
+  under the hub article lock + the row lock the latest version is re-read and unpinned only if still
+  pinned with `pinnedUntil <= now`; a pin re-set after the search is `skipped` (the response gains
+  `skipped: [{id, reason}]`); a row whose hub lock is held (a flags / live write in flight) is skipped
+  `busy`, logged by id, and retried on the next run; `maxDuration = 60`. Residual: a CMS admin DRAFT save in the same milliseconds is not blocked.
+- **Versions:** every flags write (and every unpin sweep) adds an `_articles_v` row; Articles keeps
+  `maxPerDoc` 100 (Payload default), so frequent toggles can prune old versions of an article (see the
+  plan's risks).
+- **Verification (disposable local Postgres only):** `npm run test:hub-flags` (3 files) and
+  `scripts/hub-probe.ts --setup12 --out <f12>` / `--check12 --in <f12>` (7 groups P, A, B, C, R, D, E;
+  the server needs `HUB_EDITORIAL_FLAGS_TENANTS=gcv,world-travel-brief,p12-hook`). Counts:
+  `process/context/tests/all-tests.md`.
 
 ---
 

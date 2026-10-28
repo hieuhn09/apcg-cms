@@ -15,6 +15,11 @@
  * country}` (cap 1000; a tenant without `citiesMap` gets an empty block with
  * `disabled: true`).
  *
+ * hub-pin-exclusive-flags (Public Contracts CMS 5; additive, every `kinds`): each tenant
+ * entry carries `editorialFlags: boolean` = the tenant is on the CMS switch
+ * HUB_EDITORIAL_FLAGS_TENANTS (read once per request). The hub locks "Ghim" / "Độc quyền"
+ * unless it is `true` (an older CMS without the key ⇒ locked too).
+ *
  * Empty/absent tenants|pillar|kinds means ALL allowed — callers must never send
  * an empty scope by accident (Hub-1 lesson D0).
  *
@@ -35,6 +40,7 @@ import config from "@payload-config";
 import { authenticateHubEngine, narrowHubTenants } from "@/lib/hub-auth";
 import { scopedFind } from "@/lib/scoped";
 import { parseKinds } from "@/lib/hub-query";
+import { editorialFlagsTenants, isEditorialFlagsTenant } from "@/lib/hub-author-flags";
 import {
   AUTHOR_SELECT,
   PILLAR_SELECT,
@@ -114,6 +120,7 @@ export async function GET(request: Request): Promise<Response> {
   const wantTags = kinds.kinds.includes("tags");
   const wantCountries = kinds.kinds.includes("countries");
   const wantCities = kinds.kinds.includes("cities");
+  const flagsOn = editorialFlagsTenants();
 
   try {
     // Countries are global: read once, the same block for every tenant.
@@ -164,13 +171,14 @@ export async function GET(request: Request): Promise<Response> {
         ]);
         const entry: {
           tenant: string;
+          editorialFlags: boolean;
           pillars?: Block<HubPillar>;
           authors?: Block<HubAuthor>;
           subsections?: HubBlock<HubSubsection>;
           tags?: HubBlock<HubTag>;
           countries?: HubBlock<HubCountry>;
           cities?: HubBlock<HubCity>;
-        } = { tenant: t.slug };
+        } = { tenant: t.slug, editorialFlags: isEditorialFlagsTenant(t.slug, flagsOn) };
         if (pillars) {
           entry.pillars = block(pillars.docs as unknown as Record<string, unknown>[], pillars.totalDocs, PILLARS_CAP, sanitizeHubPillar);
         }

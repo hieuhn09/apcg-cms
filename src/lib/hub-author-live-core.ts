@@ -41,7 +41,6 @@
 
 import { getPayload, type Payload, type PayloadRequest } from "payload";
 import config from "@payload-config";
-import { sql } from "@payloadcms/db-postgres";
 import { isHubArticleId } from "@/lib/hub-article-id";
 import { loadHubEditorConfig } from "@/lib/hub-article-markdown";
 import { json } from "@/lib/http";
@@ -51,9 +50,9 @@ import { authenticateHubWriteEngine } from "@/lib/hub-write-auth";
 import { isHubAuthoredDoc } from "@/lib/hub-author-auth";
 import type { ConvertResult, HubEditorConfig } from "@/lib/hub-author-body";
 import { extractMediaIds, uploadIdsInTree } from "@/lib/hub-author-media-token";
-import type { HubDraftFieldKey, HubDraftInput } from "@/lib/hub-author-input";
+import type { HubDraftInput, HubWriteKey } from "@/lib/hub-author-input";
 import { checkPublishable } from "@/lib/hub-author-publish-core";
-import { withHubArticleLock, type HubLockCtx, type HubLockResult } from "@/lib/hub-article-lock";
+import { defaultLockRow, withHubArticleLock, type HubLockCtx, type HubLockResult } from "@/lib/hub-article-lock";
 import {
   buildDraftUpdateData,
   defaultFindMain,
@@ -110,7 +109,7 @@ export const LIVE_KEY_COLUMNS: Record<HubLiveFieldKey, readonly string[]> = {
 };
 
 /** The columns left out of D12 (1) for this write: the mapped columns of every CHANGED key. */
-export function liveChangedColumns(changed: readonly HubDraftFieldKey[], data: Record<string, unknown>): string[] {
+export function liveChangedColumns(changed: readonly HubWriteKey[], data: Record<string, unknown>): string[] {
   const out: string[] = [];
   for (const k of changed) {
     if (!isLiveFieldKey(k)) continue;
@@ -132,10 +131,6 @@ const authorKeyRefused = () => json({ ok: false, status: "forbidden", reason: "a
 
 // ── Seams ────────────────────────────────────────────────────────────────────
 
-interface Executor {
-  execute: (q: unknown) => Promise<unknown>;
-}
-
 /** D12 / D1 (iii): a main-row read on the TRANSACTION (`req`), depth 0. */
 export type FindMainTx = (payload: Payload, id: Id, req: PayloadRequest | undefined, o?: { locale?: string }) => Promise<Doc | null>;
 
@@ -155,19 +150,10 @@ export function readMainAll(payload: Payload, id: Id, req: PayloadRequest | unde
   return findMainTx(payload, id, req, { locale: "all" });
 }
 
-/**
- * D16: `SELECT 1 FROM articles WHERE id = $1 FOR NO KEY UPDATE` on the transaction's own
- * session (the way `hub-article-lock.ts` runs raw SQL). No session ⇒ throw (⇒ 500, no write).
- * NO KEY: blocks every `UPDATE articles` of this row (Hide / Republish / Publish / intake /
- * crons) but not an INSERT with a foreign key to it (`_articles_v`, `translation_jobs`).
- */
-export async function defaultLockRow(payload: Payload, id: Id, req: PayloadRequest | undefined): Promise<void> {
-  const adapter = payload.db as unknown as { sessions?: Record<string, { db?: Executor } | undefined> };
-  const txId = req?.transactionID;
-  const exec = txId != null ? adapter.sessions?.[String(txId)]?.db : undefined;
-  if (!exec) throw new Error("hub live: no transaction session for the row lock");
-  await exec.execute(sql`SELECT 1 FROM articles WHERE id = ${Number(id)} FOR NO KEY UPDATE`);
-}
+// D16: `defaultLockRow` (`SELECT 1 FROM articles WHERE id = $1 FOR NO KEY UPDATE` on the
+// transaction's own session) now lives in `hub-article-lock.ts`, so the unpin cron and the flags
+// route can take it without importing the live-edit graph; re-exported here unchanged.
+export { defaultLockRow };
 
 /** Injectable seams (unit checks / the in-process probe only; production never passes them). */
 export interface HubLiveDeps {
@@ -315,7 +301,7 @@ export async function handleHubLiveUpdateWith(
 
   async function inLock(
     lk: HubLockCtx,
-    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubDraftFieldKey[] },
+    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubWriteKey[] },
   ): Promise<HubLockResult> {
     const { v, tenant, articleId, data, changed } = s;
     const fail = (value: Response): HubLockResult => ({ ok: false, value });

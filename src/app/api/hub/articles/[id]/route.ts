@@ -33,6 +33,11 @@
  *     `origin`; only when the main row is a manual draft is the LATEST draft read,
  *     and only then do `article.*` and `bodyMarkdown` come from that latest read.
  *   - `PATCH` — update one hub-authored draft (src/lib/hub-author-handlers.ts).
+ *
+ * hub-pin-exclusive-flags (Public Contracts CMS 3; additive): `article` also carries
+ * `exclusive`, `pinnedToLatest`, `pinnedUntil` and `editorialFlags` (= this tenant is on the
+ * CMS switch HUB_EDITORIAL_FLAGS_TENANTS, read on this call) — on both the default read and
+ * `view=edit`.
  */
 
 import { getPayload } from "payload";
@@ -51,6 +56,7 @@ import { logActivity } from "@/lib/activity";
 import { toId } from "@/access/helpers";
 import { HUB_ARTICLE_EDIT_MAIN_SELECT, applyBodyTokenFallback, loadHubArticleEdit, withholdForeignHero, type HubArticleEdit } from "@/lib/hub-article-edit-select";
 import { handleHubDraftUpdate } from "@/lib/hub-author-handlers";
+import { editorialFlagsTenants, isEditorialFlagsTenant } from "@/lib/hub-author-flags";
 
 /** Two conversions at most per PATCH (stored body round trip + new body), each ≤ T. */
 export const maxDuration = 30;
@@ -179,10 +185,11 @@ export async function GET(
   }
 
   // 7. Fresh object, allowlisted fields only.
+  const flagsOpts = { editorialFlags: isEditorialFlagsTenant(tenant.slug, editorialFlagsTenants()) };
   return json(
     edit
-      ? { ok: true, article: sanitizeHubArticleDetail(doc, tenant.slug, { bodyMarkdown: body.bodyMarkdown, bodyState: body.bodyState }), edit }
-      : { ok: true, article: sanitizeHubArticleDetail(doc, tenant.slug, { bodyMarkdown: body.bodyMarkdown, bodyState: body.bodyState }) },
+      ? { ok: true, article: sanitizeHubArticleDetail(doc, tenant.slug, { bodyMarkdown: body.bodyMarkdown, bodyState: body.bodyState }, flagsOpts), edit }
+      : { ok: true, article: sanitizeHubArticleDetail(doc, tenant.slug, { bodyMarkdown: body.bodyMarkdown, bodyState: body.bodyState }, flagsOpts) },
     200,
   );
 }

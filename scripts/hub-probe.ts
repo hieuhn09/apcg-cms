@@ -30,6 +30,9 @@
  * --check10 section right before the dispatch).
  * --check11 = P5.6 (pen name / tag create: POST /api/hub/authors, POST /api/hub/tags; see the
  * --check11 section right before the dispatch; f10 from a chặng-2 --setup10).
+ * --setup12/--check12 = hub-pin-exclusive-flags ("Ghim" / "Độc quyền" from the hub: editorial
+ * root keys of the draft routes, POST /api/hub/articles/{id}/flags, `editorialFlags`; see the
+ * --check12 section right before the dispatch).
  */
 
 import "./lib/env";
@@ -822,7 +825,8 @@ async function check2() {
   // ── G-P2 key set ──
   const base = await call("articles", "?limit=200");
   expect("G-P2 /articles → 200", base.status, 200);
-  const wantKeys = ["contentType", "id", "lastEditedBy", "pillar", "publishedAt", "slug", "tenant", "title", "views", "workflowStatus"];
+  // hub-pin-exclusive-flags (Public Contracts CMS 4): + exclusive, pinnedToLatest, pinnedUntil.
+  const wantKeys = ["contentType", "exclusive", "id", "lastEditedBy", "pillar", "pinnedToLatest", "pinnedUntil", "publishedAt", "slug", "tenant", "title", "views", "workflowStatus"];
   const keySets = [...new Set(arts(base.body).map((a) => Object.keys(a).sort().join(",")))];
   expect("G-P2 every article has exactly the contract keys", keySets, [wantKeys.join(",")]);
   const pillarKeys = [
@@ -1524,9 +1528,10 @@ const lx = {
   root: (...children: unknown[]) => ({ root: lx.el("root", children) }),
 };
 
+// hub-pin-exclusive-flags (Public Contracts CMS 3): + editorialFlags, exclusive, pinnedToLatest, pinnedUntil.
 const DETAIL_KEYS = [
-  "author", "bodyMarkdown", "bodyState", "coAuthors", "contentType", "dek", "heroImage", "id", "pillar", "publishedAt",
-  "readMin", "slug", "subSection", "tags", "takeaways", "tenant", "title", "updatedAt", "video", "views", "workflowStatus",
+  "author", "bodyMarkdown", "bodyState", "coAuthors", "contentType", "dek", "editorialFlags", "exclusive", "heroImage", "id", "pillar",
+  "pinnedToLatest", "pinnedUntil", "publishedAt", "readMin", "slug", "subSection", "tags", "takeaways", "tenant", "title", "updatedAt", "video", "views", "workflowStatus",
 ];
 
 // 1×1 PNG, and a minimal ISO-BMFF `ftyp` header (detected as video/mp4).
@@ -4588,7 +4593,9 @@ async function check6Unit(expect: (label: string, actual: unknown, wanted: unkno
   {
     const listRoute = await import("../src/app/api/hub/articles/route");
     const idRoute = await import("../src/app/api/hub/articles/[id]/route");
-    const srcFiles = walkFiles("src").filter((p) => /\.(ts|tsx)$/.test(p));
+    // Production files only: a `*.test.ts` unit check calling the `…With` seam is a legitimate user
+    // (hub-pin-exclusive-flags: src/lib/hub-article-flags-core.test.ts drives the draft routes with fakes).
+    const srcFiles = walkFiles("src").filter((p) => /\.(ts|tsx)$/.test(p) && !/\.test\.tsx?$/.test(p));
     const withUsers = srcFiles.filter((p) => /handleHubDraft(Create|Update)With\(/.test(readFileSync(p, "utf8")));
     const listText = readFileSync("src/app/api/hub/articles/route.ts", "utf8");
     const idText = readFileSync("src/app/api/hub/articles/[id]/route.ts", "utf8");
@@ -4623,8 +4630,14 @@ async function check6Unit(expect: (label: string, actual: unknown, wanted: unkno
     expect("U parse 400s: not an object / array / tenant missing / tenant not a string / blank", [
       fields(pc(null as unknown as Doc)), fields(pc([] as unknown as Doc)), fields(pc({ title: "x" })), fields(pc({ ...base(), tenant: 5 })), fields(pc({ ...base(), tenant: "  " })),
     ], ["400:body must be a JSON object", "400:body must be a JSON object", "400:tenant is required", "400:tenant is required", "400:tenant is required"]);
-    const forbiddenKeys = ["exclusive", "translationAssisted", "workflowStatus", "_status", "origin", "publishedAt", "scheduledFor", "engineDraftId", "version", "id", "heroImage", "body", "pinnedToLatest", "pinnedUntil", "expectedVersion"];
+    // hub-pin-exclusive-flags (D2): `exclusive`, `pinnedToLatest`, `pinnedUntil` are no longer forbidden ROOT keys
+    // (they are the editorial keys, checked below); every other key here stays a 400.
+    const forbiddenKeys = ["translationAssisted", "workflowStatus", "_status", "origin", "publishedAt", "scheduledFor", "engineDraftId", "version", "id", "heroImage", "body", "expectedVersion"];
     expect("U parse K: every forbidden root key ⇒ 400 unknown field(s): <key>", forbiddenKeys.map((k) => fields(pc({ ...base(), [k]: true }))), forbiddenKeys.map((k) => `400:unknown field(s): ${k}`));
+    expect("U parse K (hub-pin-exclusive-flags D2/D5): editorial ROOT keys parse (exclusive ok; the pin pair travels together, `required` on the missing one; pinnedUntil true ⇒ type)", [
+      fields(pc({ ...base(), exclusive: true })), fields(pc({ ...base(), pinnedToLatest: true })), fields(pc({ ...base(), pinnedUntil: true })),
+      fields(pc({ ...base(), pinnedToLatest: true, pinnedUntil: "2026-10-30T11:00Z" })), fields(pc({ ...base(), pinnedToLatest: false, pinnedUntil: "2026-10-30T11:00Z" })),
+    ], ["ok", { pinnedUntil: "required" }, { pinnedUntil: "type", pinnedToLatest: "required" }, "ok", { pinnedUntil: "invalid" }]);
     const proto = JSON.parse('{"tenant":"dtw","__proto__":{"x":1},"flags":{"__proto__":true,"exclusive":true,"pinnedToLatest":true}}') as Doc;
     expect("U parse K: __proto__ (root + flags), flags.exclusive / pinnedToLatest ⇒ 400 with prefixes", fields(pc(proto)), "400:unknown field(s): __proto__, flags.__proto__, flags.exclusive, flags.pinnedToLatest");
     expect("U parse K: actor / secondary unknown keys get prefixes", fields(pc({ ...base(), actor: { email: "a@b.co", role: "editor", x: 1 }, secondary: [{ pillarSlug: "q", y: 2 }] })), "400:unknown field(s): actor.x, secondary[0].y");
@@ -4857,7 +4870,9 @@ async function check6Unit(expect: (label: string, actual: unknown, wanted: unkno
     expect("U sanitizeHubArticleEdit(editable:true): fresh object, slugs + ids, read-only flags, never lastEngine", e, {
       origin: "manual", version: 4, editable: true, editableReason: "ok", bodyEditable: true, pillarSlug: "p", subSectionSlug: null, secondary: [{ pillarSlug: "q", subSectionSlug: "s" }],
       tagSlugs: ["t"], countrySlugs: ["vn"], citySlugs: [], authorId: 3, coAuthorIds: [4, 5],
-      flags: { aiAssisted: false, breaking: true, sponsored: false, affiliate: false, deepDive: false, longHaul: false, pinnedToLatest: false, exclusive: true }, sponsor: null,
+      flags: { aiAssisted: false, breaking: true, sponsored: false, affiliate: false, deepDive: false, longHaul: false, pinnedToLatest: false, exclusive: true },
+      // hub-pin-exclusive-flags (Public Contracts CMS 2): `edit.pinnedUntil`, null when not stored.
+      pinnedUntil: null, sponsor: null,
     });
   }
 }
@@ -5225,13 +5240,19 @@ async function check6() {
   {
     const n0 = await artCount();
     const e0 = await errCount();
-    const keys = ["exclusive", "translationAssisted", "_status", "origin", "publishedAt", "scheduledFor", "engineDraftId", "version", "id", "heroImage", "body", "pinnedToLatest", "pinnedUntil"];
+    // hub-pin-exclusive-flags (D2): exclusive / pinnedToLatest / pinnedUntil left this list (editorial ROOT keys, next expect).
+    const keys = ["translationAssisted", "_status", "origin", "publishedAt", "scheduledFor", "engineDraftId", "version", "id", "heroImage", "body"];
     const rs: unknown[] = [];
     for (const k of keys) {
       const r = await post({ ...draft(), [k]: true });
       rs.push([r.status, r.body.reason]);
     }
     expect("K every forbidden root key ⇒ 400 unknown field(s): <key>", rs, keys.map((k) => [400, `unknown field(s): ${k}`]));
+    // PRECONDITION: `dtw` is NOT on the server's HUB_EDITORIAL_FLAGS_TENANTS (the --check12 env lists gcv, world-travel-brief, p12-hook).
+    const edK = [await post({ ...draft(), exclusive: true }), await post({ ...draft(), pinnedToLatest: true }), await post({ ...draft(), pinnedUntil: true }), await post({ ...draft(), pinnedToLatest: true, pinnedUntil: null })];
+    expect("K editorial ROOT keys on dtw (switch off): exclusive ⇒ 422 not_enabled; the pin pair rules run first (422 required / type); pair ok ⇒ 422 not_enabled", edK.map((r) => [r.status, r.body.fields]), [
+      [422, { exclusive: "not_enabled" }], [422, { pinnedUntil: "required" }], [422, { pinnedUntil: "type", pinnedToLatest: "required" }], [422, { pinnedToLatest: "not_enabled", pinnedUntil: "not_enabled" }],
+    ]);
     const fl = await post({ ...draft(), flags: { exclusive: true, pinnedToLatest: true } });
     const pr = await call("POST", "/api/hub/articles", undefined, T.author, `{"tenant":"dtw","__proto__":{"x":1}}`);
     const tn = await post({ ...draft(), tenant: 5 });
@@ -5595,7 +5616,8 @@ async function check6() {
   {
     const dflt = await call("GET", "/api/hub/taxonomy?tenants=dtw", undefined, T.author);
     const entry = ((dflt.body.tenants as Doc[] | undefined) ?? [])[0] ?? {};
-    expect("T default kinds: only pillars + authors keys", Object.keys(entry).sort(), ["authors", "pillars", "tenant"]);
+    // hub-pin-exclusive-flags (Public Contracts CMS 5): every tenant entry also carries `editorialFlags` (boolean).
+    expect("T default kinds: only pillars + authors keys (+ editorialFlags boolean)", [Object.keys(entry).sort(), typeof entry.editorialFlags], [["authors", "editorialFlags", "pillars", "tenant"], "boolean"]);
     const all = await call("GET", "/api/hub/taxonomy?tenants=dtw,world-travel-brief&kinds=subsections,tags,countries,cities", undefined, T.author);
     const [d, w] = (all.body.tenants as Doc[] | undefined) ?? [];
     const sub = ((d?.subsections as Doc | undefined)?.items as Doc[] | undefined) ?? [];
@@ -10251,7 +10273,8 @@ async function check8() {
       const ed = (e.body.edit ?? {}) as Doc;
       const bm = String(((e.body.article ?? {}) as Doc).bodyMarkdown ?? "");
       const hero = ed.hero as Doc | null;
-      expect("P2-1: (AC9) view=edit editable: 15 sanitizer keys + hero, leadImageCaption, bodyMedia", [e.status, ed.editable, Object.keys(ed).length, Object.keys(ed).slice(-3)], [200, true, 18, ["hero", "leadImageCaption", "bodyMedia"]]);
+      // hub-pin-exclusive-flags (Public Contracts CMS 2): the sanitizer gained `pinnedUntil` (15 ⇒ 16 keys, 18 ⇒ 19 in all).
+      expect("P2-1: (AC9) view=edit editable: 16 sanitizer keys (15 + pinnedUntil) + hero, leadImageCaption, bodyMedia", [e.status, ed.editable, Object.keys(ed).length, "pinnedUntil" in ed, Object.keys(ed).slice(-3)], [200, true, 19, true, ["hero", "leadImageCaption", "bodyMedia"]]);
       expect("P2-2: edit.hero = own media {id,url,alt,width,height,credit} with the RAW url; leadImageCaption", [hero && Object.keys(hero), hero?.id, typeof hero?.url === "string" && (hero.url as string).startsWith("/api/media/file/hub-"), hero?.alt, ed.leadImageCaption], [["id", "url", "alt", "width", "height", "credit"], gA, true, "P2 alt A", "P2 caption"]);
       const bmi = ((ed.bodyMedia ?? []) as Doc[]);
       expect("P2-3: edit.bodyMedia = distinct own-tenant ids in tree order (other tenant dropped), keys {id,url,alt,width,height}", [bmi.map((m) => m.id), bmi.every((m) => Object.keys(m).join() === "id,url,alt,width,height")], [[gA, gB, inj], true]);
@@ -11535,7 +11558,8 @@ async function check9() {
       ], [false, "not_hub_authored", { editable: false, reason: "feature_disabled", version: null }]);
       const n = await getEdit(A.n.id, "gcv");
       const nd = await getEdit(A.n.id, "gcv", "");
-      expect("P15-4: hub draft (n) ⇒ editable true, no live key, 18 keys; default read ⇒ no edit key", [((n.body.edit as Doc).editable), "live" in (n.body.edit as Doc), Object.keys(n.body.edit as Doc).length, "edit" in nd.body], [true, false, 18, false]);
+      // hub-pin-exclusive-flags (Public Contracts CMS 2): the editable block gained `pinnedUntil` (18 ⇒ 19 keys).
+      expect("P15-4: hub draft (n) ⇒ editable true, no live key, 19 keys (18 + pinnedUntil); default read ⇒ no edit key", [((n.body.edit as Doc).editable), "live" in (n.body.edit as Doc), Object.keys(n.body.edit as Doc).length, "pinnedUntil" in (n.body.edit as Doc), "edit" in nd.body], [true, false, 19, true, false]);
       // Baseline 0.1 (when the files sit next to f9): default read + hub-draft view=edit byte-identical (updatedAt removed).
       const dir = inFile.replace(/\/[^/]*$/, "");
       if (existsSyncSafe(`${dir}/baseline.json`) && existsSyncSafe(`${dir}/base-publishedId.json`)) {
@@ -12332,6 +12356,708 @@ async function check11() {
   process.exit(ok ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// hub-pin-exclusive-flags (--setup12 / --check12) — "Ghim lên Mới nhất" + "Độc quyền" from the
+// hub: the editorial ROOT keys of POST / PATCH /api/hub/articles, the new route
+// POST /api/hub/articles/{id}/flags, the `editorialFlags` discovery and the new read fields.
+// Content-engine plan process/features/apcg-hub/active/hub-pin-exclusive-flags_PLAN_28-10-26.md
+// (§Kiểm thử CMS, probe a–e). LOCAL DISPOSABLE POSTGRES + LOCAL SERVER ONLY: `guard12`
+// (assertLocalTargets + assertNoR2 + assertLocalDb) runs FIRST in every mode.
+//
+//   npx tsx scripts/hub-probe.ts --setup12 --out <f12>
+//       creates tenant p12-hook (frontendUrl = the fake webhook server on 127.0.0.1:$P12_HOOK_PORT,
+//       default 3598; translations off), four engines (author = hubRead + hubAuthor, write =
+//       hubRead + hubWrite, read = hubRead only, both = all three; grant dtw, gcv,
+//       world-travel-brief, p12-hook — wad stays out of grant), the taxonomy and the fixtures
+//       (engine-origin published on p12-hook and on world-travel-brief (translations on), a
+//       hub-published gcv article, a published article with a pending draft, an imported-shape
+//       article (_status draft + workflowStatus published), a hub-scheduled and a CMS-scheduled
+//       article, a hidden one, a gcv Pressroom one, a published dtw one and a published wad one).
+//       Tokens go to 0600 files, never printed. Needs the dev server (the hub ones are made
+//       through the real routes).
+//   npx tsx scripts/hub-probe.ts --check12 --in <f12>
+//       The server must run with HUB_EDITORIAL_FLAGS_TENANTS=gcv,world-travel-brief,p12-hook
+//       (dtw = the switch-off control; checked first through /api/hub/taxonomy, exit 2 when it
+//       differs), a test CENTRAL_SIGNING_SECRET (the webhook) and CRON_SECRET unset (the cron is
+//       open outside production) or exported to the probe too. Groups P (preconditions), A
+//       (draft routes), B (cron unpin on a hub draft + the cron's compare-and-set, review L3),
+//       C (the flags route: engine / translation tenant / hub article, the webhook AFTER the
+//       commit (review M1: the webhook handler reads the row from another connection and must
+//       already see the new values), ONE ActivityLog row, only the three columns + updatedAt
+//       move, public feeds), R (review M2 / F3, in-process `handleHubFlagsWith` with the REAL lock +
+//       row lock: a localized and a non-localized draft saved mid-flight ⇒ 409 + rollback + no
+//       phantom audit row + `_articles_v` delta 0; a concurrent UPDATE ⇒ 55P03; another tenant's id
+//       ⇒ 404 with no lock taken; the REAL cron during a flags write ⇒ `skipped` busy; a throwing
+//       webhook / audit insert ⇒ the 200 stands), D (errors), E (reads).
+//       Fresh drafts each run; prints `groups executed N/7` and exits ≠ 0 unless all seven ran
+//       and passed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const P12_GROUPS = ["P", "A", "B", "C", "R", "D", "E"] as const;
+const P12_ACTOR = { email: "p12@example.invalid", role: "editor", id: "hub-user-12" } as const;
+const P12_ON = ["gcv", "world-travel-brief", "p12-hook"] as const;
+const P12_OFF = "dtw";
+const P12_HOOK_TENANT = "p12-hook";
+const P12_OUT_OF_GRANT = "wad";
+const P12_GRANT_TENANTS = ["dtw", "gcv", "world-travel-brief", P12_HOOK_TENANT] as const;
+const P12_ENGINES = { author: { hubRead: true, hubAuthor: true, hubWrite: false }, write: { hubRead: true, hubWrite: true, hubAuthor: false }, read: { hubRead: true, hubWrite: false, hubAuthor: false }, both: { hubRead: true, hubWrite: true, hubAuthor: true } } as const;
+type P12Engine = keyof typeof P12_ENGINES;
+type P12Article = "engine" | "engineWtb" | "hub" | "diverged" | "legacy" | "schedHub" | "schedCms" | "hidden" | "pressroom" | "offDtw" | "outWad";
+/** The only columns a flags write may move (D8). */
+const P12_MOVABLE = ["exclusive", "pinnedToLatest", "pinnedUntil", "updatedAt"];
+
+interface Setup12 {
+  version: 1;
+  out: string;
+  hookPort: number;
+  tenants: Record<string, number>;
+  engines: Record<P12Engine, { id: number; name: string; tokenFile: string }>;
+  fixtures: Record<string, { pillar: string; pillarId: number; author: number }>;
+  articles: Record<P12Article, { id: number; tenant: string; slug: string }>;
+  publicReadTokenFile: string;
+}
+
+function guard12(): void {
+  assertLocalTargets();
+  assertNoR2("probe12");
+  try {
+    assertLocalDb(process.env.DATABASE_URL);
+  } catch (e) {
+    refuseLocalDb6(e);
+  }
+}
+
+const P12_BODY = { root: { type: "root", version: 1, direction: "ltr", format: "", indent: 0, children: [{ type: "paragraph", version: 1, direction: "ltr", format: "", indent: 0, textFormat: 0, textStyle: "", children: [{ type: "text", version: 1, text: "P12 fixture body.", format: 0, detail: 0, mode: "normal", style: "" }] }] } };
+
+async function setup12() {
+  guard12();
+  const out = arg("out");
+  if (!out) {
+    console.error("usage: tsx scripts/hub-probe.ts --setup12 --out <f12>");
+    process.exit(2);
+  }
+  const payload = await getPayload({ config });
+  const tenants = await tenantsBySlug(payload);
+  const hookPort = Number(process.env.P12_HOOK_PORT ?? 3598);
+
+  // The webhook tenant (created once; frontendUrl = the fake webhook server of --check12).
+  if (!tenants.has(P12_HOOK_TENANT)) {
+    const t = (await payload.create({
+      collection: "tenants",
+      overrideAccess: true,
+      context: { disableRevalidate: true },
+      data: { name: "P12 Hook", slug: P12_HOOK_TENANT, status: "active", defaultLanguage: "en", supportedLanguages: ["en"], frontendUrl: `http://127.0.0.1:${hookPort}`, features: { articles: true, translations: false } } as never,
+    })) as unknown as { id: number };
+    tenants.set(P12_HOOK_TENANT, t.id);
+  } else {
+    await payload.update({ collection: "tenants", id: tenants.get(P12_HOOK_TENANT)!, overrideAccess: true, context: { disableRevalidate: true }, data: { frontendUrl: `http://127.0.0.1:${hookPort}` } as never });
+  }
+  const allT = (await payload.find({ collection: "tenants", limit: 100, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+  const badUrl = allT.filter((t) => t.frontendUrl != null && t.frontendUrl !== "" && !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(String(t.frontendUrl)));
+  if (badUrl.length) {
+    console.error(`[setup12] refusing: tenant frontendUrl not local: ${badUrl.map((t) => t.slug).join(", ")}`);
+    process.exit(2);
+  }
+  const tid = (s: string) => need(tenants, s);
+  const grant = P12_GRANT_TENANTS.map((s) => tid(s));
+  if (grant.includes(tid(P12_OUT_OF_GRANT))) throw new Error("p12 grant must exclude wad");
+
+  const engines = {} as Setup12["engines"];
+  for (const key of Object.keys(P12_ENGINES) as P12Engine[]) {
+    const name = `apcghub-p12-${key}`;
+    const token = randomBytes(24).toString("hex");
+    const data = { rawToken: token, status: "active", allowedTenants: grant, ...P12_ENGINES[key] };
+    let id = await engineIdByName(payload, name);
+    if (id != null) await payload.update({ collection: "content-engines", id, overrideAccess: true, data: data as never });
+    else id = ((await payload.create({ collection: "content-engines", overrideAccess: true, data: { name, engineType: "other", allowedActions: ["import"], ...data } as never })) as unknown as { id: number }).id;
+    const tokenFile = `${out}.${key}.token`;
+    writeFileSync(tokenFile, token, { mode: 0o600 });
+    engines[key] = { id, name, tokenFile };
+  }
+
+  const fixtures: Setup12["fixtures"] = {};
+  for (const slug of [...P12_GRANT_TENANTS, P12_OUT_OF_GRANT]) {
+    const id = tid(slug);
+    const pillarId = await ensurePillar(payload, id, "p12-main", "P12 Main", 97);
+    const author = await ensureAuthor(payload, id, "p12-author-1", "P12 Author One");
+    fixtures[slug] = { pillar: "p12-main", pillarId, author };
+  }
+  const pressroomId = await ensurePillar(payload, tid("gcv"), "pressroom", "Pressroom", 98);
+
+  // Public read token for p12-hook (sha256 stored; raw only in a 0600 file).
+  const pt = randomBytes(24).toString("hex");
+  const hookDoc = (await payload.findByID({ collection: "tenants", id: tid(P12_HOOK_TENANT), depth: 0, overrideAccess: true })) as unknown as Doc;
+  const rest = ((hookDoc.readTokens as Doc[] | undefined) ?? []).filter((r) => r.label !== "probe12");
+  await payload.update({ collection: "tenants", id: tid(P12_HOOK_TENANT), overrideAccess: true, context: { disableRevalidate: true }, data: { readTokens: [...rest, { label: "probe12", tokenHash: sha256Hex6(pt), tokenPrefix: pt.slice(0, 6), status: "active" }] } as never });
+  const publicReadTokenFile = `${out}.public-${P12_HOOK_TENANT}.token`;
+  writeFileSync(publicReadTokenFile, pt, { mode: 0o600 });
+
+  const run = runId6();
+  const arts = {} as Setup12["articles"];
+  const now = Date.now();
+  const engineRec = (await engineIdByName(payload, "content-engine")) ?? engines.write.id;
+  const mk = async (k: P12Article, tenant: string, data: Doc, opts: { draft?: boolean; context?: Doc } = {}) => {
+    const slug = `p12-${run}-${k.toLowerCase()}`;
+    const f = fixtures[tenant]!;
+    const d = (await payload.create({
+      collection: "articles",
+      overrideAccess: true,
+      locale: "en",
+      ...(opts.draft ? { draft: true } : {}),
+      context: { disableRevalidate: true, ...(opts.context ?? {}) },
+      data: { tenant: tid(tenant), title: `P12 ${k} ${run}`, slug, pillar: f.pillarId, author: f.author, readMin: 2, body: P12_BODY, ...data } as never,
+    })) as unknown as { id: number };
+    arts[k] = { id: d.id, tenant, slug };
+    return d.id;
+  };
+  const engineData = (k: string) => ({ origin: "engine", engineDraftId: `p12-eng-${run}-${k}`, editedByHuman: false, aiAssisted: true, _status: "published", workflowStatus: "published", publishedAt: new Date(now - 3_600_000).toISOString() });
+  await mk("engine", P12_HOOK_TENANT, engineData("hook"), { context: { engineWrite: true, engineId: engineRec } });
+  await mk("engineWtb", "world-travel-brief", engineData("wtb"), { context: { engineWrite: true, engineId: engineRec } });
+  const dv = await mk("diverged", "gcv", { origin: "manual", _status: "published", workflowStatus: "published", publishedAt: new Date(now - 7_200_000).toISOString() });
+  await payload.update({ collection: "articles", id: dv, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P12 pending draft ${run}` } as never });
+  await mk("legacy", "gcv", { origin: "manual", _status: "draft", workflowStatus: "published", publishedAt: new Date(now - 86_400_000).toISOString() });
+  await mk("schedCms", "gcv", { origin: "manual", _status: "draft", workflowStatus: "scheduled", scheduledFor: new Date(now + 3 * 3_600_000).toISOString() });
+  await mk("hidden", "gcv", { origin: "manual", _status: "published", workflowStatus: "hidden" });
+  await mk("pressroom", "gcv", { origin: "manual", _status: "published", workflowStatus: "published", pillar: pressroomId, publishedAt: new Date(now - 3_600_000).toISOString() });
+  await mk("offDtw", P12_OFF, { origin: "manual", _status: "published", workflowStatus: "published", publishedAt: new Date(now - 3_600_000).toISOString() });
+  await mk("outWad", P12_OUT_OF_GRANT, { origin: "manual", _status: "published", workflowStatus: "published", publishedAt: new Date(now - 3_600_000).toISOString() });
+
+  // The hub ones, through the real routes (author key: draft; write key: publish / schedule).
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const author = tok(engines.author.tokenFile);
+  const write = tok(engines.write.tokenFile);
+  const hubDraft = async (k: P12Article) => {
+    const slug = `p12-${run}-${k.toLowerCase()}`;
+    const r = await call9("POST", "/api/hub/articles", { tenant: "gcv", title: `P12 ${k} ${run}`, slug, actor: P12_ACTOR, pillarSlug: "p12-main", authorId: fixtures.gcv!.author, bodyMarkdown: "P12 hub fixture body." }, author);
+    if (r.status !== 201) throw new Error(`setup12 draft ${k} ⇒ ${r.status} ${r.text.slice(0, 300)}`);
+    arts[k] = { id: r.body.id as number, tenant: "gcv", slug };
+    return { id: r.body.id as number, version: r.body.version as number };
+  };
+  const h = await hubDraft("hub");
+  const hp = await call9("POST", `/api/hub/articles/${h.id}/publish`, { tenant: "gcv", expectedVersion: h.version, actor: P12_ACTOR }, write);
+  if (hp.status !== 200) throw new Error(`setup12 publish (hub) ⇒ ${hp.status} ${hp.text.slice(0, 300)}`);
+  const s = await hubDraft("schedHub");
+  const at = new Date(Math.ceil((now + 2 * 3_600_000) / 60_000) * 60_000).toISOString();
+  const sp = await call9("POST", `/api/hub/articles/${s.id}/schedule`, { tenant: "gcv", expectedVersion: s.version, actor: P12_ACTOR, scheduledFor: at }, write);
+  if (sp.status !== 200) throw new Error(`setup12 schedule (schedHub) ⇒ ${sp.status} ${sp.text.slice(0, 300)}`);
+
+  const f12: Setup12 = {
+    version: 1, out, hookPort,
+    tenants: Object.fromEntries([...P12_GRANT_TENANTS, P12_OUT_OF_GRANT].map((t) => [t, tid(t)])),
+    engines, fixtures, articles: arts, publicReadTokenFile,
+  };
+  writeFileSync(out, JSON.stringify(f12, null, 2), { mode: 0o600 });
+  console.log(`[setup12] wrote ${out} (${Object.keys(arts).length} fixtures, engines ${Object.keys(engines).join(" / ")}, grant = ${P12_GRANT_TENANTS.join(",")}; ${P12_OUT_OF_GRANT} out of grant; tokens in 0600 files, not printed)`);
+  process.exit(0);
+}
+
+async function check12() {
+  guard12();
+  const inFile = arg("in");
+  if (!inFile) {
+    console.error("usage: tsx scripts/hub-probe.ts --check12 --in <f12>");
+    process.exit(2);
+  }
+  const s12 = JSON.parse(readFileSync(inFile, "utf8")) as Setup12;
+  const payload = await getPayload({ config });
+  const db = rawDb(payload);
+  const { state, expect } = makeExpect();
+  const obs = (label: string, v: unknown) => console.log(`OBS  ${label}  ${JSON.stringify(v)}`);
+  const tok = (f: string) => readFileSync(f, "utf8").trim();
+  const T = { author: tok(s12.engines.author.tokenFile), write: tok(s12.engines.write.tokenFile), read: tok(s12.engines.read.tokenFile), both: tok(s12.engines.both.tokenFile) };
+  const pubTok = tok(s12.publicReadTokenFile);
+  const A = s12.articles;
+  const executed: string[] = [];
+  const run = runId6();
+  let seq = 0;
+
+  const raw = async (id: number, locale?: string) =>
+    (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, disableErrors: true, ...(locale ? { locale: locale as never } : {}) })) as unknown as Doc | null;
+  const latest = async (id: number) => (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc | null;
+  const acts = async (id: number) =>
+    (await payload.find({ collection: "activityLog", where: { and: [{ targetCollection: { equals: "articles" } }, { targetId: { equals: String(id) } }] }, sort: "createdAt", limit: 200, depth: 0, overrideAccess: true })).docs as unknown as Doc[];
+  const count = async (q: ReturnType<typeof sql>) => Number((((await db.execute(q)) as { rows?: Doc[] }).rows?.[0]?.n as number | string | undefined) ?? -1);
+  const artCount = () => count(sql`SELECT count(*)::int AS n FROM articles`);
+  const tjCount = (id: number) => count(sql`SELECT count(*)::int AS n FROM translation_jobs WHERE article_id = ${id}`);
+  const vCount = (id: number) => count(sql`SELECT count(*)::int AS n FROM _articles_v WHERE parent_id = ${id}`);
+  const inst = (v: unknown) => (v == null ? null : new Date(v as string).getTime());
+  const flagsOf = (d: Doc | null) => (d ? { exclusive: d.exclusive === true, pinnedToLatest: d.pinnedToLatest === true, pinnedUntil: d.pinnedUntil == null ? null : new Date(d.pinnedUntil as string).toISOString() } : null);
+  /** Columns that differ between two `locale: "all"` reads, minus the movable ones (D8). */
+  const moved = (pre: Doc, post: Doc) =>
+    [...new Set([...Object.keys(pre), ...Object.keys(post)])].filter((k) => !P12_MOVABLE.includes(k) && JSON.stringify(sortKeys6(pre[k] ?? null)) !== JSON.stringify(sortKeys6(post[k] ?? null)));
+  const fl = (id: number | string, body: unknown, token: string | null = T.write, rawText?: string) => call9("POST", `/api/hub/articles/${id}/flags`, body, token, rawText);
+  const fb = (tenant: string, expected: Doc, set: Doc, extra: Doc = {}): Doc => ({ tenant, actor: P12_ACTOR, expected, set, ...extra });
+  const E0 = { exclusive: false, pinnedToLatest: false, pinnedUntil: null };
+  const inMs = (ms: number) => new Date(Math.ceil((Date.now() + ms) / 1000) * 1000).toISOString();
+  // A body is required again at publish (P5.2 K4), so every probe draft carries one.
+  const draftBody = (tenant: string, extra: Doc = {}): Doc => ({ tenant, title: `P12 draft ${run}-${seq}`, slug: `p12d-${run}-${seq++}`, actor: P12_ACTOR, pillarSlug: "p12-main", authorId: s12.fixtures[tenant]!.author, bodyMarkdown: "P12 probe draft body.", ...extra });
+  const postDraft = (body: Doc) => call9("POST", "/api/hub/articles", body, T.author);
+  const patchDraft = (id: number, body: Doc) => call9("PATCH", `/api/hub/articles/${id}`, body, T.author);
+  const view = (id: number, tenant: string, extra = "", token = T.read) => call9("GET", `/api/hub/articles/${id}?tenant=${encodeURIComponent(tenant)}${extra}`, undefined, token);
+  const cronHeaders = process.env.CRON_SECRET ? process.env.CRON_SECRET : null;
+
+  const group = async (g: (typeof P12_GROUPS)[number], fn: () => Promise<void>) => {
+    try {
+      await fn();
+      executed.push(g);
+    } catch (err) {
+      state.failures++;
+      console.log(`FAIL  group ${g} threw: ${(err as Error).name}: ${(err as Error).message}`);
+    }
+  };
+
+  // ══ P — preconditions: the server's switch, read through the discovery route ══
+  await group("P", async () => {
+    const tx = await call9("GET", `/api/hub/taxonomy?tenants=${[...P12_GRANT_TENANTS].join(",")}&kinds=pillars`, undefined, T.read);
+    const got = Object.fromEntries(((tx.body.tenants as Doc[] | undefined) ?? []).map((e) => [e.tenant, e.editorialFlags]));
+    const want = { dtw: false, gcv: true, "world-travel-brief": true, [P12_HOOK_TENANT]: true };
+    if (tx.status !== 200 || JSON.stringify(sortKeys6(got)) !== JSON.stringify(sortKeys6(want))) {
+      console.error(`[check12] refusing: the server must run with HUB_EDITORIAL_FLAGS_TENANTS=${P12_ON.join(",")} (taxonomy said ${JSON.stringify(got)}, status ${tx.status})`);
+      process.exit(2);
+    }
+    expect("P1 (e) taxonomy: every tenant entry has editorialFlags = the switch (dtw off; gcv / wtb / p12-hook on)", sortKeys6(got), sortKeys6(want));
+    // Re-runnable: group C writes the flags of these three published fixtures; put them back to the
+    // defaults first (a system write, as the unpin cron does: no version bump, no webhook).
+    for (const k of ["engine", "engineWtb", "hub"] as const) {
+      const cur = flagsOf(await raw(A[k].id));
+      if (JSON.stringify(cur) === JSON.stringify(E0)) continue;
+      await payload.update({ collection: "articles", id: A[k].id, overrideAccess: true, context: { systemWrite: true, disableRevalidate: true, skipTranslationEnqueue: true }, data: { ...E0 } as never });
+    }
+    expect("P2 the group C fixtures start from exclusive false / not pinned", await Promise.all((["engine", "engineWtb", "hub"] as const).map(async (k) => flagsOf(await raw(A[k].id)))), [E0, E0, E0]);
+  });
+
+  // ══ A — the draft routes with the editorial ROOT keys (probe a) ══════════
+  await group("A", async () => {
+    const n0 = await artCount();
+    const off1 = await postDraft(draftBody(P12_OFF, { exclusive: true, pinnedToLatest: true, pinnedUntil: inMs(7_200_000) }));
+    expect("A1 POST dtw (switch off) with the three keys ⇒ 422 not_enabled on each, no article", [off1.status, off1.body.fields, (await artCount()) - n0], [422, { exclusive: "not_enabled", pinnedToLatest: "not_enabled", pinnedUntil: "not_enabled" }, 0]);
+    const dd = await postDraft(draftBody(P12_OFF));
+    const ddV = dd.body.version as number;
+    const off2 = await patchDraft(dd.body.id as number, { tenant: P12_OFF, expectedVersion: ddV, actor: P12_ACTOR, pinnedToLatest: true, pinnedUntil: null });
+    expect("A2 PATCH a dtw draft with the pin pair ⇒ 422 not_enabled; plain create ok; latest version unchanged", [dd.status, off2.status, off2.body.fields, (await latest(dd.body.id as number))?.version], [201, 422, { pinnedToLatest: "not_enabled", pinnedUntil: "not_enabled" }, ddV]);
+
+    const U1 = inMs(2 * 3_600_000);
+    const c = await postDraft(draftBody("gcv", { exclusive: true, pinnedToLatest: true, pinnedUntil: U1 }));
+    const id = c.body.id as number;
+    const l1 = await latest(id);
+    const created = (await acts(id)).filter((r) => r.eventType === "article_created");
+    expect("A3 POST gcv (switch on) with the three keys ⇒ 201; latest stores them; article_created.detail.fields (D11)", [
+      c.status, flagsOf(l1), created.length, sortKeys6(created[0]?.detail),
+    ], [201, { exclusive: true, pinnedToLatest: true, pinnedUntil: U1 }, 1, sortKeys6({ via: "hub", actor: P12_ACTOR, action: "create", fields: ["exclusive", "pinnedToLatest", "pinnedUntil"] })]);
+
+    const ve = await view(id, "gcv", "&view=edit", T.author);
+    const ed = (ve.body.edit ?? {}) as Doc;
+    const art = (ve.body.article ?? {}) as Doc;
+    expect("A4 (e) view=edit: edit.flags.{pinnedToLatest,exclusive} + edit.pinnedUntil + article.{exclusive,pinnedToLatest,pinnedUntil,editorialFlags}", [
+      ve.status, ed.editable, (ed.flags as Doc | undefined)?.pinnedToLatest, (ed.flags as Doc | undefined)?.exclusive, ed.pinnedUntil, art.exclusive, art.pinnedToLatest, art.pinnedUntil, art.editorialFlags,
+    ], [200, true, true, true, U1, true, true, U1, true]);
+
+    const v1 = l1?.version as number;
+    const unpin = await patchDraft(id, { tenant: "gcv", expectedVersion: v1, actor: P12_ACTOR, pinnedToLatest: false, pinnedUntil: null });
+    const l2 = await latest(id);
+    const m2 = await raw(id);
+    const edits = (await acts(id)).filter((r) => r.eventType === "human_edit");
+    expect("A5 PATCH unpin ⇒ 200 changed [pinnedToLatest, pinnedUntil]; latest unpinned; MAIN row frozen (still as created); human_edit.detail.fields names the keys", [
+      unpin.status, unpin.body.changed, flagsOf(l2), flagsOf(m2), sortKeys6(edits.at(-1)?.detail),
+    ], [200, ["pinnedToLatest", "pinnedUntil"], { exclusive: true, pinnedToLatest: false, pinnedUntil: null }, { exclusive: true, pinnedToLatest: true, pinnedUntil: U1 }, sortKeys6({ via: "hub", actor: P12_ACTOR, action: "update", fields: ["pinnedToLatest", "pinnedUntil"] })]);
+
+    const v2 = l2?.version as number;
+    const win = await patchDraft(id, { tenant: "gcv", expectedVersion: v2, actor: P12_ACTOR, pinnedToLatest: true, pinnedUntil: inMs(30_000) });
+    const nested = await patchDraft(id, { tenant: "gcv", expectedVersion: v2, actor: P12_ACTOR, flags: { exclusive: true } });
+    const same = await patchDraft(id, { tenant: "gcv", expectedVersion: v2, actor: P12_ACTOR, exclusive: true });
+    expect("A6 PATCH pinnedUntil inside 60 s ⇒ 422 out_of_range; flags.exclusive ⇒ 400 (unchanged); exclusive unchanged ⇒ 200 changed [] (no version bump)", [
+      win.status, win.body.fields, nested.status, nested.body.reason, same.status, same.body.changed, (await latest(id))?.version,
+    ], [422, { pinnedUntil: "out_of_range" }, 400, "unknown field(s): flags.exclusive", 200, [], v2]);
+
+    const pub = await call9("POST", `/api/hub/articles/${id}/publish`, { tenant: "gcv", expectedVersion: v2, actor: P12_ACTOR }, T.write);
+    expect("A7 publish the draft (write key) ⇒ the MAIN row carries the SAVED flags (exclusive, not pinned)", [pub.status, flagsOf(await raw(id)), (await raw(id))?.workflowStatus], [200, { exclusive: true, pinnedToLatest: false, pinnedUntil: null }, "published"]);
+  });
+
+  // ══ B — the unpin cron on a pinned hub draft (probe b; R3) ═══════════════
+  await group("B", async () => {
+    const c = await postDraft(draftBody("gcv", { pinnedToLatest: true, pinnedUntil: inMs(2 * 3_600_000) }));
+    const id = c.body.id as number;
+    const v0 = (await latest(id))?.version as number;
+    // "Time passes": the stored expiry is moved into the past exactly the way the cron itself writes (systemWrite ⇒ no version bump).
+    await payload.update({ collection: "articles", id, draft: true, overrideAccess: true, context: { systemWrite: true, disableRevalidate: true, skipTranslationEnqueue: true }, data: { pinnedUntil: new Date(Date.now() - 60_000).toISOString() } as never });
+    const lt = await latest(id);
+    expect("B1 hub draft pinned, expiry moved to the past (system write) ⇒ latest pinned, past, version unchanged", [c.status, lt?.pinnedToLatest, (inst(lt?.pinnedUntil) ?? 0) < Date.now(), lt?.version], [201, true, true, v0]);
+    // L3: a second draft expires, the cron's search sees it, then the hub RE-PINS it before the
+    // sweep writes: the sweep (called here with that stale search result) must skip it.
+    const c2 = await postDraft(draftBody("gcv", { pinnedToLatest: true, pinnedUntil: inMs(2 * 3_600_000) }));
+    const id2 = c2.body.id as number;
+    await payload.update({ collection: "articles", id: id2, draft: true, overrideAccess: true, context: { systemWrite: true, disableRevalidate: true, skipTranslationEnqueue: true }, data: { pinnedUntil: new Date(Date.now() - 60_000).toISOString() } as never });
+    const stale = { id: id2, tenant: s12.tenants.gcv };
+    const reU = inMs(3 * 3_600_000);
+    const rp = await patchDraft(id2, { tenant: "gcv", expectedVersion: (await latest(id2))?.version, actor: P12_ACTOR, pinnedToLatest: true, pinnedUntil: reU });
+    const unpinMod = await import("../src/lib/unpin-expired");
+    const outStale = await unpinMod.unpinIfStillExpired(payload, stale, Date.now());
+    const l2 = await latest(id2);
+    expect("B1b (L3) expired, then re-pinned by the hub before the sweep writes ⇒ the sweep skips it (not_expired, REAL locks); the new pin survives", [rp.status, outStale, l2?.pinnedToLatest, inst(l2?.pinnedUntil) === inst(reU)], [200, { kind: "skipped", reason: "not_expired" }, true, true]);
+    const cron = await call9("GET", "/api/cron/unpin-expired", undefined, cronHeaders);
+    const lc = await latest(id);
+    const pinRows = (await acts(id)).filter((r) => r.eventType === "pin_expired");
+    expect("B2 GET /api/cron/unpin-expired ⇒ 200, this draft unpinned on its latest version, version NOT bumped, one pin_expired row", [
+      cron.status, ((cron.body.unpinned as Doc[] | undefined) ?? []).some((u) => Number(u.id) === id), lc?.pinnedToLatest, lc?.pinnedUntil ?? null, lc?.version, lc?._status, pinRows.length,
+      Array.isArray(cron.body.skipped), ((cron.body.unpinned as Doc[] | undefined) ?? []).some((u) => Number(u.id) === id2), (await latest(id2))?.pinnedToLatest,
+    ], [200, true, false, null, v0, "draft", 1, true, false, true]);
+    const ed = await patchDraft(id, { tenant: "gcv", expectedVersion: v0, actor: P12_ACTOR, title: `P12 after cron ${run}` });
+    const pub = await call9("POST", `/api/hub/articles/${id}/publish`, { tenant: "gcv", expectedVersion: ed.body.version, actor: P12_ACTOR }, T.write);
+    expect("B3 PATCH with the PRE-cron expectedVersion ⇒ 200; publish ⇒ the main row is not pinned", [ed.status, pub.status, flagsOf(await raw(id))?.pinnedToLatest], [200, 200, false]);
+  });
+
+  // ══ C — the flags route on published articles (probe c) ═════════════════
+  await group("C", async () => {
+    const http = await import("node:http");
+    // M1 proof: on each webhook the handler reads the watched article from ANOTHER connection
+    // before answering; posted after the COMMIT, it must already see the new values (posted from
+    // inside the open transaction, as before the fix, it would still see the old ones).
+    let watch: number | null = null;
+    const hits: { method: string; url: string; seen: unknown }[] = [];
+    const server = http.createServer((req, res) => {
+      req.resume();
+      const w = watch;
+      void (async () => {
+        const seen = w == null ? null : flagsOf(await raw(w));
+        hits.push({ method: req.method ?? "", url: req.url ?? "", seen });
+        res.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+      })();
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(s12.hookPort, "127.0.0.1", () => resolve());
+    });
+    try {
+      const id = A.engine.id;
+      const pre = (await raw(id, "all"))!;
+      const acts0 = (await acts(id)).length;
+      const v0 = await vCount(id);
+      const hits0 = hits.length;
+      const U2 = inMs(3 * 3_600_000);
+      watch = id;
+      const r = await fl(id, fb(P12_HOOK_TENANT, E0, { exclusive: true, pinnedToLatest: true, pinnedUntil: U2 }));
+      expect("C1 engine article (p12-hook) set all three ⇒ 200 {ok, id, tenant, exclusive, pinnedToLatest, pinnedUntil, changed} — exactly these keys", [
+        r.status, Object.keys(r.body).sort(), r.body.id, r.body.tenant, r.body.exclusive, r.body.pinnedToLatest, r.body.pinnedUntil, r.body.changed,
+      ], [200, ["changed", "exclusive", "id", "ok", "pinnedToLatest", "pinnedUntil", "tenant"], id, P12_HOOK_TENANT, true, true, U2, ["exclusive", "pinnedToLatest", "pinnedUntil"]]);
+      const post = (await raw(id, "all"))!;
+      expect("C2 (D8) only exclusive / pinnedToLatest / pinnedUntil / updatedAt moved on the MAIN row (every locale); version, _status, workflowStatus, publishedAt unchanged", [
+        moved(pre, post), post.version === pre.version, post._status, post.workflowStatus, inst(post.publishedAt) === inst(pre.publishedAt), inst(post.updatedAt) !== inst(pre.updatedAt), flagsOf(post),
+      ], [[], true, "published", "published", true, true, { exclusive: true, pinnedToLatest: true, pinnedUntil: U2 }]);
+      const newActs = (await acts(id)).slice(acts0);
+      const he = newActs[0];
+      expect("C3 (D7) exactly ONE new ActivityLog row: human_edit, actor engine = the write key, detail {via hub, actor, action flags, fields, from, to}", [
+        newActs.length, he?.eventType, he?.actorType, Number(toId6(he?.actorEngine)), sortKeys6(he?.detail),
+      ], [1, "human_edit", "engine", s12.engines.write.id, sortKeys6({ via: "hub", actor: P12_ACTOR, action: "flags", fields: ["exclusive", "pinnedToLatest", "pinnedUntil"], from: E0, to: { exclusive: true, pinnedToLatest: true, pinnedUntil: U2 } })]);
+      for (let i = 0; i < 30 && hits.length <= hits0; i++) await new Promise((res) => setTimeout(res, 100));
+      const lt = await latest(id);
+      const hook = hits.slice(hits0).filter((h) => h.method === "POST" && h.url === "/api/revalidate");
+      expect("C4 (M1) exactly ONE revalidate webhook (POST /api/revalidate), posted AFTER the commit: a read from another connection inside the webhook already sees the new flags; latest version still published with the main row's version and flags", [
+        hook.length, hook[0]?.seen, lt?._status, lt?.version === post.version, flagsOf(lt),
+      ], [1, { exclusive: true, pinnedToLatest: true, pinnedUntil: U2 }, "published", true, { exclusive: true, pinnedToLatest: true, pinnedUntil: U2 }]);
+      obs("C4b version rows of the article before / after (a non-draft update adds one)", { before: v0, after: await vCount(id) });
+      const pubPinned = await call9("GET", "/api/public/articles?flag=pinnedToLatest&limit=100", undefined, pubTok);
+      const pubExcl = await call9("GET", "/api/public/articles?flag=exclusive&limit=100", undefined, pubTok);
+      const inList = (x: Reply9) => (((x.body.docs as Doc[] | undefined) ?? []) as Doc[]).some((d) => d.slug === A.engine.slug);
+      expect("C5 the public feeds see it at once: ?flag=pinnedToLatest and ?flag=exclusive list the article", [pubPinned.status, inList(pubPinned), pubExcl.status, inList(pubExcl)], [200, true, 200, true]);
+
+      const cur = { exclusive: true, pinnedToLatest: true, pinnedUntil: U2 };
+      const up = await fl(id, fb(P12_HOOK_TENANT, cur, { pinnedToLatest: false, pinnedUntil: null }));
+      const afterUp = await call9("GET", "/api/public/articles?flag=pinnedToLatest&limit=100", undefined, pubTok);
+      expect("C6 unpin through the route ⇒ 200 changed [pinnedToLatest, pinnedUntil]; the pinned feed drops it", [up.status, up.body.changed, flagsOf(await raw(id)), inList(afterUp)], [200, ["pinnedToLatest", "pinnedUntil"], { exclusive: true, pinnedToLatest: false, pinnedUntil: null }, false]);
+
+      const before = await raw(id);
+      const actsN = (await acts(id)).length;
+      const noop = await fl(id, fb(P12_HOOK_TENANT, { exclusive: true, pinnedToLatest: false, pinnedUntil: null }, { exclusive: true, pinnedToLatest: false, pinnedUntil: null }));
+      expect("C7 nothing to change ⇒ 200 changed [] and NO write (updatedAt and the ActivityLog unchanged)", [noop.status, noop.body.changed, inst((await raw(id))?.updatedAt) === inst(before?.updatedAt), (await acts(id)).length - actsN], [200, [], true, 0]);
+
+      const w = A.engineWtb.id;
+      const wPre = (await raw(w, "all"))!;
+      const tj0 = await tjCount(w);
+      const wr = await fl(w, fb("world-travel-brief", E0, { exclusive: true }));
+      const wPost = (await raw(w, "all"))!;
+      expect("C8 translation tenant (world-travel-brief) engine article ⇒ 200; no new translation_jobs; version unchanged; only the movable columns moved", [wr.status, (await tjCount(w)) - tj0, wPost.version === wPre.version, moved(wPre, wPost)], [200, 0, true, []]);
+      obs("C8b translation_jobs of the wtb article (baseline from its first publication)", { count: tj0 });
+
+      const h = A.hub.id;
+      const hPre = (await raw(h, "all"))!;
+      const hr = await fl(h, fb("gcv", E0, { pinnedToLatest: true, pinnedUntil: null }));
+      const hPost = (await raw(h, "all"))!;
+      expect("C9 hub-published article (gcv) pinned without expiry ⇒ 200; version unchanged (a later hub live edit keeps its expectedVersion)", [hr.status, hr.body.changed, hPost.version === hPre.version, moved(hPre, hPost), flagsOf(hPost)], [200, ["pinnedToLatest"], true, [], { exclusive: false, pinnedToLatest: true, pinnedUntil: null }]);
+
+      // An article whose localized fields exist ONLY in another locale (no `en` row): the write runs in
+      // its source language, so Payload's required-field validation of title / slug passes and no
+      // localized value is added in `en` (fresh fixture each run).
+      const viSlug = `p12-${run}-vi`;
+      const vi = (await payload.create({
+        collection: "articles", overrideAccess: true, locale: "vi" as never, context: { disableRevalidate: true, engineWrite: true },
+        data: { tenant: s12.tenants[P12_HOOK_TENANT], title: "P12 tieu de tieng Viet", slug: viSlug, dek: "P12 sapo", pillar: s12.fixtures[P12_HOOK_TENANT]!.pillarId, author: s12.fixtures[P12_HOOK_TENANT]!.author, readMin: 2, body: P12_BODY, origin: "engine", engineDraftId: `p12-vi-${run}`, sourceLanguage: "vi", _status: "published", workflowStatus: "published", publishedAt: new Date(Date.now() - 3_600_000).toISOString() } as never,
+      })) as unknown as { id: number };
+      const viPre = (await raw(vi.id, "all"))!;
+      const vr = await fl(vi.id, fb(P12_HOOK_TENANT, E0, { exclusive: true }));
+      const viPost = (await raw(vi.id, "all"))!;
+      expect("C10 an article with only `vi` localized rows ⇒ 200; title / slug / dek per locale unchanged (no `en` row added); version unchanged", [
+        vr.status, vr.body.changed, moved(viPre, viPost), Object.keys((viPost.title ?? {}) as Doc), viPost.version === viPre.version, viPost.exclusive,
+      ], [200, ["exclusive"], [], ["vi"], true, true]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  // ══ R — race / rollback on the REAL locks, in-process (review M2; mirrors check9 P3b / P3d) ══
+  await group("R", async () => {
+    const core = await import("../src/lib/hub-article-flags-core");
+    const liveCore = await import("../src/lib/hub-author-live-core");
+    const lockMod = await import("../src/lib/hub-article-lock");
+    const pool = (payload.db as unknown as { pool: { connect: () => Promise<{ query: (q: string, p?: unknown[]) => Promise<unknown>; release: () => void }> } }).pool;
+    const nf = { ok: false, status: "not_found", reason: "article not found for tenant" };
+    let rseq = 0;
+    const mkPub = async () => {
+      const slug = `p12r-${run}-${rseq++}`;
+      const d = (await payload.create({
+        collection: "articles", overrideAccess: true, locale: "en", context: { disableRevalidate: true, engineWrite: true, engineId: s12.engines.write.id },
+        data: { tenant: s12.tenants[P12_HOOK_TENANT], title: `P12 R ${slug}`, slug, pillar: s12.fixtures[P12_HOOK_TENANT]!.pillarId, author: s12.fixtures[P12_HOOK_TENANT]!.author, readMin: 2, body: P12_BODY, origin: "engine", engineDraftId: `p12r-${slug}`, _status: "published", workflowStatus: "published", publishedAt: new Date(Date.now() - 3_600_000).toISOString() } as never,
+      })) as unknown as { id: number };
+      return d.id;
+    };
+    const inproc = async (id: number, tenant: string, set: Doc, d: Doc = {}) => {
+      const req = new Request(`${BASE}/api/hub/articles/${id}/flags`, { method: "POST", headers: { authorization: `Bearer ${T.write}`, "content-type": "application/json" }, body: JSON.stringify(fb(tenant, E0, set)) });
+      const res = await core.handleHubFlagsWith(req, { params: Promise.resolve({ id: String(id) }) }, { getPayload: async () => payload, flagsTenants: [...P12_ON], revalidate: async () => {}, ...d } as never);
+      return { status: res.status, body: (await res.json()) as Doc };
+    };
+    const snap = async (id: number) => JSON.stringify(sortKeys6(await raw(id, "all")));
+    const humanEdits = async (id: number) => (await acts(id)).filter((x) => x.eventType === "human_edit").length;
+    const rowFree = async (id: number) => {
+      const c = await pool.connect();
+      try {
+        await c.query("BEGIN");
+        await c.query("SELECT 1 FROM articles WHERE id = $1 FOR UPDATE NOWAIT", [id]);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        await c.query("ROLLBACK").catch(() => {});
+        c.release();
+      }
+    };
+
+    const divergence = async (id: number) =>
+      (await acts(id)).filter((x) => x.eventType === "integration_error" && (x.detail as Doc | undefined)?.name === "post_write_divergence").map((x) => sortKeys6(x.detail));
+    /** Run a mid-flight Save Draft through the seam; record the version-row count right after it. */
+    const slipDraft = async (id: number, data: Doc, out: { v: number }) => {
+      await payload.update({ collection: "articles", id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: data as never });
+      out.v = await vCount(id);
+    };
+
+    // (a) a human Save Draft lands between the gate and the write (2nd connection; a draft save
+    // inserts a version row, which the row lock does not block). Which D8 leg catches it is read
+    // back from the F2 `post_write_divergence` row.
+    const a = await mkPub();
+    const s0 = await snap(a);
+    const h0 = await humanEdits(a);
+    const va = { v: -1 };
+    const ra = await inproc(a, P12_HOOK_TENANT, { exclusive: true }, { beforeWrite: () => slipDraft(a, { title: `P12 R-a SLIPPED DRAFT ${run}` }, va) });
+    const la = await latest(a);
+    expect("R1 (M2a) a LOCALIZED-field draft (title) saved mid-flight (2nd connection, REAL lock + row lock) ⇒ 409 draft_diverged + rollback: main row unchanged on every locale, the draft kept as the latest version, NO phantom human_edit row (L2), _articles_v delta 0 counted from after the seam's draft (F3b)", [
+      ra.status, ra.body.status, (await snap(a)) === s0, la?._status, String(la?.title).startsWith("P12 R-a SLIPPED"), (await humanEdits(a)) - h0, flagsOf(await raw(a))?.exclusive, (await vCount(a)) - va.v,
+    ], [409, "draft_diverged", true, "draft", true, 0, false, 0]);
+    obs("R1-leg (F3) the D8 leg + columns that caught the localized-title draft (from the F2 integration_error row)", await divergence(a));
+
+    // (a') the same with a NON-localized field only (readMin) — what actually happens (F3a).
+    const a2 = await mkPub();
+    const s2 = await snap(a2);
+    const before2 = Number((await raw(a2))?.readMin ?? 2);
+    const va2 = { v: -1 };
+    const ra2 = await inproc(a2, P12_HOOK_TENANT, { exclusive: true }, { beforeWrite: () => slipDraft(a2, { readMin: before2 + 15 }, va2) });
+    const la2 = await latest(a2);
+    expect("R1b (F3a) a NON-localized-field draft (readMin) saved mid-flight ⇒ 409 draft_diverged + rollback: main row unchanged, the human draft STILL the latest version (with its readMin), no phantom row, _articles_v delta 0", [
+      ra2.status, ra2.body.status, (await snap(a2)) === s2, la2?._status, la2?.readMin, await humanEdits(a2), flagsOf(await raw(a2))?.exclusive, (await vCount(a2)) - va2.v,
+    ], [409, "draft_diverged", true, "draft", before2 + 15, 0, false, 0]);
+    obs("R1b-leg (F3a) the D8 leg + columns that caught the non-localized draft", await divergence(a2));
+
+    // (b) a concurrent UPDATE of the row from a 2nd connection waits on the row lock.
+    const b = await mkPub();
+    let code: string | null = null;
+    const rb = await inproc(b, P12_HOOK_TENANT, { exclusive: true }, {
+      beforeWrite: async () => {
+        const c = await pool.connect();
+        try {
+          await c.query("BEGIN");
+          await c.query("SET LOCAL lock_timeout = '300ms'");
+          await c.query("UPDATE articles SET workflow_status = workflow_status WHERE id = $1", [b]);
+          code = "no-error";
+        } catch (e) {
+          code = (e as { code?: string }).code ?? "unknown";
+        } finally {
+          await c.query("ROLLBACK").catch(() => {});
+          c.release();
+        }
+      },
+    });
+    expect("R2 (M2b) an UPDATE articles of the row from a 2nd connection during the write ⇒ 55P03 (row lock held); the flags write 200 and committed; one human_edit row; the row free again afterwards", [
+      code, rb.status, flagsOf(await raw(b))?.exclusive, await humanEdits(b), await rowFree(b),
+    ], ["55P03", 200, true, 1, true]);
+
+    // (c) another tenant's id: the same 404, and NO lock taken (spies on the REAL lock + row lock).
+    let lockCalls = 0;
+    const lockRowIds: number[] = [];
+    const spies = {
+      lock: (async (args: unknown, fn: unknown, ops?: unknown) => {
+        lockCalls++;
+        return (lockMod.withHubArticleLock as unknown as (a: unknown, f: unknown, o?: unknown) => Promise<Response>)(args, fn, ops);
+      }) as never,
+      lockRow: async (p: unknown, id: number | string, req: unknown) => {
+        lockRowIds.push(Number(id));
+        await (liveCore.defaultLockRow as unknown as (p: unknown, i: unknown, r: unknown) => Promise<void>)(p, id, req);
+      },
+    };
+    const other = A.hub.id; // a gcv article
+    const before = await snap(other);
+    const rc = await inproc(other, P12_HOOK_TENANT, { exclusive: true }, spies);
+    expect("R3 (M2c / L1) an id of ANOTHER tenant ⇒ the same 404 body; no advisory lock and no row lock were taken; that row untouched and free", [
+      rc.status, rc.body, lockCalls, lockRowIds.length, (await snap(other)) === before, await rowFree(other),
+    ], [404, nf, 0, 0, true, true]);
+    const own = await mkPub();
+    const rown = await inproc(own, P12_HOOK_TENANT, { exclusive: true }, spies);
+    expect("R4 positive control of the spies: an id of THIS tenant ⇒ 200, one advisory lock, one row lock on that id", [rown.status, lockCalls, lockRowIds], [200, 1, [own]]);
+
+    // (c) F3c — the REAL unpin cron runs while the flags write holds the article lock: the cron's
+    // compare-and-set cannot take the hub lock (lock_timeout 3 s) ⇒ `skipped` busy, nothing cleared;
+    // the next run (lock free) unpins it.
+    const cronMod = await import("../src/app/api/cron/unpin-expired/route");
+    const runCron = async () => {
+      const res = await cronMod.GET(new Request(`${BASE}/api/cron/unpin-expired`, { headers: cronHeaders ? { authorization: `Bearer ${cronHeaders}` } : {} }));
+      return { status: res.status, body: (await res.json()) as Doc };
+    };
+    const cId = await mkPub();
+    const past = new Date(Math.floor((Date.now() - 120_000) / 1000) * 1000).toISOString();
+    await payload.update({ collection: "articles", id: cId, overrideAccess: true, context: { systemWrite: true, disableRevalidate: true, skipTranslationEnqueue: true }, data: { pinnedToLatest: true, pinnedUntil: past } as never });
+    let during: { status: number; body: Doc } | null = null;
+    const reqC = new Request(`${BASE}/api/hub/articles/${cId}/flags`, { method: "POST", headers: { authorization: `Bearer ${T.write}`, "content-type": "application/json" }, body: JSON.stringify(fb(P12_HOOK_TENANT, { exclusive: false, pinnedToLatest: true, pinnedUntil: past }, { exclusive: true })) });
+    const resC = await core.handleHubFlagsWith(reqC, { params: Promise.resolve({ id: String(cId) }) }, {
+      getPayload: async () => payload, flagsTenants: [...P12_ON], revalidate: async () => {},
+      beforeWrite: async () => {
+        during = await runCron();
+      },
+    } as never);
+    const d = during as { status: number; body: Doc } | null;
+    const inList = (b: Doc | undefined, k: string) => ((b?.[k] as Doc[] | undefined) ?? []).filter((x) => Number(x.id) === cId).map((x) => x.reason ?? "listed");
+    const afterC = flagsOf(await raw(cId));
+    const next = await runCron();
+    expect("R5 (F3c) the REAL cron during a flags write on an expired pin ⇒ cron 200 with this article `skipped` busy (not unpinned); the flags write 200; the pin still set; the next cron run (lock free) unpins it", [
+      d?.status, inList(d?.body, "skipped"), inList(d?.body, "unpinned"), resC.status, afterC, inList(next.body, "unpinned"), flagsOf(await raw(cId))?.pinnedToLatest,
+    ], [200, ["busy"], [], 200, { exclusive: true, pinnedToLatest: true, pinnedUntil: past }, ["listed"], false]);
+
+    // (d) F3d — after the COMMIT a throwing webhook and a throwing audit insert leave the 200 intact;
+    // the audit-fallback log line (F1) is still emitted.
+    const dId = await mkPub();
+    const rw = await inproc(dId, P12_HOOK_TENANT, { exclusive: true }, {
+      revalidate: async () => {
+        throw new Error("probe: webhook down");
+      },
+    });
+    const eId = await mkPub();
+    const infos: unknown[][] = [];
+    const proxied = new Proxy(payload as unknown as Record<string | symbol, unknown>, {
+      get(t, k) {
+        if (k === "create") {
+          return async (x: Doc) => {
+            if (x.collection === "activityLog" && (x.data as Doc | undefined)?.eventType === "human_edit") throw new Error("probe: audit insert failed");
+            return (t.create as (y: Doc) => Promise<unknown>).call(t, x);
+          };
+        }
+        if (k === "logger") {
+          const lg = t.logger as Record<string, (...y: unknown[]) => unknown>;
+          return {
+            info: (...y: unknown[]) => {
+              infos.push(y);
+              return lg.info!.apply(lg, y);
+            },
+            warn: (...y: unknown[]) => lg.warn!.apply(lg, y),
+            error: (...y: unknown[]) => lg.error!.apply(lg, y),
+          };
+        }
+        const v = t[k];
+        return typeof v === "function" ? (v as (...y: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const reqE = new Request(`${BASE}/api/hub/articles/${eId}/flags`, { method: "POST", headers: { authorization: `Bearer ${T.write}`, "content-type": "application/json" }, body: JSON.stringify(fb(P12_HOOK_TENANT, E0, { exclusive: true })) });
+    const resE = await core.handleHubFlagsWith(reqE, { params: Promise.resolve({ id: String(eId) }) }, { getPayload: async () => proxied, flagsTenants: [...P12_ON], revalidate: async () => {} } as never);
+    const fallback = infos.filter((x) => (x[0] as Doc | undefined)?.event === "hub_flags_changed").map((x) => [(x[0] as Doc).articleId, (x[0] as Doc).tenant, ((x[0] as Doc).actor as Doc).email, (x[0] as Doc).fields]);
+    expect("R6 (F3d) throwing webhook ⇒ 200, flag committed, audit row written; throwing audit insert ⇒ 200, flag committed, no audit row BUT the structured audit-fallback line (F1) was emitted", [
+      rw.status, flagsOf(await raw(dId))?.exclusive, await humanEdits(dId), resE.status, flagsOf(await raw(eId))?.exclusive, await humanEdits(eId), fallback,
+    ], [200, true, 1, 200, true, 0, [[eId, P12_HOOK_TENANT, P12_ACTOR.email, ["exclusive"]]]]);
+  });
+
+  // ══ D — errors (probe d) ═════════════════════════════════════════════════
+  await group("D", async () => {
+    const e = A.engine.id;
+    const stale = await fl(e, fb(P12_HOOK_TENANT, E0, { exclusive: false }));
+    expect("D1 stale `expected` ⇒ 409 flags_conflict + current", [stale.status, stale.body], [409, { ok: false, status: "flags_conflict", reason: "flags changed since they were read", current: { exclusive: true, pinnedToLatest: false, pinnedUntil: null } }]);
+    const gate = async (k: P12Article) => {
+      const before = await raw(A[k].id, "all");
+      const r = await fl(A[k].id, fb(A[k].tenant, E0, { exclusive: true }));
+      const after = await raw(A[k].id, "all");
+      return [r.status, r.body, JSON.stringify(sortKeys6(before)) === JSON.stringify(sortKeys6(after))];
+    };
+    expect("D2 published article with a pending draft (CMS admin Save Draft shape) ⇒ 409 draft_diverged, nothing written", await gate("diverged"), [409, { ok: false, status: "draft_diverged", reason: "article has unpublished changes" }, true]);
+    expect("D3 imported shape (_status draft + workflowStatus published) ⇒ 422 not_flaggable legacy_status (Q12), nothing written", await gate("legacy"), [422, { ok: false, status: "not_flaggable", reason: "legacy_status" }, true]);
+    expect("D4 hub-scheduled draft ⇒ 422 not_flaggable scheduled", await gate("schedHub"), [422, { ok: false, status: "not_flaggable", reason: "scheduled" }, true]);
+    expect("D5 CMS-scheduled article ⇒ 422 not_flaggable scheduled", await gate("schedCms"), [422, { ok: false, status: "not_flaggable", reason: "scheduled" }, true]);
+    expect("D6 hidden article ⇒ 422 not_flaggable status", await gate("hidden"), [422, { ok: false, status: "not_flaggable", reason: "status" }, true]);
+    const d = await postDraft(draftBody("gcv"));
+    const dr = await fl(d.body.id as number, fb("gcv", E0, { exclusive: true }));
+    expect("D7 a hub DRAFT (never published) ⇒ 422 not_flaggable status (drafts use PATCH)", [dr.status, dr.body], [422, { ok: false, status: "not_flaggable", reason: "status" }]);
+    const prActs = (await acts(A.pressroom.id)).length;
+    const pr = await gate("pressroom");
+    expect("D8 gcv Pressroom article + exclusive ⇒ 422 fields.exclusive invalid (single-home V6), rolled back, no ActivityLog row", [pr[0], pr[1], pr[2], (await acts(A.pressroom.id)).length - prActs], [422, { ok: false, status: "invalid", reason: "one or more fields are invalid", fields: { exclusive: "invalid" } }, true, 0]);
+    const ak = await fl(e, fb(P12_HOOK_TENANT, E0, { exclusive: true }), T.author);
+    const rk = await fl(e, fb(P12_HOOK_TENANT, E0, { exclusive: true }), T.read);
+    const bk = await fl(e, fb(P12_HOOK_TENANT, E0, { exclusive: true }), T.both);
+    const nk = await fl(e, fb(P12_HOOK_TENANT, E0, { exclusive: true }), null);
+    expect("D9 author key / read key ⇒ 403 hub write not allowed; key with hubAuthor too ⇒ 403 author key cannot change flags; no token ⇒ 401", [
+      [ak.status, ak.body.reason], [rk.status, rk.body.reason], [bk.status, bk.body], nk.status,
+    ], [[403, "hub write not allowed for this engine"], [403, "hub write not allowed for this engine"], [403, { ok: false, status: "forbidden", reason: "author key cannot change flags" }], 401]);
+    const nf = { ok: false, status: "not_found", reason: "article not found for tenant" };
+    const other = await fl(A.hub.id, fb("world-travel-brief", E0, { exclusive: true }));
+    const missing = await fl(2147483000, fb("gcv", E0, { exclusive: true }));
+    const overInt = await fl("2147483648", fb("gcv", E0, { exclusive: true }));
+    expect("D10 an article of another tenant / a missing id / an id past int4 ⇒ the SAME 404 body", [[other.status, other.body], [missing.status, missing.body], [overInt.status, overInt.body]], [[404, nf], [404, nf], [404, nf]]);
+    const off = await fl(A.offDtw.id, fb(P12_OFF, E0, { exclusive: true }));
+    const out = await fl(A.outWad.id, fb(P12_OUT_OF_GRANT, E0, { exclusive: true }));
+    expect("D11 dtw (switch off) ⇒ 403 feature_disabled editorial flags; wad (out of grant) ⇒ 403 tenant not in allowed scope", [[off.status, off.body], [out.status, out.body.reason]], [[403, { ok: false, status: "feature_disabled", reason: "editorial flags disabled for tenant" }], [403, "tenant not in allowed scope"]]);
+    const unk = await fl(e, { ...fb(P12_HOOK_TENANT, E0, { exclusive: true }), expectedVersion: 1 });
+    const empty = await fl(e, fb(P12_HOOK_TENANT, E0, {}));
+    const viewer = await fl(e, fb(P12_HOOK_TENANT, E0, { exclusive: true }, { actor: { email: "v@example.invalid", role: "viewer" } }));
+    const nested = await fl(e, fb(P12_HOOK_TENANT, E0, { flags: { exclusive: true } }));
+    const badJson = await fl(e, undefined, T.write, "{");
+    expect("D12 400 unknown key / set.flags / bad JSON; 422 set {} ⇒ set required; actor.role viewer ⇒ format", [
+      [unk.status, unk.body.reason], [nested.status, nested.body.reason], [badJson.status, badJson.body.reason], [empty.status, empty.body.fields], [viewer.status, viewer.body.fields],
+    ], [[400, "unknown field(s): expectedVersion"], [400, "unknown field(s): set.flags"], [400, "body must be valid JSON"], [422, { set: "required" }], [422, { "actor.role": "format" }]]);
+  });
+
+  // ══ E — reads (probe e) ═══════════════════════════════════════════════════
+  await group("E", async () => {
+    const det = await view(A.engine.id, P12_HOOK_TENANT);
+    const a = (det.body.article ?? {}) as Doc;
+    const offDet = await view(A.offDtw.id, P12_OFF);
+    expect("E1 GET /api/hub/articles/{id} (read key): exclusive / pinnedToLatest / pinnedUntil / editorialFlags (on for p12-hook, off for dtw)", [
+      det.status, a.exclusive, a.pinnedToLatest, a.pinnedUntil, a.editorialFlags, offDet.status, ((offDet.body.article ?? {}) as Doc).editorialFlags,
+    ], [200, true, false, null, true, 200, false]);
+    // Found by `q` = the fixture slug (each run adds rows, so page 1 alone would not do).
+    const list = await call9("GET", `/api/hub/articles?tenants=${P12_HOOK_TENANT}&q=${encodeURIComponent(A.engine.slug)}&limit=200`, undefined, T.read);
+    const row = (((list.body.articles as Doc[] | undefined) ?? []) as Doc[]).find((x) => Number(x.id) === A.engine.id);
+    const hubRow = (((await call9("GET", `/api/hub/articles?tenants=gcv&q=${encodeURIComponent(A.hub.slug)}&limit=200`, undefined, T.read)).body.articles as Doc[] | undefined) ?? []).find((x) => Number((x as Doc).id) === A.hub.id) as Doc | undefined;
+    expect("E2 GET /api/hub/articles (list): each row carries exclusive / pinnedToLatest / pinnedUntil", [
+      list.status, row ? [row.exclusive, row.pinnedToLatest, row.pinnedUntil] : null, hubRow ? [hubRow.exclusive, hubRow.pinnedToLatest, hubRow.pinnedUntil] : null,
+    ], [200, [true, false, null], [false, true, null]]);
+  });
+
+  const ok = state.failures === 0 && executed.length === P12_GROUPS.length;
+  console.log(`\n[check12] groups executed ${executed.length}/${P12_GROUPS.length}, skipped ${P12_GROUPS.length - executed.length}`);
+  console.log(`[check12] ${ok ? "ALL CHECKS PASSED" : `${state.failures} CHECK(S) FAILED`}`);
+  process.exit(ok ? 0 : 1);
+}
+
 const run = flag("setup")
   ? setup
   : flag("check")
@@ -12386,10 +13112,14 @@ const run = flag("setup")
                                                     ? check10
                                                     : flag("check11")
                                                       ? check11
-                                                      : null;
+                                                      : flag("setup12")
+                                                        ? setup12
+                                                        : flag("check12")
+                                                          ? check12
+                                                          : null;
 if (!run) {
   console.error(
-    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only | --setup9 --in <setup6.json> --out <f9> | --check9 --in <f9> | --check9 --unit-only | --setup10 --in <setup6.json> --out <f10> | --check10 --in <f10> [--server-log <file>] [--f9 <f9>] | --check10 --in <f10> --unit-only | --check11 --in <f10> [--unit-only]",
+    "usage: tsx scripts/hub-probe.ts --setup | --check --token <t> [--nohub-token <t>] | --paging [--token <t>] | --setup2 | --nullorder | --check2 --token <t> [--nohub-token <t>] | --setup3 --out <file> | --check3 --in <file> [--hooks-only] | --setup4 --out <file> | --check4 --in <file> [--unit-only] | --check5 --in <file> --in3 <file> [--unit-only] | --explore6 --in4 <file> [--only P-1,P-15,P-20..P-24] [--vec <name>] [--list] [--lim lines,starUnd,links] | --setup6 --out <file> | --check6 --in <file> | --check6 --unit-only | --check6 --hooks-only | --pb --in <setup6.json> | --n10 --in <setup6.json> (--out <json> | --compare <json> [--require-new-code]) | --pb7 --in <setup6.json> [--only PB-1,PB-3,…] | --pb7 --only GATE | --setup7 --in <setup6.json> --out <f7> | --check7 --in <f7> [--only LA-1,…,P,S,U,…] [--server-log <file>] [--la-n-high] | --check7 --hooks-only --in <f7> | --check7 --unit-only | --check7 --only GATE | --setup8 --in <setup6.json> --out <f8> | --check8 --in <f8> [--only U,C,P3,…] | --check8 --unit-only | --setup9 --in <setup6.json> --out <f9> | --check9 --in <f9> | --check9 --unit-only | --setup10 --in <setup6.json> --out <f10> | --check10 --in <f10> [--server-log <file>] [--f9 <f9>] | --check10 --in <f10> --unit-only | --check11 --in <f10> [--unit-only] | --setup12 --out <f12> | --check12 --in <f12>",
   );
   process.exit(2);
 }

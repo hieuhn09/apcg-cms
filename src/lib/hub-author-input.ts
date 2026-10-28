@@ -65,7 +65,20 @@ export const HUB_DRAFT_FIELD_KEYS = [
 ] as const;
 export type HubDraftFieldKey = (typeof HUB_DRAFT_FIELD_KEYS)[number];
 
-export const HUB_CREATE_KEYS: readonly string[] = ["tenant", ...HUB_DRAFT_FIELD_KEYS, "actor"];
+/**
+ * Editorial keys (content-engine plan hub-pin-exclusive-flags_PLAN_28-10-26.md, D2): three
+ * ROOT keys of the two draft routes — never under `flags` (`flags.exclusive` /
+ * `flags.pinnedToLatest` stay 400) and never part of `HUB_DRAFT_FIELD_KEYS`, so the 15 live
+ * keys (`HUB_LIVE_FIELD_KEYS`) and `HUB_FLAG_KEYS` are untouched. Pure checks here (type,
+ * pin pair, K7 format); the CMS switch `HUB_EDITORIAL_FLAGS_TENANTS` and the `pinnedUntil`
+ * window run after the tenant (src/lib/hub-author-flags.ts).
+ */
+export const HUB_EDITORIAL_KEYS = ["exclusive", "pinnedToLatest", "pinnedUntil"] as const;
+export type HubEditorialKey = (typeof HUB_EDITORIAL_KEYS)[number];
+/** Every key a draft write may change (the `present` / `changed` lists). */
+export type HubWriteKey = HubDraftFieldKey | HubEditorialKey;
+
+export const HUB_CREATE_KEYS: readonly string[] = ["tenant", ...HUB_DRAFT_FIELD_KEYS, ...HUB_EDITORIAL_KEYS, "actor"];
 export const HUB_UPDATE_KEYS: readonly string[] = [...HUB_CREATE_KEYS, "expectedVersion"];
 export const HUB_ACTOR_KEYS: readonly string[] = ["email", "role", "id"];
 export const HUB_SECONDARY_KEYS: readonly string[] = ["pillarSlug", "subSectionSlug"];
@@ -105,12 +118,21 @@ export interface HubDraftFields {
   leadImageCaption?: string | null;
 }
 
+/** The editorial keys of one request (D2 / D5): only the keys sent; `pinnedUntil` normalised (K7) or null. */
+export interface HubEditorialInput {
+  exclusive?: boolean;
+  pinnedToLatest?: boolean;
+  pinnedUntil?: string | null;
+}
+
 export interface HubDraftInput extends HubDraftFields {
   tenant: string;
   actor: HubActor;
   expectedVersion?: number;
-  /** Draft field keys present in the request, in request order (used for PATCH `changed` / merge). */
-  present: HubDraftFieldKey[];
+  /** Editorial keys sent (absent when none was sent). */
+  editorial?: HubEditorialInput;
+  /** Draft field + editorial keys present in the request, in request order (used for PATCH `changed` / merge). */
+  present: HubWriteKey[];
 }
 
 export type HubParseResult =
@@ -231,6 +253,44 @@ export function checkMediaId(v: unknown): { ok: true; value: number } | { ok: fa
   return { ok: true, value: v };
 }
 
+/**
+ * D5 — the editorial keys of ONE container (the draft body root, or the `set` of
+ * `POST /api/hub/articles/{id}/flags`), pure: `exclusive` a real boolean (else `type`);
+ * `pinnedToLatest` and `pinnedUntil` travel TOGETHER (the missing one ⇒ `required`);
+ * `pinnedToLatest` a real boolean (else `type`); `pinnedUntil` null or a K7 UTC string
+ * (`type` / `format`, normalised by `normalizeHubUtc`); `pinnedToLatest: false` with a
+ * `pinnedUntil` ⇒ `pinnedUntil: invalid`. The window needs `now` and is checked later. Error
+ * names are the bare key names on both routes. Returns only the keys sent (possibly `{}`).
+ */
+export function checkEditorialValues(src: Obj, fail: (name: string, code: HubFieldCode) => void): HubEditorialInput {
+  const own = (k: string) => Object.prototype.hasOwnProperty.call(src, k);
+  const out: HubEditorialInput = {};
+  if (own("exclusive")) {
+    if (typeof src.exclusive !== "boolean") fail("exclusive", "type");
+    else out.exclusive = src.exclusive;
+  }
+  const hasPin = own("pinnedToLatest");
+  const hasUntil = own("pinnedUntil");
+  if (hasPin) {
+    if (typeof src.pinnedToLatest !== "boolean") fail("pinnedToLatest", "type");
+    else out.pinnedToLatest = src.pinnedToLatest;
+  }
+  if (hasUntil) {
+    const u = src.pinnedUntil;
+    if (u === null) out.pinnedUntil = null;
+    else if (typeof u !== "string") fail("pinnedUntil", "type");
+    else {
+      const n = normalizeHubUtc(u);
+      if (n) out.pinnedUntil = n;
+      else fail("pinnedUntil", "format");
+    }
+  }
+  if (hasPin && !hasUntil) fail("pinnedUntil", "required");
+  if (hasUntil && !hasPin) fail("pinnedToLatest", "required");
+  if (out.pinnedToLatest === false && typeof out.pinnedUntil === "string") fail("pinnedUntil", "invalid");
+  return out;
+}
+
 function parseCommon(raw: unknown, mode: "create" | "update"): HubParseResult {
   if (!isPlainObject(raw)) return badRequest("body must be a JSON object");
   if (typeof raw.tenant !== "string" || raw.tenant.trim() === "") return badRequest("tenant is required");
@@ -249,7 +309,7 @@ function parseCommon(raw: unknown, mode: "create" | "update"): HubParseResult {
     present: [],
   };
   for (const k of Object.keys(raw)) {
-    if ((HUB_DRAFT_FIELD_KEYS as readonly string[]).includes(k)) value.present.push(k as HubDraftFieldKey);
+    if ((HUB_DRAFT_FIELD_KEYS as readonly string[]).includes(k) || (HUB_EDITORIAL_KEYS as readonly string[]).includes(k)) value.present.push(k as HubWriteKey);
   }
   const create = mode === "create";
 
@@ -470,6 +530,9 @@ function parseCommon(raw: unknown, mode: "create" | "update"): HubParseResult {
       value.flags = out;
     }
   }
+
+  // editorial keys (D2 / D5): ROOT keys, never under `flags`; absent ⇒ `editorial` absent
+  if (HUB_EDITORIAL_KEYS.some((k) => has(k))) value.editorial = checkEditorialValues(raw, fail);
 
   // sponsor (null = clear)
   if (has("sponsor")) {
