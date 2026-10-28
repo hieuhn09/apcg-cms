@@ -1,7 +1,7 @@
 ---
 name: context:all-integrations
 description: "API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint"
-keywords: api, auth, authentication, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub, pillar, single-home, pressroom, 422, hubAuthor, hub author, draft, composer, P5.1, bodyMarkdown, view=edit, publish, schedule, media upload, live edit, preview, authors, tags, hubWrite, HUB_LIVE_EDIT_TENANTS, P5.2, P5.3, P5.4, P5.6
+keywords: api, auth, authentication, direct upload, sign, register, staging, R2_STAGING_BUCKET, HUB_DIRECT_UPLOAD_TENANTS, presign, authorization, engine, content-engine, intake, translation, bearer token, read token, tenant, cross-tenant, multi-tenant, public api, cron, preview, revalidate, webhook, activity log, console, apcghub, hub, pillar, single-home, pressroom, 422, hubAuthor, hub author, draft, composer, P5.1, bodyMarkdown, view=edit, publish, schedule, media upload, live edit, preview, authors, tags, hubWrite, HUB_LIVE_EDIT_TENANTS, P5.2, P5.3, P5.4, P5.6
 related: [context:all-database]
 date: 15-10-26
 metadata:
@@ -10,7 +10,7 @@ metadata:
 
 # Integrations Context
 
-Last updated: 2026-10-22 (AsiaBeautyBrief `abb`, branch only, not merged: `abb: ["pressroom"]` in SINGLE_HOME_PILLARS + ENGINE_BLOCKED_PILLARS; new public read routes `GET /api/public/booths` + `/api/public/booths/{slug}` gated on the new `exhibition` feature; see §AsiaBeautyBrief booths API) Previously: 2026-10-20 (`Articles.exclusive` checkbox description and comment made tenant-neutral, apcg-cms#46 `aa0e692`, copy only, no migration; used by brief-asia and by dtw/Opentechwire (dtw-web#60); unrelated to GCV's `exclusive` pillar; see §Exclusive flag) Previously: 2026-10-15 (APCGHub P5.1b–P5.6 reconciled: P5.1b + P5.2 publish/schedule routes are on `main`; P5.3 `POST /api/hub/media`, P5.4 `PATCH /api/hub/articles/{id}/live` (env switch `HUB_LIVE_EDIT_TENANTS`), P5.6 `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` exist ONLY on the unmerged draft PR apcg-cms#36 (head `5d5b28c`); none is VERIFIED; see §Cross-tenant reads → HUB AUTHORING P5.1b–P5.6) Previously: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
+Last updated: 2026-10-28 (Hub direct image upload, hub docx import phase A, branch `claude/modest-bardeen-tsi4o5` from `main` `59a8e10`, local commits only, NOT pushed, NOT deployed, nothing run against R2/DB: new routes `POST /api/hub/media/sign` + `POST /api/hub/media/register` (hubRead + hubAuthor; OFF unless env `HUB_DIRECT_UPLOAD_TENANTS` lists the tenant; R2 staging via `R2_STAGING_BUCKET` or prefix `R2_STAGING_PREFIX`); `GET /api/hub/taxonomy` pillar items gain `blocked:boolean`; new dependency `@aws-sdk/s3-request-presigner` 3.1075.0; no migration, no new ActivityLog event; `npm run test:hub-direct-upload`; see §HUB AUTHORING → Direct image upload) Previously: 2026-10-22 (AsiaBeautyBrief `abb`, branch only, not merged: `abb: ["pressroom"]` in SINGLE_HOME_PILLARS + ENGINE_BLOCKED_PILLARS; new public read routes `GET /api/public/booths` + `/api/public/booths/{slug}` gated on the new `exhibition` feature; see §AsiaBeautyBrief booths API) Previously: 2026-10-20 (`Articles.exclusive` checkbox description and comment made tenant-neutral, apcg-cms#46 `aa0e692`, copy only, no migration; used by brief-asia and by dtw/Opentechwire (dtw-web#60); unrelated to GCV's `exclusive` pillar; see §Exclusive flag) Previously: 2026-10-15 (APCGHub P5.1b–P5.6 reconciled: P5.1b + P5.2 publish/schedule routes are on `main`; P5.3 `POST /api/hub/media`, P5.4 `PATCH /api/hub/articles/{id}/live` (env switch `HUB_LIVE_EDIT_TENANTS`), P5.6 `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` exist ONLY on the unmerged draft PR apcg-cms#36 (head `5d5b28c`); none is VERIFIED; see §Cross-tenant reads → HUB AUTHORING P5.1b–P5.6) Previously: 2026-10-06 (APCGHub P5.1 — hub TEXT-DRAFT author routes `POST /api/hub/articles`, `PATCH /api/hub/articles/{id}`, `GET …/{id}?view=edit`, taxonomy `kinds` extended; new flag `ContentEngines.hubAuthor` + migration `20260930_000000_add_content_engines_hub_author`; merged apcg-cms#25 `574ed20`; see §Cross-tenant reads → AUTHOR DRAFTS) Previously: 2026-10-05 (GCV Pressroom parity: `gcv: ["pressroom"]` added to `SINGLE_HOME_PILLARS`, `pressroom` added to `ENGINE_BLOCKED_PILLARS.gcv`; no migration; owner violator SQL in docs/11 is optional since GCV has no Pressroom articles; merged as apcg-cms#29 with gcv-web#10) Previously: 2026-10-05 (Amendment 1: engine blocked from brief-asia `pressroom`, gate 3b, §Single-home rewritten; earlier same day: new §Single-home pillar rule: SINGLE_HOME_PILLARS, enforcement points, intake 422 reasons, residuals). Previously: 2026-09-28 (APCGHub P4 / CMS-4b — gap `hub-id-over-int4-returns-500` FIXED on both
 hub article routes: new pure helper `isHubArticleId` (`src/lib/hub-article-id.ts`) bounds the id to
 Postgres `int4`, so an out-of-range id now gets the ordinary 404 `not_found` body with no log row;
 new probe `--check5`; new gap `hub-int4-bound-not-generalized-beyond-hub-routes`; see the "FIXED"
@@ -128,6 +128,7 @@ Update this group when:
 | `POST /api/hub/articles/{id}/publish`, `POST /api/hub/articles/{id}/schedule` | Hub WRITE engine bearer token (`authenticateHubWriteEngine`: `hubRead` + `hubWrite`) | **Internal** — APCGHub composer (content-engine P5.2) | Publish / schedule / unschedule ONE hub-authored draft; merged (`#33`, `#34`). See §HUB AUTHORING P5.1b–P5.6. |
 | `POST /api/hub/media`, `POST /api/hub/articles/{id}/preview`, `POST /api/hub/authors`, `POST /api/hub/tags` | Hub AUTHOR engine bearer token (`hubRead` + `hubAuthor`) | **Internal** — APCGHub composer (content-engine P5.3 / P5.6) | Image upload; signed 10-minute preview link; create a pen name / a tag. **Only on unmerged draft PR apcg-cms#36**, not deployed. See §HUB AUTHORING P5.1b–P5.6. |
 | `PATCH /api/hub/articles/{id}/live` | Hub WRITE engine bearer token (`hubRead` + `hubWrite`; a key that also has `hubAuthor` is refused) | **Internal** — APCGHub composer (content-engine P5.4) | Edit a PUBLISHED hub-authored article in place; OFF unless env `HUB_LIVE_EDIT_TENANTS` lists the tenant. **Only on unmerged draft PR apcg-cms#36.** |
+| `POST /api/hub/media/sign`, `POST /api/hub/media/register` | Hub AUTHOR engine bearer token (`hubRead` + `hubAuthor`) | **Internal** — APCGHub docx import (content-engine hub docx import phase B; no caller yet) | Large images (≤ 20 MiB, JPEG/PNG/WebP/GIF) without a Vercel request body: `sign` returns a 300 s presigned PUT into R2 STAGING, the hub's browser PUTs, `register` re-checks and creates `media`. OFF unless env `HUB_DIRECT_UPLOAD_TENANTS` lists the tenant. **Branch only (28-10-26), not deployed.** See §HUB AUTHORING → Direct image upload. |
 | `/(payload)` route group | Payload's own admin session | **Framework-managed** | Payload-generated `/admin` UI + its own REST/GraphQL under `/api` — not a hand-written contract, changes with the Payload version. |
 | `/(console)/console/*` | Payload human session (reused, `src/console/auth.ts`) | **Internal** — staff-only alternate admin UI | See §Cross-tenant reads — this is the one surface with an existing "see multiple tenants at once" shape, and it is human-session-only. |
 
@@ -601,6 +602,7 @@ title; pillar and author are validated again at publish. The "planned, not built
 | `POST /api/hub/articles/{id}/preview` | P5.6 | `hubRead` + `hubAuthor` | `hub-author-preview-core.ts`, `hub-author-preview-pure.ts` | branch only |
 | `POST /api/hub/authors` | P5.6 | `hubRead` + `hubAuthor` | `hub-taxonomy-create-core.ts`, `hub-taxonomy-create-pure.ts` | branch only |
 | `POST /api/hub/tags` | P5.6 | `hubRead` + `hubAuthor` | same files | branch only |
+| `POST /api/hub/media/sign?tenant=<slug>`, `POST /api/hub/media/register?tenant=<slug>` | docx import A | `hubRead` + `hubAuthor` | `src/lib/hub-direct-upload-{pure,core}.ts`, `src/app/api/hub/media/{sign,register}/route.ts`, `src/lib/r2.ts` (staging) | branch only (28-10-26); OFF unless env `HUB_DIRECT_UPLOAD_TENANTS` lists the tenant |
 
 All are internal (no CORS), all return `{ok:false,status,…}` JSON with frozen bodies, and none logs a
 token, a title, a name or an e-mail (error NAME/CODE only; one known leak class remains, see limits).
@@ -668,6 +670,54 @@ no name/title/e-mail) → 201 `{ok:true, created:true, …}`. A tag create that 
 creates of the same name can both succeed (known gap). **Do not rely on creating pen names/tags live
 until the owner measures real per-tenant totals (O9): the 950/2,900 soft caps are untested at scale and
 a tenant already above them would answer `taxonomy_full` from day one.**
+
+**Direct image upload (hub docx import phase A, 28-10-26, branch only).** Content-engine plan
+`process/features/apcg-hub/active/hub-docx-ai-import-pa-cms-media_PLAN_28-10-26.md` (decisions PA-1..PA-12),
+spike report `process/features/apcg-hub/reports/hub-docx-ai-import-pa_REPORT_28-10-26.md` (both in the
+content-engine repo). Two routes, both JSON ≤ 4,096 bytes (`Content-Length` required: 411 / 413), both
+answering frozen bodies (`HUB_DIRECT_ERROR_TABLE`, `src/lib/hub-direct-upload-pure.ts`) with
+`Cache-Control: no-store`. Common order: auth (401/403) → `tenant` (400) → grant (403 + `engine_tenant_denied`)
+→ `features.articles` (403) → switch `HUB_DIRECT_UPLOAD_TENANTS` (403 `feature_disabled`, reason "direct upload
+disabled for tenant"; CSV of CMS tenant slugs, exact match, read on every call, default OFF; the multipart
+`POST /api/hub/media` never reads it) → body.
+- `sign` body EXACTLY `{articleId, mime, size, actorRole, actorId?}`: mime ∈ JPEG/PNG/WebP/GIF (415), size ≤
+  20,971,520 (413), `loadHubEditableArticle` (404 / 422 `not_editable`), staging configured (503
+  `staging_unavailable`) → 200 `{ok, uploadId, put:{url, method:"PUT", headers:{"Content-Type"}, expiresInSec:300},
+  limits:{maxBytes, maxPixels, maxEdge}, expiresAt}`. Key `<prefix><tenant>/<articleId>/<uuid>` built by the server.
+  `uploadId` = `v1.<b64url JSON {t,a,k,m,s,e,n}>.<b64url HMAC-SHA256>`, key = HMAC(`PAYLOAD_SECRET`,
+  "hub-direct-upload-v1") (no new secret), 900 s, stateless. Writes nothing, no ActivityLog row.
+- `register` body EXACTLY `{uploadId, alt, caption?, credit?, actorRole, actorId?}`: token (422 `upload_invalid` /
+  410 `upload_expired`) → token tenant = requested tenant (422) → article gate → staging (503) → token key under
+  `<prefix><tenant>/<article>/` (422) → HEAD (absent 409 `object_missing`; size or Content-Type ≠ signed ⇒ object
+  deleted + 422) → read with a hard cap = signed size (over ⇒ deleted + 413) → `validateMediaFile` with the direct
+  limits (magic = declared mime, header size, JPEG SOS ≤ 64, edge ≤ 12,000, pixels ≤ `maxPixels`; 415 / 422 ⇒
+  deleted) → alt (422 / 400), credit, caption (≤ 500, one line; 400) — a text error KEEPS the object for a retry →
+  name `hub-<sha256(articleId + ":" + original bytes)[:32]>.<ext>` → same filename already in this tenant ⇒ only
+  alt / caption / credit updated (absent ⇒ cleared), 200 `deduped:true`; else `createTenantMedia` with the PA-7
+  ladder (JPEG/WebP q 90 → 80 → 70; PNG level 9 → long edge 4096 → 3072; > 20 MiB or past 45 s ⇒ 413) → 201 →
+  staging object deleted (best effort) → ActivityLog `media_uploaded` `detail {via:"hub-direct", actor, articleId,
+  deduped}`. 201/200 body = the multipart allowlist + `caption` + `deduped`. GIF: first frame only, stored as PNG.
+  Replaying a used `uploadId` ⇒ 409 (staging already deleted; the hub signs again).
+- Staging (`stagingConfig`): `R2_STAGING_BUCKET` (private, ≠ `R2_BUCKET`, no prefix) else the main bucket under
+  `R2_STAGING_PREFIX` (default `_hub-staging/`); `R2_ENDPOINT` + `R2_STAGING_ACCESS_KEY_ID`/`R2_STAGING_SECRET_ACCESS_KEY`
+  (both, else the main pair). Its own S3 client with `requestChecksumCalculation: "WHEN_REQUIRED"` (the SDK default
+  puts a CRC32 of an empty body into a presigned URL; measured offline). The URL SIGNS `content-type` and
+  `content-length`; whether R2 enforces them is spike A1 (owner-run, NOT run) — the HEAD + capped read + delete above
+  do not depend on it. Lifecycle 1 day on the staging area is the owner's safety net. CORS: `npm run r2:cors --
+  --staging [--dry-run]` (PUT/HEAD; origins = the HUB's origins).
+- Limits: `HUB_DIRECT_UPLOAD_LIMITS` (20 MiB, edge 12,000, `maxPixels` 12,000,000 — see the spike report: the A2
+  floor did NOT pass for WebP under the assumed 1024 MB function; owner decision pending). Known residuals: two
+  concurrent `register` of the same bytes can both create (no unique constraint); in prefix mode staging objects sit
+  in the PUBLIC main bucket until deleted.
+- **Multipart route unchanged.** `POST /api/hub/media` still has its 6-field closed form, 4 MB / 16.8 MP caps and its
+  frozen table; it does NOT take `caption` yet (plan PA-10 wanted it, but the existing tests and probe `--check8`
+  U-3 / C-1 pin the field list and the 201 keys; owner/plan decision pending). Its 201 builder moved verbatim to
+  `mediaResponseBody` in `hub-media-validate.ts`.
+- `GET /api/hub/taxonomy`: each pillar item has `blocked: boolean` = `isEngineBlockedPillar(tenant, slug)`
+  (`markBlockedPillars`, `hub-taxonomy-blocks.ts`); probe `--check2` G-P9 key list updated.
+- Tests: `npm run test:hub-direct-upload` (pure, core, taxonomy blocks, CORS rules); `test:hub-media` gained
+  appended direct-path cases (old cases unchanged). Spikes: `scripts/hub-direct-upload-spike.ts`
+  (`--a1-offline`, `--a1` owner, `--a2`, `--a4`), `scripts/hub-md-quote-hr-probe.ts` (A5, no DB).
 
 **Credentials and flags (summary).** `hubRead` = reads; `hubWrite` = status change (CMS-3), publish /
 schedule (P5.2), live edit (P5.4); `hubAuthor` (+ `hubRead`) = drafts (P5.1/P5.1b), image upload (P5.3),
