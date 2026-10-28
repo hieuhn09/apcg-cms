@@ -162,7 +162,7 @@ export const AER_NEWSLETTERS: readonly AerNewsletter[] = [
  * site's Team page (owner 19-10-26). General roles, no city, no shared
  * "editorial team" byline.
  */
-// PENDING OWNER: bio wording (owner to review; editable in /admin or with --authors-file)
+// Bio wording and roles confirmed by the owner 28-10-26 (editable in /admin or with --authors-file).
 export const AER_AUTHORS: readonly AerAuthor[] = [
   {
     name: "Lena Ho",

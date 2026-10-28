@@ -237,7 +237,7 @@ async function main(): Promise<void> {
   }
   const missing = fixture.authors.filter((a) => !a.bio).map((a) => a.name);
   if (missing.length) console.log(`  WARN: authors lacking a bio (set in /admin or --authors-file): ${missing.join(", ")}`);
-  console.log("  NOTE: the four author names come from the old site's Team page (owner choice 19-10-26); bio wording is PENDING OWNER; roles and bios are editable in /admin or with --authors-file.");
+  console.log("  NOTE: the four author names come from the old site's Team page (owner choice 19-10-26); bio wording confirmed by the owner 28-10-26; roles and bios are editable in /admin or with --authors-file.");
 
   if (!APPLY) {
     if (fails.length || counts.refuse) console.log(`${TAG} DRY RUN: --apply would REFUSE (preflight FAIL or refused rows).`);
