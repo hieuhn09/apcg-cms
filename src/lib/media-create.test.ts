@@ -116,3 +116,84 @@ describe("createTenantMedia (T3)", () => {
     assert.equal(r.calls.length, 0);
   });
 });
+
+// ── Direct-upload path (hub docx import phase A — PA-7 / PA-8 / PA-10) ────────
+// Appended only: every test above is unchanged and still pins the multipart route.
+
+describe("createTenantMedia direct path: caption, ladder, GIF", () => {
+  it("caption goes into the create data (multipart path unchanged when absent)", async () => {
+    const r = recorder();
+    await createTenantMedia(
+      { payload, tenantId: 5, prefix: "gcv", file: { data: await webp(), mimetype: "image/webp", name: "hub-x.webp" }, data: { alt: "a", caption: "Cap", credit: "Cr" } },
+      { create: r.create as never },
+    );
+    assert.deepEqual(r.calls[0]!.data, { alt: "a", caption: "Cap", credit: "Cr", prefix: "gcv" });
+  });
+  it("GIF (5 frames) ⇒ ONE-frame PNG, stored mime image/png, limitInputPixels on the first frame", async () => {
+    const frames = await Promise.all([0, 1, 2, 3, 4].map((i) => sharp({ create: { width: 40, height: 30, channels: 3, background: { r: i * 50, g: 0, b: 0 } } }).png().toBuffer()));
+    const gif = await sharp(frames, { join: { animated: true } }).gif().toBuffer();
+    assert.equal((await sharp(gif).metadata()).pages, 5);
+    const r = recorder();
+    await createTenantMedia(
+      { payload, tenantId: 5, prefix: "gcv", file: { data: gif, mimetype: "image/gif", name: "hub-y.png" }, data: { alt: "a" }, capBytes: 20 * 1024 * 1024, maxPixels: 12_000_000 },
+      { create: r.create as never },
+    );
+    const c = r.calls[0]!;
+    assert.equal(c.file?.mimetype, "image/png");
+    const m = await sharp(c.file!.data).metadata();
+    assert.deepEqual([m.format, m.pages ?? 1, m.width, m.height], ["png", 1, 40, 30]);
+  });
+  it("ladder: JPEG over the cap ⇒ quality 80 then 70; the first result under the cap wins", async () => {
+    const seen: unknown[] = [];
+    const reencode = async (_d: Buffer, _m: string, o?: { quality?: number }) => {
+      seen.push(o?.quality ?? "default");
+      const size = o?.quality === 70 ? 900 : 2000;
+      return { data: Buffer.alloc(size), width: 1, height: 1, size, mime: "image/jpeg" as const };
+    };
+    const r = recorder();
+    await createTenantMedia(
+      { payload, tenantId: 5, prefix: "gcv", file: { data: Buffer.alloc(1), mimetype: "image/jpeg", name: "hub-z.jpg" }, data: { alt: "a" }, capBytes: 1000, maxPixels: 100 },
+      { create: r.create as never, reencode: reencode as never },
+    );
+    assert.deepEqual(seen, ["default", 80, 70]);
+    assert.equal(r.calls[0]!.file?.data.length, 900);
+  });
+  it("ladder: PNG ⇒ level 9, then long edge 4096, then 3072; still over ⇒ too_large, no create", async () => {
+    const seen: unknown[] = [];
+    const reencode = async (_d: Buffer, _m: string, o?: { pngCompressionLevel?: number; maxEdge?: number }) => {
+      seen.push(o?.pngCompressionLevel === undefined ? "default" : `${o.pngCompressionLevel}/${o.maxEdge ?? "-"}`);
+      return { data: Buffer.alloc(2000), width: 1, height: 1, size: 2000, mime: "image/png" as const };
+    };
+    const r = recorder();
+    await assert.rejects(
+      createTenantMedia(
+        { payload, tenantId: 5, prefix: "gcv", file: { data: Buffer.alloc(1), mimetype: "image/png", name: "hub-z.png" }, data: { alt: "a" }, capBytes: 1000, maxPixels: 100 },
+        { create: r.create as never, reencode: reencode as never },
+      ),
+      (e: unknown) => e instanceof MediaCreateError && e.code === "too_large",
+    );
+    assert.deepEqual(seen, ["default", "9/-", "9/4096", "9/3072"]);
+    assert.equal(r.calls.length, 0);
+  });
+  it("ladder: past the deadline no further step starts ⇒ too_large", async () => {
+    let calls = 0;
+    const reencode = async () => {
+      calls++;
+      return { data: Buffer.alloc(2000), width: 1, height: 1, size: 2000 };
+    };
+    let t = 0;
+    await assert.rejects(
+      createTenantMedia(
+        { payload, tenantId: 5, prefix: "gcv", file: { data: Buffer.alloc(1), mimetype: "image/jpeg", name: "x.jpg" }, data: { alt: "a" }, capBytes: 1000, maxPixels: 100, deadlineMs: 10 },
+        { create: recorder().create as never, reencode: reencode as never, now: () => (t += 20) },
+      ),
+      (e: unknown) => e instanceof MediaCreateError && e.code === "too_large",
+    );
+    assert.equal(calls, 1);
+  });
+  it("real sharp: a resize step shrinks the long edge (PNG 5000x100 ⇒ 4096 wide)", async () => {
+    const big = await sharp({ create: { width: 5000, height: 100, channels: 3, background: "#123" } }).png().toBuffer();
+    const out = await sharpReencode(big, "image/png", { maxPixels: 12_000_000, pngCompressionLevel: 9, maxEdge: 4096 });
+    assert.deepEqual([out.width, out.height, out.mime], [4096, 82, "image/png"]);
+  });
+});

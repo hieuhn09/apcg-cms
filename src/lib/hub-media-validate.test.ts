@@ -410,3 +410,65 @@ describe("stored file name (T4)", () => {
     assert.notEqual(hubMediaFileName("image/png"), hubMediaFileName("image/png"));
   });
 });
+
+// ── Direct-upload options (hub docx import phase A — PA-5 / PA-6 / PA-8 / PA-10) ──
+// Appended only: every test above is unchanged and still pins the multipart route.
+
+describe("validateMediaFile with direct-upload limits (opt-in only)", () => {
+  const DIRECT = { maxBytes: 20 * 1024 * 1024, maxEdge: 12_000, maxPixels: 12_000_000, allowGif: true } as const;
+  const gif = (w: number, h: number) => {
+    const b = Buffer.from(GIF);
+    b.writeUInt16LE(w, 6);
+    b.writeUInt16LE(h, 8);
+    return b;
+  };
+  it("GIF is sniffed and sized ONLY with allowGif (default still null / 415)", async () => {
+    assert.equal(sniffImageMime(GIF), null);
+    assert.equal(sniffImageMime(GIF, true), "image/gif");
+    assert.equal(sniffImageMime(Buffer.from("GIF87a\x01\x00\x01\x00", "latin1"), true), "image/gif");
+    assert.deepEqual(readImageSize(gif(300, 200), "image/gif"), { ok: true, width: 300, height: 200 });
+    assert.deepEqual(readImageSize(Buffer.from("GIF89a\x01", "latin1"), "image/gif"), { ok: false });
+    const r = await validateMediaFile(fileLike(gif(300, 200), "image/gif"), "a", undefined, DIRECT);
+    assert.deepEqual(r.ok && [r.mime, r.width, r.height], ["image/gif", 300, 200]);
+    assert.deepEqual(await validateMediaFile(fileLike(gif(300, 200), "image/gif"), "a", undefined, { ...DIRECT, allowGif: false }), { ok: false, code: "media_type" });
+  });
+  it("a GIF declared as PNG (or PNG declared as GIF) ⇒ 415 even with allowGif", async () => {
+    assert.deepEqual(await validateMediaFile(fileLike(gif(10, 10), "image/png"), "a", undefined, DIRECT), { ok: false, code: "media_type" });
+    assert.deepEqual(await validateMediaFile(fileLike(png(10, 10), "image/gif"), "a", undefined, DIRECT), { ok: false, code: "media_type" });
+  });
+  it("20 MiB cap only when passed; default stays 4,000,000", async () => {
+    assert.deepEqual(await validateMediaFile(fileLike(png(10, 10), "image/png", 4_000_001), "a", undefined), { ok: false, code: "too_large" });
+    assert.equal((await validateMediaFile(fileLike(png(10, 10), "image/png", 4_000_001), "a", undefined, DIRECT)).ok, true);
+    assert.deepEqual(await validateMediaFile(fileLike(png(10, 10), "image/png", 20 * 1024 * 1024 + 1), "a", undefined, DIRECT), { ok: false, code: "too_large" });
+  });
+  it("edge 12,000 and the passed pixel cap replace 4096 / 16.8 MP only when passed", async () => {
+    assert.deepEqual(await validateMediaFile(fileLike(png(5000, 2000), "image/png"), "a", undefined), { ok: false, code: "media_dimensions" });
+    assert.equal((await validateMediaFile(fileLike(png(5000, 2000), "image/png"), "a", undefined, DIRECT)).ok, true);
+    assert.deepEqual(await validateMediaFile(fileLike(png(12_001, 10), "image/png"), "a", undefined, DIRECT), { ok: false, code: "media_dimensions" });
+    assert.deepEqual(await validateMediaFile(fileLike(png(4000, 3001), "image/png"), "a", undefined, DIRECT), { ok: false, code: "media_dimensions" });
+    assert.equal((await validateMediaFile(fileLike(png(4000, 3000), "image/png"), "a", undefined, DIRECT)).ok, true);
+  });
+  it("caption: checked after alt/credit, trimmed, blank ⇒ undefined, bad ⇒ 400; absent option ⇒ no caption key", async () => {
+    const ok = await validateMediaFile(fileLike(png(10, 10), "image/png"), "a", undefined, { ...DIRECT, caption: " Cap " });
+    assert.equal(ok.ok && ok.caption, "Cap");
+    const blank = await validateMediaFile(fileLike(png(10, 10), "image/png"), "a", undefined, { ...DIRECT, caption: "  " });
+    assert.equal(blank.ok && blank.caption, undefined);
+    assert.deepEqual(await validateMediaFile(fileLike(png(10, 10), "image/png"), "a", undefined, { ...DIRECT, caption: "a\nb" }), { ok: false, code: "bad_request" });
+    assert.deepEqual(await validateMediaFile(fileLike(png(10, 10), "image/png"), " ", undefined, { ...DIRECT, caption: "a\nb" }), { ok: false, code: "alt_required" });
+    const none = await validateMediaFile(fileLike(png(10, 10), "image/png"), "a", undefined);
+    assert.equal(none.ok && Object.prototype.hasOwnProperty.call(none, "caption"), false);
+  });
+  it("the frozen multipart table and field list are NOT changed by the direct path", () => {
+    assert.equal(HUB_MEDIA_ERROR_TABLE.length, 12);
+    assert.deepEqual([...HUB_MEDIA_FORM_FIELDS], ["file", "alt", "credit", "articleId", "actorRole", "actorId"]);
+  });
+  it("mediaResponseBody (moved from the route verbatim) and storedExt", async () => {
+    const m = await import("./hub-media-validate");
+    const doc = { id: 1, alt: "a", credit: null, mimeType: "image/png", width: 1, height: 2, filesize: 3, url: "/u", secret: "x", sizes: { thumbnail: { url: "/t", width: 4, height: 5 }, card: { width: 9 } } };
+    assert.deepEqual(m.mediaResponseBody(doc), {
+      ok: true,
+      media: { id: 1, alt: "a", credit: null, mimeType: "image/png", width: 1, height: 2, filesize: 3, url: "/u", sizes: { thumbnail: { url: "/t", width: 4, height: 5 } } },
+    });
+    assert.deepEqual(["image/jpeg", "image/png", "image/webp", "image/gif"].map((x) => m.storedExt(x as never)), ["jpg", "png", "webp", "png"]);
+  });
+});

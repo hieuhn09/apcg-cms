@@ -201,9 +201,14 @@ export interface HubPillar {
   icon: string | null;
   order: number | null;
   description: string | null;
+  /** True when the content engine may not write into this pillar (`ENGINE_BLOCKED_PILLARS`, PA-11). */
+  blocked: boolean;
 }
 
-export function sanitizeHubPillar(doc: Doc): HubPillar {
+/** A pillar as sanitized from the row, before `markBlockedPillars` adds `blocked` (PA-11). */
+export type HubPillarBase = Omit<HubPillar, "blocked">;
+
+export function sanitizeHubPillar(doc: Doc): HubPillarBase {
   return {
     id: doc.id as number | string,
     slug: str(doc.slug),
