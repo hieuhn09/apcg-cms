@@ -27,14 +27,10 @@ export const HUB_DIRECT_UPLOAD_LIMITS = {
   /** Longest accepted edge, from the header, before any decode. */
   maxEdge: 12_000,
   /**
-   * Pixel cap, from the header before any decode and as sharp's `limitInputPixels`.
-   * Held at the plan's FLOOR (12 MP) pending an owner decision: spike A2 (content-engine
-   * report `hub-docx-ai-import-pa_REPORT_28-10-26.md`) found no level of {12, 24, 36, 50}
-   * MP that passes for EVERY format under the plan's assumed 1024 MB function (pass =
-   * p95 ≤ 40 s AND peak RSS ≤ 614 MB): WebP peaked at 711 MB already at 12 MP. JPEG and
-   * PNG passed up to 36 MP. Raise only after the owner's Preview run / memory setting.
+   * Pixel cap per STORED-input format: `maxPixelsFor(sniffedMime)`. Kept here only as
+   * the strictest of the four (what `sign` falls back to for an unknown mime).
    */
-  maxPixels: 12_000_000,
+  maxPixels: 16_800_000,
   /** Lifetime of the presigned PUT URL. */
   putTtlSeconds: 300,
   /** Lifetime of the `uploadId` (sign → register). */
@@ -48,6 +44,31 @@ export const HUB_DIRECT_UPLOAD_LIMITS = {
   /** PA-7: no further re-encode step starts later than this after `register` began. */
   reencodeBudgetMs: 45_000,
 } as const;
+
+/**
+ * Pixel cap per format (decision D-A2, resolved 04-11-26: apcg-cms functions run on
+ * Vercel "Standard, 1 vCPU, 2 GB"). Budget rule of the plan: peak RSS ≤ 60% of the
+ * function memory = 1228 MB at 2048 MB. Spike A2 (content-engine report
+ * `hub-docx-ai-import-pa_REPORT_28-10-26.md` §2, peaks include the 293 MB baseline):
+ *   - JPEG 50 MP: peak 659 MB, p95 3.1 s; PNG 50 MP: 528 MB, 1.9 s ⇒ 50 MP.
+ *   - WebP 12 MP 711 MB, 24 MP 1301 MB (> 1228) ⇒ 16.8 MP (the multipart route's cap;
+ *     measured locally 04-11-26: 3 runs, peak RSS p50 800 / max 1145 MB ≤ 1228, p95 9.8 s).
+ *   - GIF (first frame, stored as PNG): not measured ⇒ conservative 16.8 MP.
+ * Applied to the SNIFFED mime (magic bytes), never the declared one, both to the
+ * header check and to sharp's `limitInputPixels`. `maxEdge` (12,000) is unchanged:
+ * a 50 MP JPEG of normal aspect (8660×5773, 3:2) is well inside it.
+ */
+export const HUB_DIRECT_MAX_PIXELS: Readonly<Record<DirectMediaMime, number>> = Object.freeze({
+  "image/jpeg": 50_000_000,
+  "image/png": 50_000_000,
+  "image/webp": 16_800_000,
+  "image/gif": 16_800_000,
+});
+
+/** The pixel cap for a SNIFFED mime; anything unknown ⇒ the strictest cap. */
+export function maxPixelsFor(mime: unknown): number {
+  return isDirectMime(mime) ? HUB_DIRECT_MAX_PIXELS[mime] : HUB_DIRECT_UPLOAD_LIMITS.maxPixels;
+}
 
 export const DIRECT_MIME: readonly DirectMediaMime[] = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
@@ -328,7 +349,7 @@ const DIRECT_BODIES: Record<HubDirectErrorCode, { http: number; body: Record<str
     body: {
       ok: false,
       status: "media_dimensions",
-      reason: `image exceeds ${HUB_DIRECT_UPLOAD_LIMITS.maxEdge} px per edge or ${HUB_DIRECT_UPLOAD_LIMITS.maxPixels} pixels`,
+      reason: `image exceeds ${HUB_DIRECT_UPLOAD_LIMITS.maxEdge} px per edge or the pixel cap for its format`,
     },
   },
   alt_required: { http: 422, body: { ok: false, status: "alt_required", reason: "alt text is required" } },
@@ -336,9 +357,14 @@ const DIRECT_BODIES: Record<HubDirectErrorCode, { http: number; body: Record<str
   internal_error: { http: 500, body: { ok: false, status: "internal_error" } },
 };
 
-export function directError(code: HubDirectErrorCode): Response {
+/** `maxPixels` (media_dimensions only): the cap of the SNIFFED format, named in the reason. */
+export function directError(code: HubDirectErrorCode, opts: { maxPixels?: number } = {}): Response {
   const r = DIRECT_BODIES[code];
-  return json(r.body, r.http, { "Cache-Control": "no-store" });
+  const body =
+    code === "media_dimensions" && opts.maxPixels !== undefined
+      ? { ...r.body, reason: `image exceeds ${HUB_DIRECT_UPLOAD_LIMITS.maxEdge} px per edge or ${opts.maxPixels} pixels` }
+      : r.body;
+  return json(body, r.http, { "Cache-Control": "no-store" });
 }
 
 /**
@@ -375,7 +401,8 @@ export function signResponse(a: { uploadId: string; url: string; mime: DirectMed
       ok: true,
       uploadId: a.uploadId,
       put: { url: a.url, method: "PUT", headers: { "Content-Type": a.mime }, expiresInSec: HUB_DIRECT_UPLOAD_LIMITS.putTtlSeconds },
-      limits: { maxBytes: HUB_DIRECT_UPLOAD_LIMITS.fileBytes, maxPixels: HUB_DIRECT_UPLOAD_LIMITS.maxPixels, maxEdge: HUB_DIRECT_UPLOAD_LIMITS.maxEdge },
+      // Advisory: sign knows only the DECLARED mime; register enforces the sniffed one's cap.
+      limits: { maxBytes: HUB_DIRECT_UPLOAD_LIMITS.fileBytes, maxPixels: maxPixelsFor(a.mime), maxEdge: HUB_DIRECT_UPLOAD_LIMITS.maxEdge },
       expiresAt: new Date(a.expiresAtSeconds * 1000).toISOString(),
     },
     200,

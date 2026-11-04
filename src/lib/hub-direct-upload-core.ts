@@ -49,7 +49,7 @@ import { loadHubEditableArticle, resolveTenant } from "@/lib/hub-author-handlers
 import { readSmallBody } from "@/lib/hub-author-preview-pure";
 import { pgErrorCode } from "@/lib/hub-article-lock";
 import { scopedFind, scopedUpdate } from "@/lib/scoped";
-import { validateMediaFile, type DirectMediaMime } from "@/lib/hub-media-validate";
+import { sniffImageMime, validateMediaFile, type DirectMediaMime } from "@/lib/hub-media-validate";
 import { MediaCreateError, createTenantMedia } from "@/lib/media-create";
 import { r2Staging, type StagingStore } from "@/lib/r2";
 import {
@@ -59,6 +59,7 @@ import {
   directUploadTenants,
   isDirectMime,
   isDirectUploadTenant,
+  maxPixelsFor,
   newNonce,
   parseRegisterBody,
   parseSignBody,
@@ -256,6 +257,8 @@ export async function handleHubMediaRegisterWith(request: Request, deps: HubDire
     }
 
     const bytes = got.bytes;
+    // D-A2: the cap comes from the SNIFFED format (magic bytes), never the declared one.
+    const maxPixels = maxPixelsFor(sniffImageMime(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), true));
     const v = await validateMediaFile(
       { size: bytes.length, type: c.m, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer },
       f.alt,
@@ -263,7 +266,7 @@ export async function handleHubMediaRegisterWith(request: Request, deps: HubDire
       {
         maxBytes: HUB_DIRECT_UPLOAD_LIMITS.fileBytes,
         maxEdge: HUB_DIRECT_UPLOAD_LIMITS.maxEdge,
-        maxPixels: HUB_DIRECT_UPLOAD_LIMITS.maxPixels,
+        maxPixels,
         allowGif: true,
         caption: f.caption,
       },
@@ -271,7 +274,7 @@ export async function handleHubMediaRegisterWith(request: Request, deps: HubDire
     if (!v.ok) {
       // The OBJECT is bad ⇒ drop it; a text-field error keeps it for a corrected retry.
       if (v.code === "too_large" || v.code === "media_type" || v.code === "media_dimensions") await dropStaging(payload, staging, c.k);
-      return directError(v.code);
+      return v.code === "media_dimensions" ? directError(v.code, { maxPixels }) : directError(v.code);
     }
 
     const mime: DirectMediaMime = v.mime;
@@ -297,12 +300,12 @@ export async function handleHubMediaRegisterWith(request: Request, deps: HubDire
             ...(v.credit !== undefined ? { credit: v.credit } : {}),
           },
           capBytes: HUB_DIRECT_UPLOAD_LIMITS.fileBytes,
-          maxPixels: HUB_DIRECT_UPLOAD_LIMITS.maxPixels,
+          maxPixels,
           deadlineMs: startedMs + HUB_DIRECT_UPLOAD_LIMITS.reencodeBudgetMs,
         });
       } catch (err) {
         await dropStaging(payload, staging, c.k);
-        if (err instanceof MediaCreateError) return directError(err.code);
+        if (err instanceof MediaCreateError) return err.code === "media_dimensions" ? directError(err.code, { maxPixels }) : directError(err.code);
         throw err;
       }
       deduped = false;

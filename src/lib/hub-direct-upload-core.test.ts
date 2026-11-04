@@ -25,11 +25,13 @@ type MediaCreate = typeof import("./media-create");
 type R2 = typeof import("./r2");
 let core: Core;
 let pure: Pure;
+let hubMediaValidate: typeof import("./hub-media-validate");
 let mc: MediaCreate;
 let r2: R2;
 before(async () => {
   core = await import("./hub-direct-upload-core");
   pure = await import("./hub-direct-upload-pure");
+  hubMediaValidate = await import("./hub-media-validate");
   mc = await import("./media-create");
   r2 = await import("./r2");
 });
@@ -459,7 +461,7 @@ describe("register: re-check after upload (AC4)", () => {
     assert.deepEqual([r.status, r.body.status], [413, "too_large"]);
     assert.deepEqual(c.st.calls.deleted, [key]);
   });
-  it("pixel bomb from the header (PNG 13000x100, edge > 12000; and > maxPixels) ⇒ 422 media_dimensions, deleted, never decoded", async () => {
+  it("pixel bomb from the header (PNG 13000x100, edge > 12000; and > the PNG pixel cap) ⇒ 422 media_dimensions, deleted, never decoded", async () => {
     const ihdr = (w: number, h: number) => {
       const b = Buffer.alloc(45);
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
@@ -471,7 +473,7 @@ describe("register: re-check after upload (AC4)", () => {
       b[25] = 6;
       return b;
     };
-    const side = Math.ceil(Math.sqrt(pure.HUB_DIRECT_UPLOAD_LIMITS.maxPixels + 1)) + 1;
+    const side = Math.ceil(Math.sqrt(pure.HUB_DIRECT_MAX_PIXELS["image/png"] + 1)) + 1;
     for (const bomb of [ihdr(13_000, 100), ihdr(side, side)]) {
       const c = ctx();
       const { uploadId, key } = await signAndPut(c, bomb, { mime: "image/png" });
@@ -585,6 +587,137 @@ describe("source guards", () => {
     assert.ok(!/console\./.test(src));
     for (const line of src.split("\n").filter((l) => /logger\.(info|warn|error)/.test(l))) {
       assert.ok(!/url|uploadId|\bkey\b|c\.k|alt|caption|credit/i.test(line.replace(/\[\$\{SCOPE\}\]/, "")), line.trim());
+    }
+  });
+});
+
+// ── D-A2: per-format pixel caps from the SNIFFED mime (04-11-26, 2 GB functions) ──
+
+describe("register: per-format pixel cap (D-A2)", () => {
+  const pngHdr = (w: number, h: number) => {
+    const b = Buffer.alloc(45);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+    b.writeUInt32BE(13, 8);
+    b.write("IHDR", 12, "latin1");
+    b.writeUInt32BE(w, 16);
+    b.writeUInt32BE(h, 20);
+    b[24] = 8;
+    b[25] = 6;
+    return b;
+  };
+  const webpHdr = (w: number, h: number) => {
+    const b = Buffer.alloc(40);
+    b.write("RIFF", 0, "latin1");
+    b.writeUInt32LE(32, 4);
+    b.write("WEBP", 8, "latin1");
+    b.write("VP8X", 12, "latin1");
+    b.writeUInt32LE(10, 16);
+    b.writeUIntLE(w - 1, 24, 3);
+    b.writeUIntLE(h - 1, 27, 3);
+    return b;
+  };
+  const gifHdr = (w: number, h: number) => {
+    const b = Buffer.alloc(32);
+    b.write("GIF89a", 0, "latin1");
+    b.writeUInt16LE(w, 6);
+    b.writeUInt16LE(h, 8);
+    return b;
+  };
+  const jpegHdr = (w: number, h: number) =>
+    Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 0xff, w >> 8, w & 0xff, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xff, 0xd9]);
+
+  // [mime, header builder, w×h exactly at cap, smallest w×h over cap within the 12,000 edge]
+  // (cap + 1 itself has no factor pair with both edges ≤ 12,000; the exact cap + 1 arithmetic
+  // is pinned below with the edge lifted.)
+  const CASES: [string, (w: number, h: number) => Buffer, [number, number], [number, number]][] = [
+    ["image/jpeg", jpegHdr, [10_000, 5_000], [10_000, 5_001]],
+    ["image/png", pngHdr, [10_000, 5_000], [10_000, 5_001]],
+    ["image/webp", webpHdr, [4_200, 4_000], [4_200, 4_001]],
+    ["image/gif", gifHdr, [4_200, 4_000], [4_200, 4_001]],
+  ];
+
+  it("the table: JPEG/PNG 50 MP, WebP/GIF 16.8 MP; unknown ⇒ strictest; maxEdge unchanged and fits 8660×5773", () => {
+    assert.deepEqual({ ...pure.HUB_DIRECT_MAX_PIXELS }, { "image/jpeg": 50_000_000, "image/png": 50_000_000, "image/webp": 16_800_000, "image/gif": 16_800_000 });
+    assert.equal(pure.maxPixelsFor("image/heic"), 16_800_000);
+    assert.equal(pure.maxPixelsFor(null), 16_800_000);
+    assert.equal(pure.HUB_DIRECT_UPLOAD_LIMITS.maxEdge, 12_000);
+    assert.ok(8660 * 5773 <= pure.HUB_DIRECT_MAX_PIXELS["image/jpeg"]);
+  });
+
+  for (const [mime, hdr, at] of CASES) {
+    it(`${mime} exactly at its cap passes the header check; sharp gets limitInputPixels = that cap`, async () => {
+      let seen: number | undefined;
+      const c = ctx({
+        create: async (args) => {
+          seen = args.maxPixels;
+          throw new mc.MediaCreateError("media_dimensions");
+        },
+      });
+      const { uploadId } = await signAndPut(c, hdr(at[0], at[1]), { mime });
+      const r = await call("register", c, req("register", regBody(uploadId)));
+      const cap = pure.HUB_DIRECT_MAX_PIXELS[mime as keyof typeof pure.HUB_DIRECT_MAX_PIXELS];
+      assert.equal(at[0] * at[1], cap);
+      assert.equal(seen, cap, mime);
+      assert.deepEqual([r.status, r.body.status, r.body.reason], [422, "media_dimensions", `image exceeds 12000 px per edge or ${cap} pixels`]);
+    });
+  }
+
+  it("exact cap + 1 pixel (edge lifted) fails the header check for each sniffed format", async () => {
+    // PNG: 50,000,000×1 vs 50,000,001×1. WebP (24-bit edges): 4,200×4,000 vs 73×230,137 (= 16,800,001).
+    const rows: [string, Buffer, boolean][] = [
+      ["image/png", pngHdr(50_000_000, 1), true],
+      ["image/png", pngHdr(50_000_001, 1), false],
+      ["image/webp", webpHdr(4_200, 4_000), true],
+      ["image/webp", webpHdr(73, 230_137), false],
+    ];
+    for (const [mime, bytes, ok] of rows) {
+      const r = await hubMediaValidate.validateMediaFile(
+        { size: bytes.length, type: mime, arrayBuffer: async () => new Uint8Array(bytes).buffer },
+        "a",
+        undefined,
+        { maxBytes: 1000, maxEdge: 1e9, maxPixels: pure.maxPixelsFor(hubMediaValidate.sniffImageMime(bytes, true)), allowGif: true },
+      );
+      assert.equal(r.ok, ok, `${mime} ok=${ok}`);
+      {
+      }
+    }
+  });
+
+  it("over the cap ⇒ 422 media_dimensions naming that format's cap, deleted, never reaches create", async () => {
+    for (const [mime, hdr, , over] of CASES) {
+      const cap = pure.HUB_DIRECT_MAX_PIXELS[mime as keyof typeof pure.HUB_DIRECT_MAX_PIXELS];
+      let created = false;
+      const c = ctx({
+        create: async () => {
+          created = true;
+          throw new Error("must not be called");
+        },
+      });
+      const [w, h] = over;
+      assert.ok(w * h > cap);
+      const { uploadId, key } = await signAndPut(c, hdr(w, h), { mime });
+      const r = await call("register", c, req("register", regBody(uploadId)));
+      assert.deepEqual([r.status, r.body.status, r.body.reason], [422, "media_dimensions", `image exceeds 12000 px per edge or ${cap} pixels`], mime);
+      assert.deepEqual(c.st.calls.deleted, [key]);
+      assert.equal(created, false);
+    }
+  });
+
+  it("a 20 MP WebP header declared AND stored as image/jpeg is judged by its SNIFFED mime (WebP cap), never reaches create", async () => {
+    const bytes = webpHdr(5_000, 4_000);
+    assert.equal(pure.maxPixelsFor(hubMediaValidate.sniffImageMime(bytes, true)), 16_800_000);
+    let created = false;
+    const c = ctx({ create: async () => ((created = true), Promise.reject(new Error("no"))) });
+    const { uploadId } = await signAndPut(c, bytes, { mime: "image/jpeg" });
+    const r = await call("register", c, req("register", regBody(uploadId)));
+    assert.deepEqual([r.status, r.body.status], [415, "media_type"]);
+    assert.equal(created, false);
+  });
+
+  it("sign reports the cap of the DECLARED mime in `limits` (advisory)", async () => {
+    for (const [mime] of CASES) {
+      const s = await call("sign", ctx(), req("sign", signBody({ mime, size: 100 })));
+      assert.equal((s.body.limits as Doc).maxPixels, pure.HUB_DIRECT_MAX_PIXELS[mime as keyof typeof pure.HUB_DIRECT_MAX_PIXELS], mime);
     }
   });
 });
