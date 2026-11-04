@@ -20,7 +20,8 @@
  * — the SAME helper as PATCH → re-encode with sharp + create (`createTenantMedia`;
  * 415 / 422 / 413 by error class) → ActivityLog `media_uploaded` → 201.
  *
- * Every error body is frozen (`HUB_MEDIA_ERROR_TABLE`). The 201 body is an
+ * Every error body is frozen (`HUB_MEDIA_ERROR_TABLE`). The 201 body (`mediaResponseBody`, in
+ * hub-media-validate.ts since hub docx import phase A, unchanged) is an
  * allowlist built by hand (`depth: 0`, never a spread of the document).
  * Logs: an error NAME / CODE only (gap `hub-p5-2-payload-error-log-prints-sql-params`
  * also applies here: a Payload/Drizzle error may still print SQL parameters).
@@ -36,6 +37,7 @@ import {
   checkContentLength,
   hubMediaFileName,
   mediaError,
+  mediaResponseBody,
   mediaTooLarge,
   parseMediaFormEntries,
   validateMediaFile,
@@ -47,36 +49,6 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 type Doc = Record<string, unknown>;
-
-const SIZE_NAMES = ["thumbnail", "card", "hero"] as const;
-
-const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
-const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-
-/** The 201 allowlist (T1). Sizes the image was too small for are absent. */
-function mediaResponseBody(doc: Doc): Record<string, unknown> {
-  const sizes: Record<string, { url: string; width: number | null; height: number | null }> = {};
-  const raw = doc.sizes && typeof doc.sizes === "object" ? (doc.sizes as Record<string, unknown>) : {};
-  for (const k of SIZE_NAMES) {
-    const s = raw[k] as Doc | undefined;
-    const url = s ? str(s.url) : null;
-    if (s && url) sizes[k] = { url, width: num(s.width), height: num(s.height) };
-  }
-  return {
-    ok: true,
-    media: {
-      id: doc.id,
-      alt: str(doc.alt),
-      credit: str(doc.credit),
-      mimeType: str(doc.mimeType),
-      width: num(doc.width),
-      height: num(doc.height),
-      filesize: num(doc.filesize),
-      url: str(doc.url),
-      ...(Object.keys(sizes).length ? { sizes } : {}),
-    },
-  };
-}
 
 export async function POST(request: Request): Promise<Response> {
   const payload: Payload = await getPayload({ config });

@@ -15,6 +15,10 @@
  * country}` (cap 1000; a tenant without `citiesMap` gets an empty block with
  * `disabled: true`).
  *
+ * Each pillar item also carries `blocked: boolean` (hub docx import phase A, PA-11):
+ * true when `ENGINE_BLOCKED_PILLARS` keeps the content engine out of that pillar for
+ * that tenant (`markBlockedPillars`, `hub-taxonomy-blocks.ts`). Additive key.
+ *
  * Empty/absent tenants|pillar|kinds means ALL allowed — callers must never send
  * an empty scope by accident (Hub-1 lesson D0).
  *
@@ -46,7 +50,7 @@ import {
 import { json } from "@/lib/http";
 import { logActivity } from "@/lib/activity";
 import { featureEnabled, findTenantById } from "@/lib/tenant";
-import { disabledBlock, hubBlock, type HubBlock } from "@/lib/hub-taxonomy-blocks";
+import { disabledBlock, hubBlock, markBlockedPillars, type HubBlock } from "@/lib/hub-taxonomy-blocks";
 import {
   CITY_SELECT,
   COUNTRY_SELECT,
@@ -172,7 +176,8 @@ export async function GET(request: Request): Promise<Response> {
           cities?: HubBlock<HubCity>;
         } = { tenant: t.slug };
         if (pillars) {
-          entry.pillars = block(pillars.docs as unknown as Record<string, unknown>[], pillars.totalDocs, PILLARS_CAP, sanitizeHubPillar);
+          const pb = block(pillars.docs as unknown as Record<string, unknown>[], pillars.totalDocs, PILLARS_CAP, sanitizeHubPillar);
+          entry.pillars = { ...pb, items: markBlockedPillars(pb.items, t.slug) };
         }
         if (authors) {
           entry.authors = block(authors.docs as unknown as Record<string, unknown>[], authors.totalDocs, AUTHORS_CAP, sanitizeHubAuthor);

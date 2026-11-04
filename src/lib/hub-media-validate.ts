@@ -38,6 +38,30 @@ export const HUB_MEDIA_LIMITS = {
 export const HUB_MEDIA_MIME = ["image/jpeg", "image/png", "image/webp"] as const;
 export type HubMediaMime = (typeof HUB_MEDIA_MIME)[number];
 
+/**
+ * The direct-upload path (`/api/hub/media/sign` + `/register`, hub docx import phase A)
+ * also takes a GIF (PA-8: first frame only, stored as PNG). The multipart route above
+ * never does: GIF is accepted ONLY when a caller passes `allowGif: true`.
+ */
+export type DirectMediaMime = HubMediaMime | "image/gif";
+
+/** `caption` (PA-10): one line, ≤ 500 characters, same character rules as `credit`. */
+export const HUB_MEDIA_CAPTION_MAX = 500;
+
+/**
+ * Per-call limits of `validateMediaFile`. Omitted ⇒ the multipart route's limits
+ * (`HUB_MEDIA_LIMITS`), so every existing caller keeps its behaviour byte for byte.
+ */
+export interface MediaFileLimits {
+  maxBytes?: number;
+  maxEdge?: number;
+  maxPixels?: number;
+  /** Accept `image/gif` (declared AND sniffed). Default false. */
+  allowGif?: boolean;
+  /** Raw caption to check after alt/credit (absent ⇒ no caption in the result). */
+  caption?: string;
+}
+
 /** The closed multipart field set (T1). Every name at most once. */
 export const HUB_MEDIA_FORM_FIELDS = ["file", "alt", "credit", "articleId", "actorRole", "actorId"] as const;
 const REQUIRED_FIELDS = ["file", "alt", "articleId", "actorRole"] as const;
@@ -200,6 +224,15 @@ export function checkMediaCredit(raw: string | undefined): { ok: true; value: st
   return { ok: true, value: r.value === "" ? undefined : r.value };
 }
 
+/** caption (optional, PA-10): CR/LF, C0, lone surrogate, bidi, > 500 ⇒ bad_request; blank ⇒ absent. */
+export function checkMediaCaption(raw: string | undefined): { ok: true; value: string | undefined } | { ok: false; code: "bad_request" } {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (hasLineBreak(raw)) return { ok: false, code: "bad_request" };
+  const r = checkStr(raw, { bidi: true, trim: true, max: HUB_MEDIA_CAPTION_MAX });
+  if (!r.ok) return { ok: false, code: "bad_request" };
+  return { ok: true, value: r.value === "" ? undefined : r.value };
+}
+
 // ── Magic bytes ──────────────────────────────────────────────────────────────
 
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -210,11 +243,17 @@ const ascii = (b: Uint8Array, at: number, s: string) => {
   return true;
 };
 
-/** JPEG `FF D8 FF`; PNG signature; WebP `RIFF....WEBP`. Anything else ⇒ null. */
-export function sniffImageMime(b: Uint8Array): HubMediaMime | null {
+/**
+ * JPEG `FF D8 FF`; PNG signature; WebP `RIFF....WEBP`; with `allowGif` also
+ * `GIF87a` / `GIF89a`. Anything else ⇒ null (a GIF too, unless `allowGif`).
+ */
+export function sniffImageMime(b: Uint8Array): HubMediaMime | null;
+export function sniffImageMime(b: Uint8Array, allowGif: boolean): DirectMediaMime | null;
+export function sniffImageMime(b: Uint8Array, allowGif = false): DirectMediaMime | null {
   if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
   if (b.length >= 8 && PNG_SIG.every((v, i) => b[i] === v)) return "image/png";
   if (ascii(b, 0, "RIFF") && ascii(b, 8, "WEBP")) return "image/webp";
+  if (allowGif && (ascii(b, 0, "GIF87a") || ascii(b, 0, "GIF89a"))) return "image/gif";
   return null;
 }
 
@@ -251,6 +290,12 @@ function webpSize(b: Uint8Array): Size {
     return size(le16(b, 26) & 0x3fff, le16(b, 28) & 0x3fff);
   }
   return NO;
+}
+
+/** GIF: logical screen width / height, little-endian, bytes 6–9 (the frames sit inside it). */
+function gifSize(b: Uint8Array): Size {
+  if (b.length < 10) return NO;
+  return size(le16(b, 6), le16(b, 8));
 }
 
 /** SOFn = C0–CF except C4 (DHT), C8 (JPG), CC (DAC). */
@@ -311,45 +356,131 @@ export function countJpegScans(b: Uint8Array): number {
 }
 
 /** Width × height from the header of an image of the given (already sniffed) type. */
-export function readImageSize(b: Uint8Array, mime: HubMediaMime): Size {
+export function readImageSize(b: Uint8Array, mime: DirectMediaMime): Size {
   try {
     if (mime === "image/png") return pngSize(b);
     if (mime === "image/webp") return webpSize(b);
+    if (mime === "image/gif") return gifSize(b);
     return jpegSize(b);
   } catch {
     return NO;
   }
 }
 
-export const withinPixelCap = (w: number, h: number) =>
-  w <= HUB_MEDIA_LIMITS.maxEdge && h <= HUB_MEDIA_LIMITS.maxEdge && w * h <= HUB_MEDIA_LIMITS.maxPixels;
+export const withinPixelCap = (
+  w: number,
+  h: number,
+  maxEdge: number = HUB_MEDIA_LIMITS.maxEdge,
+  maxPixels: number = HUB_MEDIA_LIMITS.maxPixels,
+) => w <= maxEdge && h <= maxEdge && w * h <= maxPixels;
 
 // ── The file + text checks, in contract order ────────────────────────────────
 
 export type HubMediaFileResult =
-  | { ok: true; mime: HubMediaMime; bytes: Buffer; width: number; height: number; alt: string; credit: string | undefined }
+  | {
+      ok: true;
+      mime: DirectMediaMime;
+      bytes: Buffer;
+      width: number;
+      height: number;
+      alt: string;
+      credit: string | undefined;
+      /** Present only when `limits.caption` was passed (blank ⇒ undefined). */
+      caption?: string | undefined;
+    }
   | { ok: false; code: "too_large" | "media_type" | "media_dimensions" | "alt_required" | "bad_request" };
 
-export async function validateMediaFile(file: FileLike, rawAlt: string, rawCredit: string | undefined): Promise<HubMediaFileResult> {
-  if (file.size > HUB_MEDIA_LIMITS.fileBytes) return { ok: false, code: "too_large" };
+/** The multipart route's result type: no GIF can come back when `allowGif` is off. */
+export type HubMediaFileOk = Extract<HubMediaFileResult, { ok: true }> & { mime: HubMediaMime };
+
+/**
+ * The file + text checks in contract order. `limits` omitted ⇒ the multipart route's
+ * limits and mime list (unchanged behaviour). The direct-upload `register` passes its
+ * own caps, `allowGif: true` and the caption (PA-6 / PA-8 / PA-10).
+ */
+export function validateMediaFile(
+  file: FileLike,
+  rawAlt: string,
+  rawCredit: string | undefined,
+  limits?: MediaFileLimits & { allowGif?: false },
+): Promise<HubMediaFileOk | Extract<HubMediaFileResult, { ok: false }>>;
+export function validateMediaFile(file: FileLike, rawAlt: string, rawCredit: string | undefined, limits: MediaFileLimits): Promise<HubMediaFileResult>;
+export async function validateMediaFile(
+  file: FileLike,
+  rawAlt: string,
+  rawCredit: string | undefined,
+  limits: MediaFileLimits = {},
+): Promise<HubMediaFileResult> {
+  const maxBytes = limits.maxBytes ?? HUB_MEDIA_LIMITS.fileBytes;
+  const allowGif = limits.allowGif === true;
+  if (file.size > maxBytes) return { ok: false, code: "too_large" };
   const declared = file.type.split(";")[0]!.trim().toLowerCase();
-  if (!(HUB_MEDIA_MIME as readonly string[]).includes(declared)) return { ok: false, code: "media_type" };
+  const allowed: readonly string[] = allowGif ? [...HUB_MEDIA_MIME, "image/gif"] : HUB_MEDIA_MIME;
+  if (!allowed.includes(declared)) return { ok: false, code: "media_type" };
   const bytes = Buffer.from(await file.arrayBuffer());
-  if (bytes.length > HUB_MEDIA_LIMITS.fileBytes) return { ok: false, code: "too_large" };
-  const sniffed = sniffImageMime(bytes);
+  if (bytes.length > maxBytes) return { ok: false, code: "too_large" };
+  const sniffed = sniffImageMime(bytes, allowGif);
   if (sniffed !== declared) return { ok: false, code: "media_type" };
   const s = readImageSize(bytes, sniffed);
   if (!s.ok) return { ok: false, code: "media_type" };
   if (sniffed === "image/jpeg" && countJpegScans(bytes) > HUB_MEDIA_LIMITS.maxJpegScans) return { ok: false, code: "media_type" };
-  if (!withinPixelCap(s.width, s.height)) return { ok: false, code: "media_dimensions" };
+  if (!withinPixelCap(s.width, s.height, limits.maxEdge, limits.maxPixels)) return { ok: false, code: "media_dimensions" };
   const alt = checkMediaAlt(rawAlt);
   if (!alt.ok) return alt;
   const credit = checkMediaCredit(rawCredit);
   if (!credit.ok) return credit;
-  return { ok: true, mime: sniffed, bytes, width: s.width, height: s.height, alt: alt.value, credit: credit.value };
+  const out: HubMediaFileResult = { ok: true, mime: sniffed, bytes, width: s.width, height: s.height, alt: alt.value, credit: credit.value };
+  if (Object.prototype.hasOwnProperty.call(limits, "caption")) {
+    const caption = checkMediaCaption(limits.caption);
+    if (!caption.ok) return caption;
+    out.caption = caption.value;
+  }
+  return out;
+}
+
+// ── The 201 body (shared by the multipart route and the direct-upload register) ─
+
+type MediaDoc = Record<string, unknown>;
+const SIZE_NAMES = ["thumbnail", "card", "hero"] as const;
+const strOrNull = (v: unknown): string | null => (typeof v === "string" ? v : null);
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/**
+ * The 201 allowlist of `POST /api/hub/media` (T1), moved here verbatim from the
+ * route so the direct-upload `register` builds the SAME body (plus its own keys).
+ * Built by hand (`depth: 0`), never a spread of the document. Sizes the image was
+ * too small for are absent.
+ */
+export function mediaResponseBody(doc: MediaDoc): { ok: true; media: Record<string, unknown> } {
+  const sizes: Record<string, { url: string; width: number | null; height: number | null }> = {};
+  const raw = doc.sizes && typeof doc.sizes === "object" ? (doc.sizes as Record<string, unknown>) : {};
+  for (const k of SIZE_NAMES) {
+    const s = raw[k] as MediaDoc | undefined;
+    const url = s ? strOrNull(s.url) : null;
+    if (s && url) sizes[k] = { url, width: numOrNull(s.width), height: numOrNull(s.height) };
+  }
+  return {
+    ok: true,
+    media: {
+      id: doc.id,
+      alt: strOrNull(doc.alt),
+      credit: strOrNull(doc.credit),
+      mimeType: strOrNull(doc.mimeType),
+      width: numOrNull(doc.width),
+      height: numOrNull(doc.height),
+      filesize: numOrNull(doc.filesize),
+      url: strOrNull(doc.url),
+      ...(Object.keys(sizes).length ? { sizes } : {}),
+    },
+  };
 }
 
 const EXT: Record<HubMediaMime, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+
+/** File extension of a STORED image (a GIF is stored as PNG, PA-8). */
+export function storedExt(mime: DirectMediaMime): string {
+  return mime === "image/gif" ? "png" : EXT[mime];
+}
 
 /** T4: `hub-<uuid v4>.<ext by mime>` — never the uploader's file name. */
 export function hubMediaFileName(mime: HubMediaMime): string {

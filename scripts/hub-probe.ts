@@ -1017,7 +1017,7 @@ async function check2() {
   const pillarItemKeys = [
     ...new Set(Object.values(txT).flatMap((e) => (((e as Doc).pillars as Doc).items as Doc[]).map((a) => Object.keys(a).sort().join(",")))),
   ];
-  expect("G-P9 pillar item keys", pillarItemKeys, ["color,description,heading,icon,id,navLabel,order,slug,title"]);
+  expect("G-P9 pillar item keys (incl. blocked, hub docx import PA-11)", pillarItemKeys, ["blocked,color,description,heading,icon,id,navLabel,order,slug,title"]);
   expect("G-P9 raw body has no user/email", [tx.text.includes('"user"'), tx.text.includes("email")], [false, false]);
   const kp = await call("taxonomy", "?kinds=pillars&tenants=dtw");
   expect("G-P9 kinds=pillars → authors key absent", [kp.status, "authors" in (((kp.body.tenants ?? []) as Doc[])[0] ?? {}), "pillars" in (((kp.body.tenants ?? []) as Doc[])[0] ?? {})], [200, false, true]);
