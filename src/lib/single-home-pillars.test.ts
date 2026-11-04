@@ -43,8 +43,8 @@ const V4 = 'pillar rule: "pressroom" is a single-home pillar: it cannot have sub
 const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed there cannot be marked exclusive.';
 
 describe("constants", () => {
-  it("SINGLE_HOME_PILLARS = { abb: [pressroom], brief-asia: [pressroom], gcv: [pressroom], gtp: [press-room], vowasia: [press-room], wad: [pressroom], agr: [press-room], amb: [press-room] } beside ENGINE_BLOCKED_PILLARS (incl. aer, no single-home)", () => {
-    assert.deepEqual(SINGLE_HOME_PILLARS, { abb: ["pressroom"], "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"], agr: ["press-room"], amb: ["press-room"] });
+  it("SINGLE_HOME_PILLARS = { abb: [pressroom], brief-asia: [pressroom], gcv: [pressroom], gtp: [press-room], vowasia: [press-room], wad: [pressroom], dtw: [pressroom], agr: [press-room], amb: [press-room] } beside ENGINE_BLOCKED_PILLARS (incl. aer, no single-home)", () => {
+    assert.deepEqual(SINGLE_HOME_PILLARS, { abb: ["pressroom"], "brief-asia": ["pressroom"], gcv: ["pressroom"], gtp: ["press-room"], vowasia: ["press-room"], wad: ["pressroom"], dtw: ["pressroom"], agr: ["press-room"], amb: ["press-room"] });
     assert.deepEqual(ENGINE_BLOCKED_PILLARS, {
       abb: ["pressroom"],
       gcv: ["exclusive", "pressroom"],
@@ -52,6 +52,7 @@ describe("constants", () => {
       gtp: ["press-room", "events-awards"],
       vowasia: ["press-room", "real-weddings", "directory"],
       wad: ["pressroom"],
+      dtw: ["pressroom"],
       aer: ["long-view", "interviews", "in-focus"],
       agr: ["course-reviews", "rankings", "press-room"],
       amb: ["press-room"],
@@ -88,9 +89,10 @@ describe("constants", () => {
     // Sub-section slugs are not pillars: no sub-level block in Central (engine-side rule).
     for (const s of ["specified", "design-voices"]) assert.equal(isEngineBlockedPillar("amb", s), false, s);
   });
-  it("brief-asia, gcv and wad pressroom are engine-blocked; world-travel-brief is not; gcv keeps exclusive", () => {
+  it("brief-asia, gcv, wad and dtw pressroom are engine-blocked; world-travel-brief is not; gcv keeps exclusive", () => {
     assert.ok(ENGINE_BLOCKED_PILLARS["brief-asia"]?.includes("pressroom"));
     assert.deepEqual(ENGINE_BLOCKED_PILLARS.wad, ["pressroom"]);
+    assert.deepEqual(ENGINE_BLOCKED_PILLARS.dtw, ["pressroom"]);
     assert.equal(ENGINE_BLOCKED_PILLARS["world-travel-brief"], undefined);
     assert.deepEqual(ENGINE_BLOCKED_PILLARS.gcv, ["exclusive", "pressroom"]);
   });
@@ -109,6 +111,10 @@ describe("constants", () => {
     assert.equal(isEngineBlockedPillar("wad", "pressroom"), true);
     assert.equal(isEngineBlockedPillar("wad", " PRESSROOM "), true);
     assert.equal(isEngineBlockedPillar("wad", "architecture"), false);
+    assert.equal(isEngineBlockedPillar("dtw", "pressroom"), true);
+    assert.equal(isEngineBlockedPillar("dtw", " PRESSROOM "), true);
+    assert.equal(isEngineBlockedPillar("dtw", "ai"), false);
+    assert.equal(isEngineBlockedPillar("dtw", "press-room"), false);
     assert.equal(isEngineBlockedPillar("world-travel-brief", "pressroom"), false);
     assert.equal(isEngineBlockedPillar("brief-asia", "finance"), false);
     assert.equal(isEngineBlockedPillar("brief-asia", "exclusive"), false);
@@ -217,6 +223,12 @@ describe("tenant keying", () => {
     assert.equal(isSingleHomePillar("wad", "Pressroom"), false);
     assert.equal(isSingleHomePillar("wad", "architecture"), false);
   });
+  it("dtw pressroom is single-home (OTW Pressroom, owner decision 04-11-26)", () => {
+    assert.equal(isSingleHomePillar("dtw", "pressroom"), true);
+    assert.equal(isSingleHomePillar("dtw", "Pressroom"), false);
+    assert.equal(isSingleHomePillar("dtw", "press-room"), false);
+    assert.equal(isSingleHomePillar("dtw", "ai"), false);
+  });
   it("world-travel-brief pressroom is NOT flagged (negative control)", () => {
     assert.equal(isSingleHomePillar("world-travel-brief", "pressroom"), false);
     assert.equal(isSingleHomePillar(undefined, "pressroom"), false);
@@ -232,6 +244,12 @@ describe("tenant keying", () => {
     assert.equal(checkIntakeSingleHome("wad", { pillarSlug: "pressroom", subSectionSlug: "x" }), V2);
     assert.equal(checkIntakeSingleHome("wad", { pillarSlug: "journal", sections: ["pressroom"] }), V3);
     assert.equal(checkIntakeSingleHome("wad", { pillarSlug: "pressroom" }), null);
+  });
+  it("intake pre-check applies to dtw pressroom (V1/V2/V3)", () => {
+    assert.equal(checkIntakeSingleHome("dtw", { pillarSlug: "pressroom", sections: ["ai"] }), V1);
+    assert.equal(checkIntakeSingleHome("dtw", { pillarSlug: "pressroom", subSectionSlug: "x" }), V2);
+    assert.equal(checkIntakeSingleHome("dtw", { pillarSlug: "ai", sections: ["pressroom"] }), V3);
+    assert.equal(checkIntakeSingleHome("dtw", { pillarSlug: "pressroom" }), null);
   });
   it("intake pre-check is a no-op for world-travel-brief (negative control)", () => {
     assert.equal(checkIntakeSingleHome("world-travel-brief", { pillarSlug: "pressroom", sections: ["asia"], subSectionSlug: "x" }), null);
@@ -450,6 +468,12 @@ describe("checkPillarRowChange (V5 rename / tenant move)", () => {
     assert.equal(checkPillarRowChange({ oldTenantId: "2", oldTenantSlug: "wad", oldSlug: "pressroom", newTenantId: "3", newTenantSlug: "gcv", newSlug: "pressroom" }), "move");
     assert.equal(checkPillarRowChange({ oldTenantId: "3", oldTenantSlug: "gcv", oldSlug: "pressroom", newTenantId: "2", newTenantSlug: "wad", newSlug: "pressroom" }), "move");
   });
+  it("dtw pressroom rename is blocked; moving dtw pressroom out is blocked; a world-travel-brief pressroom rename stays free", () => {
+    assert.equal(checkPillarRowChange({ oldTenantId: "7", oldTenantSlug: "dtw", oldSlug: "pressroom", newTenantId: "7", newTenantSlug: "dtw", newSlug: "press" }), "rename");
+    assert.equal(checkPillarRowChange({ oldTenantId: "7", oldTenantSlug: "dtw", oldSlug: "ai", newTenantId: "7", newTenantSlug: "dtw", newSlug: "pressroom" }), "rename");
+    assert.equal(checkPillarRowChange({ oldTenantId: "7", oldTenantSlug: "dtw", oldSlug: "pressroom", newTenantId: "1", newTenantSlug: "brief-asia", newSlug: "pressroom" }), "move");
+    assert.equal(checkPillarRowChange({ oldTenantId: "6", oldTenantSlug: "world-travel-brief", oldSlug: "pressroom", newTenantId: "6", newTenantSlug: "world-travel-brief", newSlug: "press" }), null);
+  });
   it("world-travel-brief non-single-home rows stay free (negative control)", () => {
     assert.equal(checkPillarRowChange({ oldTenantId: "6", oldTenantSlug: "world-travel-brief", oldSlug: "news", newTenantId: "6", newTenantSlug: "world-travel-brief", newSlug: "headlines" }), null);
   });
@@ -524,12 +548,14 @@ describe("resolver (injected find, D-C)", () => {
     { id: 12, slug: "pressroom", tenant: 2 },
     { id: 14, slug: "pressroom", tenant: 3 },
     { id: 19, slug: "pressroom", tenant: 6 },
+    { id: 21, slug: "pressroom", tenant: 7 },
   ];
   const tenants: Doc[] = [
     { id: 1, slug: "brief-asia" },
     { id: 2, slug: "wad" },
     { id: 3, slug: "gcv" },
     { id: 6, slug: "world-travel-brief" },
+    { id: 7, slug: "dtw" },
   ];
   let calls: Array<{ collection: string; args: Record<string, unknown> }>;
   const makeFind = (dropIds: number[] = []): FindFn => async (args) => {
@@ -564,6 +590,11 @@ describe("resolver (injected find, D-C)", () => {
     assert.equal(m.get("14"), "pressroom");
     assert.equal(m.get("12"), "pressroom");
     assert.equal(m.get("19"), null); // negative control
+  });
+  it("dtw pressroom resolves as single-home (since 04-11-26)", async () => {
+    const m = await resolveSingleHome({ pillarIds: [21, 19], find: makeFind(), context: ctx });
+    assert.equal(m.get("21"), "pressroom");
+    assert.equal(m.get("19"), null);
   });
   it("skips the tenant lookup when no referenced slug is in the single-home union (G79b)", async () => {
     const m = await resolveSingleHome({ pillarIds: [11], find: makeFind(), context: ctx });

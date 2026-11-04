@@ -32,7 +32,8 @@ type Doc = Record<string, unknown>;
 // 16 = gtp events-awards (engine-blocked only, NOT single-home),
 // 17 = vowasia press-room (single-home), 18 = vowasia real-weddings (ordinary),
 // 12 = wad pressroom is single-home since 20-10-26 (WAD Pressroom parity), 20 = wad architecture (ordinary),
-// 19 = world-travel-brief pressroom (fixture only, NOT single-home: the negative control)
+// 19 = world-travel-brief pressroom (fixture only, NOT single-home: the negative control),
+// 21 = dtw pressroom (single-home since 04-11-26, OTW Pressroom), 22 = dtw ai (ordinary)
 const PILLARS: Doc[] = [
   { id: 10, slug: "pressroom", tenant: 1 },
   { id: 11, slug: "asia", tenant: 1 },
@@ -45,6 +46,8 @@ const PILLARS: Doc[] = [
   { id: 18, slug: "real-weddings", tenant: 5 },
   { id: 19, slug: "pressroom", tenant: 6 },
   { id: 20, slug: "architecture", tenant: 2 },
+  { id: 21, slug: "pressroom", tenant: 7 },
+  { id: 22, slug: "ai", tenant: 7 },
 ];
 const TENANTS: Doc[] = [
   { id: 1, slug: "brief-asia" },
@@ -53,6 +56,7 @@ const TENANTS: Doc[] = [
   { id: 4, slug: "gtp" },
   { id: 5, slug: "vowasia" },
   { id: 6, slug: "world-travel-brief" },
+  { id: 7, slug: "dtw" },
 ];
 
 interface FakeReq {
@@ -160,6 +164,14 @@ describe("Articles beforeChange hook: tenant keying negative controls", () => {
     await rejectsWith(run({ operation: "create", data: { pillar: 20, secondarySections: [{ pillar: 12 }] } }).then((r) => r.out), V3);
     await rejectsWith(run({ operation: "create", data: { pillar: 12, exclusive: true } }).then((r) => r.out), V6);
     assert.ok((await run({ operation: "create", data: { pillar: 12 } })).out);
+  });
+  it("dtw pressroom IS blocked (V1 secondary, V2 sub-section, V3 as secondary, V6 exclusive)", async () => {
+    await rejectsWith(run({ operation: "create", data: { pillar: 21, secondarySections: [{ pillar: 22 }] } }).then((r) => r.out), V1);
+    await rejectsWith(run({ operation: "create", data: { pillar: 21, subSection: 4 } }).then((r) => r.out), V2);
+    await rejectsWith(run({ operation: "create", data: { pillar: 22, secondarySections: [{ pillar: 21 }] } }).then((r) => r.out), V3);
+    await rejectsWith(run({ operation: "create", data: { pillar: 21, exclusive: true } }).then((r) => r.out), V6);
+    assert.ok((await run({ operation: "create", data: { pillar: 21 } })).out);
+    assert.ok((await run({ operation: "create", data: { pillar: 22, subSection: 4 } })).out);
   });
   it("gcv pressroom IS blocked (V1 secondary, V2 sub-section, V3 as secondary, V6 exclusive)", async () => {
     await rejectsWith(run({ operation: "create", data: { pillar: 14, secondarySections: [{ pillar: 13 }] } }).then((r) => r.out), V1);
@@ -339,6 +351,10 @@ describe("secondary row pillar validate (G54/G59/G77/G94)", () => {
   it("a changed wad pressroom row is blocked (V3)", async () => {
     assert.equal(await validate(12, opts(undefined)), V3);
   });
+  it("a changed dtw pressroom row is blocked (V3); dtw ai passes", async () => {
+    assert.equal(await validate(21, opts(undefined)), V3);
+    assert.equal(await validate(22, opts(undefined)), true);
+  });
   it("ordinary and world-travel-brief pressroom rows pass", async () => {
     assert.equal(await validate(11, opts(undefined)), true);
     assert.equal(await validate(19, opts(undefined)), true);
@@ -361,6 +377,10 @@ describe("SubSections pillar validate (V4)", () => {
   });
   it("a sub-section under wad pressroom is refused", async () => {
     assert.equal(await validate(12, { req: makeReq() }), V4);
+  });
+  it("a sub-section under dtw pressroom is refused; dtw ai is fine", async () => {
+    assert.equal(await validate(21, { req: makeReq() }), V4);
+    assert.equal(await validate(22, { req: makeReq() }), true);
   });
   it("other pillars (incl. world-travel-brief pressroom) are fine", async () => {
     assert.equal(await validate(11, { req: makeReq() }), true);
@@ -408,6 +428,12 @@ describe("Articles author validate (optional only for single-home)", () => {
     assert.equal(await validate(null, opts(12, makeReq(), "data")), true);
     assert.equal(await validate(null, opts(20)), REQ);
     assert.equal(await validate(5, opts(20)), true);
+  });
+  it("a dtw Pressroom article may have no author; an ordinary dtw pillar requires one", async () => {
+    assert.equal(await validate(null, opts(21)), true);
+    assert.equal(await validate(null, opts(21, makeReq(), "data")), true);
+    assert.equal(await validate(null, opts(22)), REQ);
+    assert.equal(await validate(5, opts(22)), true);
   });
   it("a world-travel-brief pillar named pressroom and an ordinary gcv pillar still require an author (tenant-scoped)", async () => {
     assert.equal(await validate(null, opts(19)), REQ);
@@ -493,6 +519,10 @@ describe("Pillars row guard: beforeChange (V5 rename / move)", () => {
   it("wad pressroom rename is blocked (WAD Pressroom parity)", async () => {
     await assert.rejects(bc({ operation: "update", data: { slug: "press" }, originalDoc: { id: 12, tenant: 2, slug: "pressroom" }, req: makeReq() }), /slug|invalid/);
   });
+  it("dtw pressroom rename and tenant move are blocked (OTW Pressroom)", async () => {
+    await assert.rejects(bc({ operation: "update", data: { slug: "press" }, originalDoc: { id: 21, tenant: 7, slug: "pressroom" }, req: makeReq() }), /slug|invalid/);
+    await assert.rejects(bc({ operation: "update", data: { tenant: 6 }, originalDoc: { id: 21, tenant: 7, slug: "pressroom" }, req: makeReq() }), /moved to another tenant/);
+  });
   it("world-travel-brief pressroom rename and a non-single-home move are allowed", async () => {
     assert.ok(await bc({ operation: "update", data: { slug: "press" }, originalDoc: { id: 19, tenant: 6, slug: "pressroom" }, req: makeReq() }));
     assert.ok(await bc({ operation: "update", data: { tenant: 2 }, originalDoc: { id: 13, tenant: 3, slug: "finance" }, req: makeReq() }));
@@ -539,6 +569,13 @@ describe("Pillars row guard: beforeDelete (V5 in-use)", () => {
   it("wad pressroom (single-home) delete while referenced is APIError 400", async () => {
     const req = makeReq({ counts: { articles: 4 } });
     await assert.rejects(bd({ id: 12, req, collection: { slug: "pillars" }, context: req.context }), (err: unknown) => {
+      assert.equal((err as { status?: number }).status, 400);
+      return true;
+    });
+  });
+  it("dtw pressroom (single-home) delete while referenced is APIError 400", async () => {
+    const req = makeReq({ counts: { articles: 2 } });
+    await assert.rejects(bd({ id: 21, req, collection: { slug: "pillars" }, context: req.context }), (err: unknown) => {
       assert.equal((err as { status?: number }).status, 400);
       return true;
     });

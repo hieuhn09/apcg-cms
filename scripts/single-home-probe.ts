@@ -1,6 +1,6 @@
 /**
  * single-home-probe.ts — empirical probe for the single-home pillar rule
- * (BriefAsia + GCV + WAD Pressroom). LOCAL DATABASE ONLY: hard-refuses any non-local
+ * (BriefAsia + GCV + WAD + Opentechwire/dtw Pressroom). LOCAL DATABASE ONLY: hard-refuses any non-local
  * DATABASE_URL via scripts/lib/local-db-guard.ts (no override). It creates AND
  * deletes rows.
  *
@@ -15,8 +15,11 @@
  * otherwise the probe creates it, runs the 0-reference delete check on it last,
  * and leaves none behind. Also creates and deletes `(wad, pressroom)` (single-home
  * since WAD Pressroom parity, 20-10-26), `(gcv, pressroom)` (single-home since
- * GCV Pressroom parity) and `(world-travel-brief, pressroom)` (the negative
- * control, not single-home) rows, plus wad/gcv/world-travel-brief articles.
+ * GCV Pressroom parity), `(dtw, pressroom)` (single-home since the OTW
+ * Pressroom owner decision, 04-11-26; created inside the [DTW] block only, AFTER
+ * the move-into-dtw checks, which rely on dtw having no `pressroom` row) and
+ * `(world-travel-brief, pressroom)` (the negative control, not single-home)
+ * rows, plus wad/gcv/dtw/world-travel-brief articles.
  *
  * Exit code 0 = every check passed.
  */
@@ -312,6 +315,32 @@ async function main() {
       return update("pillars", wtbPress.id, { slug: "pressroom" });
     });
 
+    console.log("\n[DTW] dtw pressroom is single-home (OTW Pressroom, 04-11-26)");
+    // Created only now: the move-into-dtw checks above need dtw to have NO pressroom row.
+    const dtwPress = await create("pillars", { tenant: dtw.id, slug: "pressroom", title: "OTW Pressroom", order: 99 });
+    const dtwAuthor = await create("authors", { tenant: dtw.id, name: `${TAG} DTW` });
+    const dtwOther = await find("pillars", { and: [{ tenant: { equals: dtw.id } }, { slug: { equals: "ai" } }] });
+    if (!dtwOther) throw new Error("dtw pillar ai missing — run `npm run db:seed` first");
+    await expectReject("dtw article with a secondary dtw pressroom row (V3)", () =>
+      create("articles", art(dtw.id, dtwAuthor.id, { pillar: dtwOther.id, secondarySections: [{ pillar: dtwPress.id }] })),
+      V3,
+    );
+    await expectReject("dtw pressroom article with a secondary row (V1)", () =>
+      create("articles", art(dtw.id, dtwAuthor.id, { pillar: dtwPress.id, secondarySections: [{ pillar: dtwOther.id }] })),
+      V1,
+    );
+    await expectReject("dtw pressroom article marked exclusive (V6)", () => create("articles", art(dtw.id, dtwAuthor.id, { pillar: dtwPress.id, exclusive: true })), V6);
+    await expectReject("sub-section under the dtw pressroom pillar (V4)", () => create("subsections", { tenant: dtw.id, pillar: dtwPress.id, slug: `${TAG}-dtw-sub`, title: "x" }), V4);
+    const dtwArt = await expectOk("dtw pressroom article with NO author publishes", () =>
+      create("articles", art(dtw.id, null as unknown as Id, { pillar: dtwPress.id, workflowStatus: "published", _status: "published" })),
+    );
+    await expectReject("ordinary dtw (ai) article with NO author is rejected on publish", () =>
+      create("articles", art(dtw.id, null as unknown as Id, { pillar: dtwOther.id, workflowStatus: "published", _status: "published" })),
+      "This field is required.",
+    );
+    await expectReject("rename dtw pressroom slug", () => update("pillars", dtwPress.id, { slug: "press" }), RENAME);
+    if (dtwArt) await expectReject("delete in-use dtw pressroom", () => remove("pillars", dtwPress.id), DELETE);
+
     const tryDelete = (label: string) => expectReject(`delete in-use pressroom: ${label}`, () => remove("pillars", pressroom!.id), DELETE);
     if (pArt) await tryDelete("referenced by a main article");
     if (ownPressroom) {
@@ -358,8 +387,9 @@ async function main() {
       // With no brief-asia pressroom row left, uniqueness cannot pre-empt the guard.
       await expectReject("move WAD's pressroom into brief-asia (PATCH {tenant})", () => update("pillars", wadPress.id, { tenant: ba.id }), MOVE);
       await expectReject("move world-travel-brief's pressroom into brief-asia (new pair single-home)", () => update("pillars", wtbPress.id, { tenant: ba.id }), MOVE);
+      await expectReject("move dtw pressroom into brief-asia (PATCH {tenant})", () => update("pillars", dtwPress.id, { tenant: ba.id }), MOVE);
     } else {
-      console.log("  SKIP  per-reference delete checks, 0-ref delete and the WAD->brief-asia move — the brief-asia pressroom row pre-existed (run on a fresh seed to cover them)");
+      console.log("  SKIP  per-reference delete checks, 0-ref delete and the WAD/WTB/DTW->brief-asia moves — the brief-asia pressroom row pre-existed (run on a fresh seed to cover them)");
     }
 
     console.log("\n[G87] seed fixture guard");

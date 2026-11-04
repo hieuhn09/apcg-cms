@@ -29,8 +29,12 @@ describe("markBlockedPillars (PA-11)", () => {
     const wad = markBlockedPillars([pillar(1, "pressroom"), pillar(2, "exclusive")], "wad");
     assert.deepEqual(wad.map((p) => p.blocked), [true, false]);
   });
+  it("dtw: pressroom blocked (OTW Pressroom, owner decision 04-11-26); ordinary dtw pillar not", () => {
+    const dtw = markBlockedPillars([pillar(1, "pressroom"), pillar(2, "ai")], "dtw");
+    assert.deepEqual(dtw.map((p) => p.blocked), [true, false]);
+  });
   it("tenant not listed ⇒ all false; null slug ⇒ false; case/space-insensitive like the engine gate", () => {
-    assert.deepEqual(markBlockedPillars([pillar(1, "pressroom")], "dtw").map((p) => p.blocked), [false]);
+    assert.deepEqual(markBlockedPillars([pillar(1, "pressroom")], "world-travel-brief").map((p) => p.blocked), [false]);
     assert.deepEqual(markBlockedPillars([pillar(1, null)], "gcv").map((p) => p.blocked), [false]);
     assert.deepEqual(markBlockedPillars([pillar(1, " PressRoom ")], "gcv").map((p) => p.blocked), [true]);
   });
