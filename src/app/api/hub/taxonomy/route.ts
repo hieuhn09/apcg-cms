@@ -16,7 +16,8 @@
  * `disabled: true`).
  *
  * Each pillar item also carries `blocked: boolean` (hub docx import phase A, PA-11):
- * true when `ENGINE_BLOCKED_PILLARS` keeps the content engine out of that pillar for
+ * true when the hub may not write that pillar as primary (engine-blocked minus the
+ * single-home Pressroom pillars, 05-11-26) for
  * that tenant (`markBlockedPillars`, `hub-taxonomy-blocks.ts`). Additive key.
  *
  * Empty/absent tenants|pillar|kinds means ALL allowed — callers must never send

@@ -9,34 +9,35 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { ENGINE_BLOCKED_PILLARS } from "./constants";
+import { ENGINE_BLOCKED_PILLARS, SINGLE_HOME_PILLARS } from "./constants";
 import { sanitizeHubPillar } from "./hub-sanitize";
 import { hubBlock, markBlockedPillars } from "./hub-taxonomy-blocks";
 
 const pillar = (id: number, slug: string | null) => sanitizeHubPillar({ id, slug, title: `T${id}`, order: id });
 
 describe("markBlockedPillars (PA-11)", () => {
-  it("every tenant in ENGINE_BLOCKED_PILLARS: listed pillars true, others false", () => {
+  it("every tenant in ENGINE_BLOCKED_PILLARS: listed pillars true except single-home (hub-writable), others false", () => {
     for (const [tenant, blocked] of Object.entries(ENGINE_BLOCKED_PILLARS)) {
       const items = [...blocked.map((s, i) => pillar(i + 1, s)), pillar(100, "plain-pillar")];
       const out = markBlockedPillars(items, tenant);
-      assert.deepEqual(out.map((p) => [p.slug, p.blocked]), [...blocked.map((s) => [s, true]), ["plain-pillar", false]], tenant);
+      const sh = SINGLE_HOME_PILLARS[tenant] ?? [];
+      assert.deepEqual(out.map((p) => [p.slug, p.blocked]), [...blocked.map((s) => [s, !sh.includes(s)]), ["plain-pillar", false]], tenant);
     }
   });
-  it("gcv: pressroom and exclusive blocked; wad: pressroom (OP-A5 expectation)", () => {
+  it("gcv: exclusive blocked, pressroom hub-writable (05-11-26); wad: pressroom hub-writable", () => {
     const gcv = markBlockedPillars([pillar(1, "pressroom"), pillar(2, "exclusive"), pillar(3, "travel")], "gcv");
-    assert.deepEqual(gcv.map((p) => p.blocked), [true, true, false]);
+    assert.deepEqual(gcv.map((p) => p.blocked), [false, true, false]);
     const wad = markBlockedPillars([pillar(1, "pressroom"), pillar(2, "exclusive")], "wad");
-    assert.deepEqual(wad.map((p) => p.blocked), [true, false]);
+    assert.deepEqual(wad.map((p) => p.blocked), [false, false]);
   });
-  it("dtw: pressroom blocked (OTW Pressroom, owner decision 04-11-26); ordinary dtw pillar not", () => {
+  it("dtw: pressroom hub-writable (single-home); ordinary dtw pillar not blocked", () => {
     const dtw = markBlockedPillars([pillar(1, "pressroom"), pillar(2, "ai")], "dtw");
-    assert.deepEqual(dtw.map((p) => p.blocked), [true, false]);
+    assert.deepEqual(dtw.map((p) => p.blocked), [false, false]);
   });
   it("tenant not listed ⇒ all false; null slug ⇒ false; case/space-insensitive like the engine gate", () => {
     assert.deepEqual(markBlockedPillars([pillar(1, "pressroom")], "world-travel-brief").map((p) => p.blocked), [false]);
     assert.deepEqual(markBlockedPillars([pillar(1, null)], "gcv").map((p) => p.blocked), [false]);
-    assert.deepEqual(markBlockedPillars([pillar(1, " PressRoom ")], "gcv").map((p) => p.blocked), [true]);
+    assert.deepEqual(markBlockedPillars([pillar(1, " Exclusive ")], "gcv").map((p) => p.blocked), [true]);
   });
   it("adds ONLY `blocked`; keeps every other key and the order; does not mutate the input", () => {
     const items = [pillar(2, "b"), pillar(1, "pressroom")];
@@ -47,7 +48,7 @@ describe("markBlockedPillars (PA-11)", () => {
     assert.deepEqual(Object.keys(out[0]!).sort(), ["blocked", "color", "description", "heading", "icon", "id", "navLabel", "order", "slug", "title"]);
   });
   it("works on a hubBlock's items without touching count / totalDocs / truncated", () => {
-    const b = hubBlock([{ id: 1, slug: "pressroom" }, { id: 2, slug: "x" }], 5, 1, sanitizeHubPillar);
+    const b = hubBlock([{ id: 1, slug: "exclusive" }, { id: 2, slug: "x" }], 5, 1, sanitizeHubPillar);
     const marked = { ...b, items: markBlockedPillars(b.items, "gcv") };
     assert.deepEqual([marked.count, marked.totalDocs, marked.truncated, marked.items.length, marked.items[0]!.blocked], [1, 5, true, 1, true]);
   });

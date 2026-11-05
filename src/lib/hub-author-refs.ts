@@ -20,7 +20,8 @@
 
 import type { Payload, Where } from "payload";
 import { scopedFind } from "@/lib/scoped";
-import { ENGINE_BLOCKED_PILLARS } from "@/lib/constants";
+import { isEngineBlockedPillar, isHubBlockedPillar } from "@/lib/constants";
+import { isSingleHomePillar } from "@/lib/single-home-pillars";
 import { featureEnabled, type TenantDoc } from "@/lib/tenant";
 import type { HubFieldCode, HubFieldErrors } from "@/lib/hub-author-limits";
 import type { HubDraftFields } from "@/lib/hub-author-input";
@@ -96,8 +97,13 @@ export async function resolvePillar(
   payload: Payload,
   tenant: { id: Id; slug: string },
   slug: string,
+  role: "primary" | "secondary" = "primary",
 ): Promise<{ ok: true; id: Id } | { ok: false; code: HubFieldCode }> {
-  if (ENGINE_BLOCKED_PILLARS[tenant.slug]?.includes(slug)) return { ok: false, code: "blocked_pillar" };
+  // Primary: the hub may write single-home pillars (Pressroom); every other engine-blocked
+  // pillar stays refused. Secondary rows: every engine-blocked pillar refused (a single-home
+  // pillar is never another article's secondary section).
+  const blocked = role === "primary" ? isHubBlockedPillar(tenant.slug, slug) : isEngineBlockedPillar(tenant.slug, slug);
+  if (blocked) return { ok: false, code: "blocked_pillar" };
   const docs = await findIds(payload, "pillars", tenant.id, { slug: { equals: slug } }, 1);
   return docs[0] ? { ok: true, id: docs[0].id } : { ok: false, code: "unknown_ref" };
 }
@@ -204,6 +210,12 @@ export async function resolveDraftRefs(args: {
       fields.pillarSlug = r.code;
       pillarId = undefined;
     }
+    // Single-home primary (Pressroom): no sub-section, no secondary — a clear
+    // 422 field code instead of the hook's ValidationError.
+    if (r.ok && isSingleHomePillar(tenant.slug, input.pillarSlug)) {
+      if (typeof input.subSectionSlug === "string") fields.subSectionSlug = "single_home";
+      if (Array.isArray(input.secondary) && input.secondary.length > 0) fields.secondary = "single_home";
+    }
   }
 
   if (input.subSectionSlug !== undefined) {
@@ -219,7 +231,7 @@ export async function resolveDraftRefs(args: {
     const rows: { pillar: Id; subSection?: Id }[] = [];
     for (let i = 0; i < input.secondary.length; i++) {
       const row = input.secondary[i]!;
-      const p = await resolvePillar(payload, t, row.pillarSlug);
+      const p = await resolvePillar(payload, t, row.pillarSlug, "secondary");
       if (!p.ok) {
         fields[`secondary[${i}].pillarSlug`] = p.code;
         continue;

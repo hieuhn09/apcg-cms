@@ -201,7 +201,7 @@ export interface HubPillar {
   icon: string | null;
   order: number | null;
   description: string | null;
-  /** True when the content engine may not write into this pillar (`ENGINE_BLOCKED_PILLARS`, PA-11). */
+  /** True when the HUB may not write this pillar as primary (engine-blocked minus single-home, PA-11 / 05-11-26). */
   blocked: boolean;
 }
 
