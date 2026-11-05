@@ -1,0 +1,275 @@
+{
+  "version": 1,
+  "_provisional": [],
+  "_evidence": "FINAL mapping for the Asianomist legacy import (asn-launch W2). No site id, no image host: those live in the owner-held overlay ~/asn-private/overlay.json. Decided 05-11-26 by the owner (approved the proposals) from the discovery result (01-discover-asn.sql run in the globaltravelpost SQL Editor 05-11-26: site asianomist, name Asianomist (id in the overlay only), exactly 1 match, 14 sites in the DB; 1997 rows = 1435 published, 463 archived (461 never published), 99 draft, no scheduled or rejected rows; created_at 2026-08-03 to 2026-11-05, 1996/1997 with non-zero microseconds, 0 duplicate instants; the newest published_at is 2026-11-05, so the old site is still publishing; 0 null, duplicate or bad slugs; section and subsection values are SLUGS; published rows by old section: the-brief 91 (morning-brief 65, week-ahead 13, weekend-read 13), economies 191 (southeast-asia 102, india-south-asia 36, japan-korea 29, asia-world 20, china 3, greater-china 1), markets 424 (stocks-bonds 148, central-banks-currencies 89, markets-today 88, ipo-deals 78, crypto-digital-assets 19, empty subsection 2), banking-fintech 202 (banks 100, payments-lending 81, insurtech-wealthtech 21), industries 464 (tech-semiconductors 135, real-estate-infrastructure 131, consumer-retail 82, energy-commodities 62, supply-chain 52, empty subsection 2), wealth 63 (investing 49, property-investment 8, expat-money 5, empty subsection 1); no columns-explainers, press-room or wealth/savings-rates rows; 1940 featured images on the old Supabase storage host, 57 none or relative; 7837 body sections, 0 body images; 6861 distinct legacy tags (13024 uses on 1997 rows); 0 media_assets rows for this site (7554 for all sites)). (1) status: published only (1435 at discovery); archived, draft, scheduled, rejected are SKIP; catch-up runs before cutover pick up what the old site publishes after the first run. (2) categories: legacy subsections equal to a new sub-section slug pass through 1:1 (the-brief week-ahead, weekend-read; economies southeast-asia, china, japan-korea, india-south-asia, asia-world; markets markets-today, central-banks-currencies, stocks-bonds, ipo-deals, crypto-digital-assets; industries supply-chain, tech-semiconductors, energy-commodities, consumer-retail, real-estate-infrastructure); economies/greater-china goes to economies/china; the-brief/morning-brief goes to the-brief with NO sub-section (Morning Brief is a the-brief article without sub-section); the legacy banking-fintech subsections (banks, payments-lending, insurtech-wealthtech) and wealth subsections (investing, savings-rates, property-investment, expat-money) go to their pillar with NO sub-section (the new design has none there); an empty subsection (NULL or empty string: the industries, markets and wealth rows above) resolves through <pillar>/* to the pillar with no sub-section (resolveTaxonomy tries <section>/<sub>, then <section> when sub is empty, then <section>/*); every pillar keeps that <pillar>/* fallback. For catch-up runs: columns-explainers/columns goes to columns, columns-explainers/explainers to explainers, columns/* and explainers/* to their pillar, press-room/* to press-room with no sub-section (single-home); columns-explainers with an empty or unknown subsection has NO entry on purpose (it cannot be split by rule): such a published row is not imported (the import report lists it as reject: unmapped-category) and verify fails until the owner picks columns or explainers. (3) authors: even split over the 6 staff names of the Team page (mode even: deterministic, rows ordered by publication date then legacy id, per-author counts differ by at most 1, like agr/amb: 1435 rows = 240 + 5 x 239); legacy bylines are not kept; catch-up runs keep the Central author of rows already imported. (4) tags: only the 6 approved tags survive (china-plus-one-tracker, chart-of-the-day, central-banks, ipo, supply-chain, asean); a legacy tag is kept only when its slug equals one of them (the discovery's top 40 has supply-chain 33, ipo 32 and central-banks 29 uses, all statuses); every other legacy tag is dropped; no renames. (5) media: featured images are downloaded into the tenant's Central Media (R2); media.bodyImages drop (none exist); the old image library has no rows for this site, so nothing goes to the content-engine Media Engine. (6) not migrated (owner): newsletter subscribers, press submissions and logs; the mapping cannot read them anyway (tableAllowList is articles, sites, site_authors). (7) archivedAs: section (301 to the article section page, not 410), as agr/amb; archived rows are SKIP anyway. (8) body: reflowMaxChars 380 as aer/agr/amb (same legacy platform: each section is stored as one block and split into paragraphs at render time). Old origin is the apex https://asianomist.com (www.asianomist.com is an alias), article path /article/{slug}, section paths are the old pillars /the-brief, /economies, /markets, /banking-fintech, /industries, /wealth, /columns-explainers, /press-room. Pages and old paths get no rule from this mapping (as agr/amb: extraLegacyPaths and gonePaths stay empty): asianomist-web hand-writes /studio 301 /advertise, /data 301 /markets, /columns-explainers 301 /columns, /press-room-submit 301 /press-room/submit and the legacy sub-section paths at cutover.",
+  "source": {
+    "schema": "asn_ro",
+    "tableAllowList": [
+      "articles",
+      "sites",
+      "site_authors"
+    ],
+    "columns": {
+      "id": "id",
+      "slug": "slug",
+      "title": "title",
+      "dek": "excerpt",
+      "kicker": "kicker",
+      "body": "body_sections",
+      "status": "status",
+      "section": "section",
+      "subsection": "subsection",
+      "tags": "tags",
+      "format": "format",
+      "featured": "featured",
+      "isHero": "is_hero",
+      "readMinutes": "read_minutes",
+      "heroImage": "featured_image",
+      "heroCredit": "featured_image_credit",
+      "seo": "seo",
+      "sourceUrl": "source_url",
+      "byline": "byline",
+      "takeaways": "takeaways",
+      "countries": "countries",
+      "publishedAt": "published_at",
+      "createdAt": "created_at",
+      "updatedAt": "updated_at"
+    }
+  },
+  "body": {
+    "format": "sections",
+    "converter": "html-to-lexical",
+    "lineBreaks": "space",
+    "reflowMaxChars": 380
+  },
+  "status": {
+    "map": {
+      "published": "published",
+      "archived": "SKIP",
+      "draft": "SKIP",
+      "scheduled": "SKIP",
+      "rejected": "SKIP"
+    },
+    "unknown": "reject"
+  },
+  "categories": {
+    "map": {
+      "the-brief/week-ahead": {
+        "pillar": "the-brief",
+        "subSection": "week-ahead"
+      },
+      "the-brief/weekend-read": {
+        "pillar": "the-brief",
+        "subSection": "weekend-read"
+      },
+      "the-brief/morning-brief": {
+        "pillar": "the-brief"
+      },
+      "the-brief/*": {
+        "pillar": "the-brief"
+      },
+      "economies/southeast-asia": {
+        "pillar": "economies",
+        "subSection": "southeast-asia"
+      },
+      "economies/japan-korea": {
+        "pillar": "economies",
+        "subSection": "japan-korea"
+      },
+      "economies/india-south-asia": {
+        "pillar": "economies",
+        "subSection": "india-south-asia"
+      },
+      "economies/asia-world": {
+        "pillar": "economies",
+        "subSection": "asia-world"
+      },
+      "economies/greater-china": {
+        "pillar": "economies",
+        "subSection": "china"
+      },
+      "economies/china": {
+        "pillar": "economies",
+        "subSection": "china"
+      },
+      "economies/*": {
+        "pillar": "economies"
+      },
+      "markets/markets-today": {
+        "pillar": "markets",
+        "subSection": "markets-today"
+      },
+      "markets/central-banks-currencies": {
+        "pillar": "markets",
+        "subSection": "central-banks-currencies"
+      },
+      "markets/stocks-bonds": {
+        "pillar": "markets",
+        "subSection": "stocks-bonds"
+      },
+      "markets/ipo-deals": {
+        "pillar": "markets",
+        "subSection": "ipo-deals"
+      },
+      "markets/crypto-digital-assets": {
+        "pillar": "markets",
+        "subSection": "crypto-digital-assets"
+      },
+      "markets/*": {
+        "pillar": "markets"
+      },
+      "banking-fintech/banks": {
+        "pillar": "banking-fintech"
+      },
+      "banking-fintech/payments-lending": {
+        "pillar": "banking-fintech"
+      },
+      "banking-fintech/insurtech-wealthtech": {
+        "pillar": "banking-fintech"
+      },
+      "banking-fintech/*": {
+        "pillar": "banking-fintech"
+      },
+      "industries/supply-chain": {
+        "pillar": "industries",
+        "subSection": "supply-chain"
+      },
+      "industries/tech-semiconductors": {
+        "pillar": "industries",
+        "subSection": "tech-semiconductors"
+      },
+      "industries/energy-commodities": {
+        "pillar": "industries",
+        "subSection": "energy-commodities"
+      },
+      "industries/consumer-retail": {
+        "pillar": "industries",
+        "subSection": "consumer-retail"
+      },
+      "industries/real-estate-infrastructure": {
+        "pillar": "industries",
+        "subSection": "real-estate-infrastructure"
+      },
+      "industries/*": {
+        "pillar": "industries"
+      },
+      "wealth/investing": {
+        "pillar": "wealth"
+      },
+      "wealth/savings-rates": {
+        "pillar": "wealth"
+      },
+      "wealth/property-investment": {
+        "pillar": "wealth"
+      },
+      "wealth/expat-money": {
+        "pillar": "wealth"
+      },
+      "wealth/*": {
+        "pillar": "wealth"
+      },
+      "columns-explainers/columns": {
+        "pillar": "columns"
+      },
+      "columns-explainers/explainers": {
+        "pillar": "explainers"
+      },
+      "columns/*": {
+        "pillar": "columns"
+      },
+      "explainers/*": {
+        "pillar": "explainers"
+      },
+      "press-room/*": {
+        "pillar": "press-room"
+      }
+    },
+    "fallback": null,
+    "unmapped": "reject"
+  },
+  "authors": {
+    "resolve": "byColumn",
+    "map": {},
+    "staff": [
+      "Mark Chen",
+      "Anna Lee",
+      "Linh Tran",
+      "Ken Mori",
+      "Grace Ong",
+      "Ryan Cruz"
+    ],
+    "distribute": {
+      "pool": [
+        "Mark Chen",
+        "Anna Lee",
+        "Linh Tran",
+        "Ken Mori",
+        "Grace Ong",
+        "Ryan Cruz"
+      ],
+      "keepLegacy": false,
+      "groupBy": "none",
+      "maxSpread": 1,
+      "mode": "even"
+    },
+    "createMissing": false
+  },
+  "tags": {
+    "keepOnly": [
+      "china-plus-one-tracker",
+      "chart-of-the-day",
+      "central-banks",
+      "ipo",
+      "supply-chain",
+      "asean"
+    ],
+    "renames": {}
+  },
+  "formatTags": {
+    "enabled": false,
+    "include": []
+  },
+  "countries": {
+    "match": "either"
+  },
+  "readMin": {
+    "wpm": 230
+  },
+  "pin": {
+    "fromFlags": false,
+    "maxPinned": 0
+  },
+  "archivedAs": "section",
+  "events": {
+    "enabled": false
+  },
+  "slug": {
+    "preserve": true,
+    "dedupe": "numeric-suffix",
+    "reservedSlugs": []
+  },
+  "urls": {
+    "oldOrigin": "https://asianomist.com",
+    "articlePathTemplate": "/article/{slug}",
+    "sectionPaths": {
+      "the-brief": "/the-brief",
+      "economies": "/economies",
+      "markets": "/markets",
+      "banking-fintech": "/banking-fintech",
+      "industries": "/industries",
+      "wealth": "/wealth",
+      "columns-explainers": "/columns-explainers",
+      "press-room": "/press-room"
+    },
+    "extraLegacyPaths": [],
+    "gonePaths": []
+  },
+  "media": {
+    "maxBytes": 20971520,
+    "failureBudgetPercent": 2,
+    "fetchTimeoutMs": 30000,
+    "concurrency": 3,
+    "hotlinkPolicy": "download",
+    "bodyImages": "drop"
+  }
+}

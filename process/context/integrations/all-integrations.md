@@ -868,6 +868,27 @@ description; Console shows it fully).
   rows, read token and engine record `content-engine-aer` do not exist. Runbook:
   `docs/11-operations.md` "Asia Economic Review rollout".
 
+## ASN tenant rules (Asianomist, asn launch W2, 2026-11-05)
+
+- Tenant slug `asn` (name "Asianomist", domain `asianomist.com`, web repo `asianomist-web`).
+  `ENGINE_BLOCKED_PILLARS.asn = ["the-brief", "columns", "explainers", "press-room"]`;
+  `SINGLE_HOME_PILLARS.asn = ["press-room"]` (hyphenated; `pressroom` is not special for asn, pinned in
+  `scripts/lib/asn-taxonomy.test.ts` and `src/lib/single-home-pillars.test.ts`). No booths, no `exhibition`
+  feature, no migration.
+- Taxonomy source of truth: `scripts/lib/asn-taxonomy.ts` (9 pillars, 17 sub-sections with informational
+  design descriptions, 2 newsletters, 6 authors, 6 tags = 40 rows; design apostrophes written as ASCII);
+  OWNER-RUN `npm run audit:add-asn-taxonomy` (dry run default, host + `/neondb` name guard). The
+  content-engine asn publication runs a parity check against this file.
+- Legacy import profile `scripts/migrate/network/profiles/asn.json` + mapping `mappings/asn.mapping.json`
+  (FINAL, owner 05-11-26, `_provisional` empty: published only (1,435 of 1,997 rows at discovery; the old
+  site still publishes, so catch-up runs follow), `economies/greater-china` -> `china`,
+  `the-brief/morning-brief` -> `the-brief` with no sub-section, legacy `banking-fintech`/`wealth` subs and
+  empty subs -> the pillar with no sub-section, only the 6 approved tags (a legacy tag equal to one is kept);
+  bare `columns-explainers` unmapped on purpose); old site `asianomist` (id in the owner overlay), discovery
+  05-11-26 (`sql/01-discover-asn.sql`, rehearsed on a disposable local PG16 05-11-26 together with 02/02p/03).
+- Status 05-11-26: code only, branch `claude/happy-cori-31qi49`, not pushed; tenant, rows, read token and
+  engine record `content-engine-asn` do not exist. Runbook: `docs/11-operations.md` "Asianomist rollout".
+
 ## AMB tenant rules (AsiaMaterialsBrief, amb launch W2, 2026-10-27)
 
 - Tenant slug `amb` (name "AsiaMaterialsBrief", domain `asiamaterialsbrief.com`, web repo `amb-web`).

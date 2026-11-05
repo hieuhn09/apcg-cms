@@ -82,6 +82,15 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // (named suppliers / real interviews); there is no sub-section block here, that
 // rule lives in the content-engine amb publication. The unhyphenated
 // `pressroom` means nothing for amb.
+//
+// Asianomist (tenant `asn`, asn launch W2, owner default 05-11-26 from the
+// legacy site's `taxonomy_ai_excluded`, split per the design): `the-brief`
+// (editor-curated), `columns` (signed opinion), `explainers` and `press-room`
+// (hyphenated slug, like gtp/vowasia/agr/amb; single-home too, see below) are
+// editor-only. `the-brief`, `columns` and `explainers` are NOT single-home:
+// they keep sub-sections, secondary sections and a REQUIRED author.
+// `economies`, `markets`, `banking-fintech`, `industries` and `wealth` stay
+// engine-writable. The unhyphenated `pressroom` means nothing for asn.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   abb: ["pressroom"],
   gcv: ["exclusive", "pressroom"],
@@ -93,6 +102,7 @@ export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   aer: ["long-view", "interviews", "in-focus"],
   agr: ["course-reviews", "rankings", "press-room"],
   amb: ["press-room"],
+  asn: ["the-brief", "columns", "explainers", "press-room"],
 };
 
 /**
@@ -150,6 +160,9 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // AsiaMaterialsBrief `press-room` (amb launch W2, owner decision 27-10-26) is
 // single-home with an optional author, exactly like GTP/AGR `press-room`; amb
 // `pressroom` (unhyphenated) is NOT single-home.
+// Asianomist `press-room` (asn launch W2, owner default 05-11-26) is
+// single-home with an optional author, exactly like GTP/AGR/AMB `press-room`;
+// asn `pressroom` (unhyphenated) is NOT single-home.
 export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
   abb: ["pressroom"],
   "brief-asia": ["pressroom"],
@@ -160,6 +173,7 @@ export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
   dtw: ["pressroom"],
   agr: ["press-room"],
   amb: ["press-room"],
+  asn: ["press-room"],
 };
 
 // ── Top-level user role (global identity) ───────────────────────────────────

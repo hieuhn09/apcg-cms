@@ -173,6 +173,29 @@ been run against any shared database. Field sheet as data: `AMB_TENANT_FIELDS` i
   "AsiaMaterialsBrief rollout". Same `/neondb` name guard as the agr script. Booths are
   entered by editors in /admin (never by the engine).
 
+### Example: Asianomist (`asn`)
+
+Owner-run, systemAdmin only. Status 05-11-26: **code only, on branch
+`claude/happy-cori-31qi49`, not pushed**; the tenant does NOT exist yet and nothing has been
+run against any shared database. Field sheet as data: `ASN_TENANT_FIELDS` in
+`scripts/lib/asn-taxonomy.ts`.
+
+- Name `Asianomist`, slug `asn` (the web repo is `asianomist-web`; the domain is
+  `asianomist.com`), status `active`, default language `en`, supported languages `[en]`,
+  timezone `Asia/Singapore`. Contact (PENDING OWNER, the design's mailboxes): editorial and
+  general `info@asianomist.com`, advertising/partnerships `info@asiapresscentre.com` (the
+  old site used `editorial@asianomist.com`).
+- Domain, additional domains and **frontend URL: EMPTY at creation** (set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` on; everything else off (no
+  `exhibition`: Asianomist has no booths; no `marketData`).
+- **Auto publish engine drafts: OFF** (`audit:add-asn-taxonomy` refuses `--apply` while on).
+- Engine-blocked in code (`src/lib/constants.ts`): `the-brief`, `columns`, `explainers`,
+  `press-room`; only `press-room` (hyphenated) is single-home (no sub-sections, optional
+  author).
+- Then create the taxonomy (9 pillars, 17 sub-sections, 2 newsletters, 6 authors, 6 tags =
+  40 rows) with `npm run audit:add-asn-taxonomy`: see `docs/11-operations.md` "Asianomist
+  rollout". Same `/neondb` name guard as the amb script.
+
 ## Configure domain & languages
 
 - **Domain**: `domain` + `additionalDomains` are informational/CORS hints; the

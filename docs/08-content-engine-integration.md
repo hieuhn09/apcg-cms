@@ -161,6 +161,20 @@ Content-Type: application/json
 - Status 27-10-26: code only; intake for `amb` answers 4xx until the owner creates the
   tenant, taxonomy and engine record.
 
+### Asianomist (`asn`) notes
+
+- Tenant slug / `publicationId` `asn`. Engine-writable pillars: `economies` (default),
+  `markets`, `industries` (with sub-sections: send `subSectionSlug(s)`), `banking-fintech`,
+  `wealth` (no sub-sections). Editor-only (422 `pillar not writable by engine`):
+  `the-brief`, `columns`, `explainers`, `press-room`; `press-room` is also single-home;
+  unhyphenated `pressroom` means nothing for asn. Taxonomy source of truth:
+  `scripts/lib/asn-taxonomy.ts`.
+- `engineDraftId`: `content-engine:asn:<article.id>`, same convention as gtp/vowasia/aer/agr/amb.
+- `byline` must equal an asn `authors.name` exactly (`Mark Chen`, `Anna Lee`, `Linh Tran`,
+  `Ken Mori`, `Grace Ong`, `Ryan Cruz`); no shared "Asianomist Desk" / newsroom byline.
+- Status 05-11-26: code only; intake for `asn` answers 4xx until the owner creates the
+  tenant, taxonomy and engine record.
+
 ### `contentType` — what the document is
 
 Optional. `"article"` (default) or `"daily-brief"`. Set on create only; a refresh

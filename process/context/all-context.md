@@ -328,7 +328,7 @@ Any new relationship to a secret-bearing collection needs the same treatment; no
 automatically. Full detail: `process/context/integrations/all-integrations.md` §Security patterns.
 
 **Single-home pillar rule (2026-10-05).** `SINGLE_HOME_PILLARS` (`src/lib/constants.ts:68`, tenant slug
--> pillar slugs; today `brief-asia`, `gcv` and (since 20-10-26) `wad` -> `pressroom`, `gtp`/`vowasia`/`agr`/`amb` -> `press-room`; the tests' negative control is a fixture-only `world-travel-brief` `pressroom`) makes a pillar's articles belong to nothing else: no
+-> pillar slugs; today `brief-asia`, `gcv` and (since 20-10-26) `wad` -> `pressroom`, `gtp`/`vowasia`/`agr`/`amb`/`asn` -> `press-room`; the tests' negative control is a fixture-only `world-travel-brief` `pressroom`) makes a pillar's articles belong to nothing else: no
 secondary sections, no sub-section, never another article's secondary section, no sub-sections of its
 own, not `exclusive`, and its slug/tenant can't be renamed/moved/deleted in use. Code constant only (no
 migration); enforced in the Articles `beforeChange` hook on the *resulting* state (never trusting
