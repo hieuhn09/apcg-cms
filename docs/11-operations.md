@@ -323,9 +323,10 @@ and status.
   record `content-engine-asn` in Console `/console/engines/new`: writer, allowed tenant only
   `asn`, actions only `create_article` + `update_article`, hub flags off; (9) add the
   asianomist-web origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import:
-  `scripts/migrate/network/NETWORK-LEGACY.md` "Asianomist" (old site expected at slug
-  `asianomist`, not yet discovered; mapping is a DRAFT, `_provisional` non-empty). Author
-  bios, newsletters, contacts and the tag set are PENDING OWNER wording.
+  `scripts/migrate/network/NETWORK-LEGACY.md` "Asianomist" (old site `asianomist` found
+  05-11-26; mapping FINAL, owner 05-11-26: published only, 1,435 rows at discovery, the old
+  site still publishes). Author bios, newsletters, contacts and the tag set are PENDING OWNER
+  wording.
 
 ## Token rotation
 

@@ -863,10 +863,13 @@ description; Console shows it fully).
   design descriptions, 2 newsletters, 6 authors, 6 tags = 40 rows; design apostrophes written as ASCII);
   OWNER-RUN `npm run audit:add-asn-taxonomy` (dry run default, host + `/neondb` name guard). The
   content-engine asn publication runs a parity check against this file.
-- Legacy import profile `scripts/migrate/network/profiles/asn.json` + DRAFT mapping
-  `mappings/asn.mapping.json` (`_provisional` non-empty, `--require-final` refuses); old site expected at
-  slug `asianomist`, not yet discovered (`sql/01-discover-asn.sql`, rehearsed on a disposable local PG16
-  05-11-26 together with 02/02p/03).
+- Legacy import profile `scripts/migrate/network/profiles/asn.json` + mapping `mappings/asn.mapping.json`
+  (FINAL, owner 05-11-26, `_provisional` empty: published only (1,435 of 1,997 rows at discovery; the old
+  site still publishes, so catch-up runs follow), `economies/greater-china` -> `china`,
+  `the-brief/morning-brief` -> `the-brief` with no sub-section, legacy `banking-fintech`/`wealth` subs and
+  empty subs -> the pillar with no sub-section, only the 6 approved tags (a legacy tag equal to one is kept);
+  bare `columns-explainers` unmapped on purpose); old site `asianomist` (id in the owner overlay), discovery
+  05-11-26 (`sql/01-discover-asn.sql`, rehearsed on a disposable local PG16 05-11-26 together with 02/02p/03).
 - Status 05-11-26: code only, branch `claude/happy-cori-31qi49`, not pushed; tenant, rows, read token and
   engine record `content-engine-asn` do not exist. Runbook: `docs/11-operations.md` "Asianomist rollout".
 

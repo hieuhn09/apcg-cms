@@ -477,7 +477,7 @@ test("amb 01b booths inspection: one read-only statement, tables guarded, secret
   assert.doesNotMatch(s, /xpath\('\/row/);
 });
 
-/* ── asn (Asianomist) profile + DRAFT (owner-pending) mapping ── */
+/* ── asn (Asianomist) profile + FINAL mapping (owner 05-11-26) ── */
 const ASN: NetworkProfile = parseProfile(readJ("profiles/asn.json"));
 const ASN_OVERLAY = { source: { siteFilter: ASN.fixtureSiteId }, media: { hostAllowlist: ["mbolvnwkmkeroqmvbvmt.supabase.co"], hostRewrite: {} } };
 test("profile: asn parses; pillars = the 9 asn taxonomy pillars; press-room single-home; matches the constants", async () => {
@@ -498,19 +498,40 @@ test("entry: asn resolves its profile; missing --site names 01-discover-asn.sql"
   assert.deepEqual(planEntry(["validate-mapping", "--tenant", "asn"]).argv, ["--mapping", ASN.mappingPath]);
   assert.throws(() => planEntry(["export", "--tenant", "asn"] as never), /sql\/01-discover-asn\.sql/);
 });
-test("mapping: committed asn mapping is a DRAFT: validates structurally, refused by --require-final", () => {
+test("mapping: committed asn mapping is FINAL (owner 05-11-26) and passes --require-final; real legacy pairs resolve", () => {
   setProfile(ASN);
   const m = readJ("mappings/asn.mapping.json");
-  const r = validateMapping(m, ASN_OVERLAY);
-  assert.deepEqual(r.provisional.map((x) => x.key).sort(), [...m._provisional].sort());
-  for (const k of ["status.map", "categories.map", "authors.distribute", "tags.keepOnly", "body.reflowMaxChars", "urls.oldOrigin", "archivedAs"]) assert.ok(m._provisional.includes(k), k);
-  assert.throws(() => validateMapping(m, ASN_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.deepEqual(validateMapping(m, ASN_OVERLAY, { requireFinal: true }).provisional, []);
+  assert.throws(() => validateMapping({ ...m, _provisional: ["categories.map"] }, ASN_OVERLAY, { requireFinal: true }), /require-final/);
   assert.deepEqual(Object.entries(m.status.map).filter(([, v]) => v !== "SKIP").map(([k]) => k), ["published"]);
+  assert.equal(m.archivedAs, "section");
+  // Same legacy platform as aer/agr/amb: each one-block section is split into paragraphs at render time.
+  assert.equal(m.body.reflowMaxChars, 380);
+  assert.equal(m.media.bodyImages, "drop");
   assert.equal(m.source.schema, "asn_ro");
   assert.equal(m.urls.oldOrigin, "https://asianomist.com");
   assert.equal(m.urls.articlePathTemplate, "/article/{slug}");
-  assert.deepEqual(Object.keys(m.urls.sectionPaths), ["the-brief", "economies", "markets", "banking-fintech", "industries", "wealth", "columns-explainers", "press-room"]);
+  // Section paths are the OLD pillars (incl. columns-explainers), not the new ones.
+  const oldSections = ["the-brief", "economies", "markets", "banking-fintech", "industries", "wealth", "columns-explainers", "press-room"];
+  assert.deepEqual(m.urls.sectionPaths, Object.fromEntries(oldSections.map((s) => [s, `/${s}`])));
+  // Page routes (/studio, /data, /columns-explainers, /press-room-submit) are hand-written in asianomist-web at cutover (as agr/amb).
   assert.deepEqual([m.urls.extraLegacyPaths, m.urls.gonePaths], [[], []]);
+  // Every (section, subsection) pair seen in the real discovery result (05-11-26).
+  const tx = (sec: string, sub: string | null) => {
+    const r = resolveTaxonomy(sec, sub, m);
+    assert.ok(r.ok, `${sec}/${sub}`);
+    return r.ok ? [r.t.pillar, r.t.subSection ?? null] : null;
+  };
+  for (const sub of ["week-ahead", "weekend-read"]) assert.deepEqual(tx("the-brief", sub), ["the-brief", sub]);
+  assert.deepEqual(tx("the-brief", "morning-brief"), ["the-brief", null]);
+  for (const sub of ["southeast-asia", "china", "japan-korea", "india-south-asia", "asia-world"]) assert.deepEqual(tx("economies", sub), ["economies", sub]);
+  assert.deepEqual(tx("economies", "greater-china"), ["economies", "china"]);
+  for (const sub of ["markets-today", "central-banks-currencies", "stocks-bonds", "ipo-deals", "crypto-digital-assets"]) assert.deepEqual(tx("markets", sub), ["markets", sub]);
+  for (const sub of ["supply-chain", "tech-semiconductors", "energy-commodities", "consumer-retail", "real-estate-infrastructure"]) assert.deepEqual(tx("industries", sub), ["industries", sub]);
+  for (const sub of ["banks", "payments-lending", "insurtech-wealthtech"]) assert.deepEqual(tx("banking-fintech", sub), ["banking-fintech", null], sub);
+  for (const sub of ["investing", "property-investment", "expat-money"]) assert.deepEqual(tx("wealth", sub), ["wealth", null], sub);
+  // Empty subsection (NULL or '', industries 2 / markets 2 / wealth 1 published): <pillar>/* gives the pillar, no sub-section.
+  for (const p of ["industries", "markets", "wealth"]) for (const sub of ["", null]) assert.deepEqual(tx(p, sub), [p, null], `${p}/${String(sub)}`);
   assert.equal(m.categories.unmapped, "reject");
   assert.equal(m.authors.distribute.mode, "even");
   assert.equal(m.authors.distribute.keepLegacy, false);
@@ -518,7 +539,7 @@ test("mapping: committed asn mapping is a DRAFT: validates structurally, refused
   assert.deepEqual(m.authors.distribute.pool, m.authors.staff);
   assert.throws(() => validateMapping(m, { ...ASN_OVERLAY, media: { hostAllowlist: ["x.example.com"], hostRewrite: {} } }), /mbolvnwkmkeroqmvbvmt/);
 });
-test("mapping: asn legacy taxonomy (apcg-network/sites/asianomist.json) resolves to the new pillars/sub-sections", async () => {
+test("mapping: every asn target is a real pillar/sub-section; press-room never gets a sub; only the 6 approved tags survive; legacy taxonomy resolves", async () => {
   const { ASN_SUBSECTIONS, ASN_TAGS } = await import("../../lib/asn-taxonomy");
   const m = readJ("mappings/asn.mapping.json");
   const subs = new Set(ASN_SUBSECTIONS.map((s) => `${s.pillarSlug}/${s.slug}`));
@@ -529,6 +550,10 @@ test("mapping: asn legacy taxonomy (apcg-network/sites/asianomist.json) resolves
   }
   assert.deepEqual([...m.tags.keepOnly], ASN_TAGS.map((t) => t.slug));
   assert.deepEqual(m.tags.renames, {});
+  // Unlike amb, some legacy tags equal an approved slug (discovery top 40: supply-chain 33, ipo 32, central-banks 29):
+  // they are kept (after slugify); every other legacy tag is dropped.
+  const tm = { tags: { normalize: "lowercase-trim-dedupe", maxPerArticle: 12, drop: [], renames: m.tags.renames, keepOnly: m.tags.keepOnly } } as never;
+  assert.deepEqual(legacyTags(["singapore", "Supply Chain", "IPO", "central-banks", "morning-brief", "ipo process"], tm).map((t) => t.slug), ["supply-chain", "ipo", "central-banks"]);
   const tx = (sec: string, sub: string) => {
     const r = resolveTaxonomy(sec, sub, m);
     assert.ok(r.ok, `${sec}/${sub}`);
@@ -547,10 +572,13 @@ test("mapping: asn legacy taxonomy (apcg-network/sites/asianomist.json) resolves
   for (const sub of ["press-releases", "company-announcements", "market-notices"]) assert.deepEqual(tx("press-room", sub), ["press-room", null], sub);
   // Wildcard fallbacks: an unknown sub keeps its pillar with no sub-section.
   for (const p of ASN.pillarSlugs) assert.deepEqual(tx(p, "something-new"), [p, null], p);
-  // columns-explainers with no or an unknown sub cannot be split by rule: no entry (unmapped = reject).
+  // columns-explainers with no or an unknown sub cannot be split by rule: no entry on purpose. It resolves to the old
+  // section name, which is not an asn pillar, so the importer rejects the row (unmapped-category) and verify fails.
   for (const sub of ["", "opinion"]) {
     const sec = "columns-explainers";
     assert.equal(m.categories.map[`${sec}/${sub}`] ?? m.categories.map[sec] ?? m.categories.map[`${sec}/*`], undefined, sub);
+    const r = resolveTaxonomy(sec, sub, m);
+    assert.ok(r.ok && !ASN.pillarSlugs.includes(r.t.pillar), sub);
   }
 });
 test("asn SQL Editor files are asn-only (role asn_migrator, schema asn_ro, site slug asianomist, no booths); 01 is one statement", () => {

@@ -418,13 +418,6 @@ hết hạn sau 14 ngày.
 - Tenant tạo tay trong /admin, **không** bật `exhibition` (Asianomist không có gian hàng,
   không có `booths`); danh sách trường: `ASN_TENANT_FIELDS` trong
   `scripts/lib/asn-taxonomy.ts`. Taxonomy mới (9 pillar, 17 mục con): cùng file đó.
-- Dòng site cũ: **chưa xác nhận**, dự kiến slug **`asianomist`** (theo
-  `apcg-network/sites/asianomist.json`). File khám phá `sql/01-discover-asn.sql` tìm dòng
-  site theo slug `asianomist`, tên chứa `asianomist`, hoặc slug đúng `asn` (chỉ đọc cột slug
-  và tên, nên site khác có link tới asianomist.com trong cấu hình không bị tính), in mọi
-  slug site để so, và chỉ trả MỘT bảng kết quả. Các mục như amb, trừ cờ "directory-like"
-  của gian hàng (bỏ). Mục `8 media_assets` cho biết kho ảnh cũ của site có bao nhiêu dòng
-  (Q6: chuyển sang Media Engine là plan riêng sau bước này).
 - File SQL Editor của asn là bản riêng: `sql/01-discover-asn.sql`,
   `sql/02-create-readonly-role-views-asn.sql`, `sql/02p-set-password-asn.sql`,
   `sql/03-drop-role-and-views-asn.sql` (chép từ bản amb, đổi role/schema/site; không có
@@ -433,42 +426,219 @@ hết hạn sau 14 ngày.
   `asianomist.com` trong cột cấu hình không khớp; 2 site khớp thì không mô tả bài, 02 dừng
   `SITE STOP`), mục 8 có số (không trống), `SELF-CHECK OK`, role chỉ đọc được `asn_ro`
   (đọc `public.articles` bị từ chối), 02 chạy lần hai dừng `ALREADY STOP`, `CLEANUP OK`.
-- Mapping `mappings/asn.mapping.json` là **NHÁP, CHƯA chốt** (`_provisional` còn:
-  `status.map`, `categories.map`, `authors.distribute`, `tags.keepOnly`, `media.bodyImages`,
-  `body.reflowMaxChars`, các `urls.*`, `archivedAs`). `validate-mapping --require-final`
-  (ngầm bật khi chạy với Central thật) từ chối cho tới khi chủ dự án chốt sau bước khám
-  phá. Gợi ý đang ghi (theo taxonomy cũ trong `asianomist.json`, kiểm lại với mục 3 của
-  file 01):
-  - chỉ chuyển bài `published`;
-  - mục con cũ trùng slug mới giữ nguyên (`the-brief/week-ahead`, `weekend-read`; 4 mục
-    con `economies`; 5 mục con `markets`; 5 mục con `industries`);
-  - `economies/greater-china` → `economies/china`; `the-brief/morning-brief` → `the-brief`
-    không mục con (Morning Brief là bài `the-brief` không mục con);
-  - mục con cũ của `banking-fintech` (`banks`, `payments-lending`, `insurtech-wealthtech`)
-    và `wealth` (`investing`, `savings-rates`, `property-investment`, `expat-money`) →
-    pillar đó, không mục con (thiết kế mới không có mục con ở hai pillar này);
-  - `columns-explainers/columns` → `columns`; `columns-explainers/explainers` →
-    `explainers`; `columns-explainers` không mục con hoặc mục con lạ: **không có dòng** cố ý
-    (không tách được bằng luật), bài đó bị từ chối cho tới khi chủ dự án chọn pillar;
-  - `press-room/*` → `press-room` không mục con (một nhà); mỗi pillar khác giữ dòng dự
-    phòng `<pillar>/*` → pillar đó, không mục con;
-  - tác giả chia đều 6 người trang Team (`mode: even`), không giữ byline cũ; chỉ giữ 6 tag
-    đề xuất (bản thân 6 tag cũng chờ chủ dự án); `body.reflowMaxChars: 380` như
-    AER/AGR/AMB (kiểm lại trên vài bài cũ); `archivedAs: section`;
-  - gốc cũ `https://asianomist.com`, bài `/article/{slug}`, chuyên mục là pillar cũ (kể cả
-    `/columns-explainers`). Redirect trang viết tay ở asianomist-web lúc cutover (như
-    agr/amb, `extraLegacyPaths`/`gonePaths` rỗng): `/columns-explainers` 301 `/columns`,
-    `/press-room-submit` 301 `/press-room/submit`; `/studio`, `/data` quyết sau khám phá.
-- Ảnh: như AMB, overlay PHẢI có host `mbolvnwkmkeroqmvbvmt.supabase.co` (giả định cùng
-  project Supabase cũ; xác nhận bằng mục `7 featured image hosts` của file 01).
+- Dòng site cũ: slug `asianomist`, id `a080edc0-b7d7-4e90-9a02-ec913434af70`, tên Asianomist
+  (khám phá 05-11-26 trong SQL Editor của `globaltravelpost`, DB có 14 site, khớp đúng 1
+  dòng): 1.997 bài = 1.435 published, 463 archived (461 chưa từng có ngày đăng), 99 draft;
+  created_at 03-08-26 → 05-11-26, 1.996/1.997 có phần micro giây khác 0, 0 trùng thời điểm;
+  published_at mới nhất 05-11-26: site cũ **vẫn đang đăng bài** (khoảng 15 bài mỗi ngày);
+  0 slug rỗng/trùng/sai; 6.861 tag cũ (13.024 lượt, 1.997 bài); 1.940 ảnh đại diện ở
+  `mbolvnwkmkeroqmvbvmt.supabase.co`, 57 bài không ảnh (hoặc đường dẫn tương đối); 7.837 mục
+  thân bài, 0 ảnh trong thân; `media_assets` của site này: 0 dòng (7.554 của mọi site) ⇒
+  không có gì chuyển sang Media Engine của content engine. Giá trị section/subsection là
+  SLUG. Bài published theo pillar cũ: `the-brief` 91, `economies` 191, `markets` 424,
+  `banking-fintech` 202, `industries` 464, `wealth` 63; trong đó 5 bài có subsection rỗng
+  (`industries` 2, `markets` 2, `wealth` 1). Không có bài `columns-explainers`,
+  `press-room`, `wealth/savings-rates`. Bảng khác của site KHÔNG chuyển (chủ dự án
+  05-11-26): người đăng ký bản tin (`gtp_subscribers`, 12 dòng của site này),
+  `press_submissions` (2), nhật ký và vận hành (`scraping_runs`, `scraping_sources`,
+  `editorial_reports`, `site_*`, `hub_*`). Kiểm trước của file 02: role/schema chưa có, 0
+  bảng PUBLIC đọc được ngoài danh sách cho phép, 0 hàm SECURITY DEFINER PUBLIC gọi được,
+  không schema nào PUBLIC tạo được.
+- Mapping `mappings/asn.mapping.json` **đã chốt** (chủ dự án duyệt 05-11-26, `_provisional`
+  rỗng, `validate-mapping --require-final` OK):
+  - chỉ chuyển bài `published` (1.435 lúc khám phá); `archived`/`draft`/`scheduled`/`rejected`
+    bỏ qua. Lượt chạy bù trước khi chuyển tên miền lấy thêm bài site cũ đăng sau lần chạy đầu;
+  - mục con cũ trùng slug mới giữ nguyên (`the-brief/week-ahead`, `weekend-read`; 5 mục con
+    `economies`, kể cả `china` có 3 bài; 5 mục con `markets`; 5 mục con `industries`);
+  - `economies/greater-china` (1 bài) → `economies/china`; `the-brief/morning-brief` (65 bài)
+    → `the-brief` không mục con (Morning Brief là bài `the-brief` không mục con);
+  - mục con cũ của `banking-fintech` (`banks`, `payments-lending`, `insurtech-wealthtech`) và
+    `wealth` (`investing`, `savings-rates`, `property-investment`, `expat-money`) → pillar đó,
+    không mục con (thiết kế mới không có mục con ở hai pillar này);
+  - subsection rỗng (NULL hoặc chuỗi rỗng) → pillar đó, không mục con, qua dòng `<pillar>/*`
+    (`resolveTaxonomy` thử `<section>/<sub>`, rồi `<section>` khi sub rỗng, rồi
+    `<section>/*`); mỗi pillar giữ dòng dự phòng `<pillar>/*`;
+  - cho lượt chạy bù: `columns-explainers/columns` → `columns`,
+    `columns-explainers/explainers` → `explainers`, `columns/*` và `explainers/*` → pillar đó;
+    `press-room/*` → `press-room` không mục con (một nhà). `columns-explainers` không mục con
+    hoặc mục con lạ: **không có dòng** cố ý (không tách được bằng luật): bài published như
+    vậy không được nhập (báo cáo import ghi `reject: unmapped-category`) và `verify` báo lỗi
+    cho tới khi chủ dự án chọn `columns` hay `explainers`;
+  - tác giả chia đều 6 người trang Team (`mode: even`: cố định, xếp theo ngày đăng rồi id cũ,
+    lệch tối đa 1 bài: 1.435 bài = 240 + 5 × 239), không giữ byline cũ; lượt chạy bù giữ tác
+    giả Central của bài đã nhập;
+  - chỉ giữ 6 tag đã duyệt (`china-plus-one-tracker`, `chart-of-the-day`, `central-banks`,
+    `ipo`, `supply-chain`, `asean`), không có `renames`. Khác AMB: tag cũ nào trùng slug một
+    trong 6 tag thì được giữ (top 40: `supply-chain` 33, `ipo` 32, `central-banks` 29 lượt,
+    mọi trạng thái); mọi tag cũ khác bỏ;
+  - ảnh đại diện tải về kho Media của tenant trên R2; không ảnh trong thân
+    (`bodyImages: drop`);
+  - bài cũ không chuyển → 301 về trang chuyên mục (`archivedAs: section`, như agr/amb); thân
+    bài `reflowMaxChars: 380` như AER/AGR/AMB (cùng nền tảng cũ); gốc cũ
+    `https://asianomist.com` (`www` là bí danh), bài `/article/{slug}`, chuyên mục là pillar
+    cũ `/the-brief`, `/economies`, `/markets`, `/banking-fintech`, `/industries`, `/wealth`,
+    `/columns-explainers`, `/press-room`.
+- Trang cũ và đường dẫn cũ: mapping không sinh rule (như agr/amb, `extraLegacyPaths` và
+  `gonePaths` rỗng). Viết tay ở asianomist-web lúc cutover: `/studio` → 301 `/advertise`,
+  `/data` → 301 `/markets`, `/columns-explainers` → 301 `/columns`, `/press-room-submit` →
+  301 `/press-room/submit`, và các đường dẫn mục con cũ. Lệnh `redirects` chỉ sinh rule
+  chuyên mục từ bài có thật, nên không có rule nào cho `/columns-explainers` (không có bài).
+- Ảnh: như AMB, overlay PHẢI có host `mbolvnwkmkeroqmvbvmt.supabase.co` (1.940 ảnh ở host
+  đó, mục `7 featured image hosts` của file 01).
+- Overlay của chủ dự án `~/asn-private/overlay.json` (ngoài repo):
+  ```
+  {
+    "source": { "siteFilter": "a080edc0-b7d7-4e90-9a02-ec913434af70" },
+    "media": { "hostAllowlist": ["mbolvnwkmkeroqmvbvmt.supabase.co"], "hostRewrite": {} }
+  }
+  ```
 
 ### Các bước của chủ dự án (asn), mỗi lần một bước
 
-Giống hệt AMB ở trên, thay `amb` bằng `asn`, `asiamaterialsbrief` bằng `asianomist`, và
-dùng đúng các file `-asn.sql`; không có bước 1b. Hai bước đầu khác:
+Giống hệt AMB ở trên, với tên asn. **Trước khi ngồi làm:** `~/apcg-cms/.env.local` phải có
+đủ 4 biến R2 của bucket production (`R2_BUCKET`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`; như agr/amb: tạo khoá R2 tạm Object Read & Write chỉ cho
+`apcg-central-media`, ghi bằng `read -s`, xoá khoá khi xong); thiếu biến nào thì importer từ
+chối chạy với Central thật (kể cả chạy khô). Mac cần `psql`. Tenant `asn` và taxonomy phải có
+trên Central trước bước 9 (`docs/11-operations.md` "Asianomist rollout", bước (1) tới (6);
+preflight của importer đòi đủ 9 pillar và 6 tác giả). `HOST_CENTRAL` (host của URL Central,
+từ bước 9) là chữ giữ chỗ: agent điền giá trị thật trước khi gửi lệnh. Mỗi khối là đúng một
+lệnh. Site cũ vẫn đăng bài: mọi số dưới đây là số lúc khám phá (05-11-26), lúc chạy có thể
+lớn hơn.
 
-1. **Khám phá**: SQL Editor của project `globaltravelpost`, chạy `sql/01-discover-asn.sql`,
-   "Download CSV" và gửi. Hàng `1 site match` phải là 1 và in `asianomist`.
-2. **Chốt mapping**: agent sửa `mappings/asn.mapping.json` theo kết quả khám phá, chủ dự án
-   duyệt, `_provisional` về rỗng; rồi tiếp từ bước 3 của AMB (số bài, id site và overlay
-   lấy từ kết quả khám phá của asn).
+1. **Khám phá** (`sql/01-discover-asn.sql`): XONG 05-11-26 (số liệu ở trên).
+2. **Chốt mapping**: XONG 05-11-26.
+3. **Tạo role chỉ-đọc**: SQL Editor của project `globaltravelpost`, chạy
+   `sql/02-create-readonly-role-views-asn.sql`. Ô `asn_self_check` phải là `SELF-CHECK OK`,
+   ô `asn_articles_visible` là số bài thấy được (mọi trạng thái: 1.997 lúc khám phá, có thể
+   lớn hơn). Lỗi `... STOP ...`: không có gì được tạo, gửi nguyên văn dòng lỗi.
+4. **Đặt mật khẩu**: chạy `sql/02p-set-password-asn.sql`. Bấm nút copy của ô `new_secret`
+   (không chụp màn hình). Đóng tab truy vấn sau bước 6.
+5. **Overlay riêng** trên Mac (Terminal mới trên Mac, không phải cửa sổ SSH):
+   ```
+   mkdir -p ~/asn-private
+   ```
+   ```
+   chmod 700 ~/asn-private
+   ```
+   ```
+   nano ~/asn-private/overlay.json
+   ```
+   Dán nội dung overlay ở trên, lưu (Ctrl+O, Enter, Ctrl+X).
+6. **Đưa URL DB cũ vào Terminal** (không hiện lên màn hình):
+   ```
+   cd ~/apcg-cms
+   ```
+   ```
+   read -s LEGACY_PW
+   ```
+   Dán mật khẩu vừa copy, Enter. Rồi:
+   ```
+   export LEGACY_DB_URL="postgresql://asn_migrator.mbolvnwkmkeroqmvbvmt:$LEGACY_PW@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+   ```
+   Host **Session pooler, cổng 5432** (Supabase > Connect); không dùng cổng 6543.
+7. **Khám phá bằng công cụ** (chỉ đọc). Dòng cuối phải in `articles=` từ 1.997 trở lên:
+   ```
+   npm run migrate:network -- discover --tenant asn --site a080edc0-b7d7-4e90-9a02-ec913434af70 --mapping-overlay ~/asn-private/overlay.json
+   ```
+8. **Kiểm mapping đã chốt**:
+   ```
+   npm run migrate:network -- validate-mapping --tenant asn --mapping-overlay ~/asn-private/overlay.json --require-final
+   ```
+   Phải in `[validate-mapping] OK` và `PROVISIONAL: none`.
+9. **Đưa URL Central vào Terminal** (không hiện lên màn hình):
+   ```
+   read -s DATABASE_URL
+   ```
+   Dán URL Central, Enter. Rồi:
+   ```
+   export DATABASE_URL
+   ```
+   Phải in đúng `/neondb` (khác thì dừng và báo):
+   ```
+   node -e 'console.log(new URL(process.env.DATABASE_URL).pathname)'
+   ```
+   Rồi **chạy khô**:
+   ```
+   npm run migrate:network -- import --tenant asn --site a080edc0-b7d7-4e90-9a02-ec913434af70 --mapping-overlay ~/asn-private/overlay.json --confirm-host=HOST_CENTRAL
+   ```
+   Cần thấy: `preflight OK` với 9 pillars, 17 sub-sections, 6 authors; `planned for create`
+   từ 1.435 trở lên, `per pillar` khớp số theo pillar cũ ở trên (cộng bài mới); mục
+   `rejects / skips` chỉ có dòng `skip: status ...` (archived, draft), không có dòng
+   `reject:`; tác giả chia đều (`spread` 0 hoặc 1); `tags created: 0` (6 tag đã có từ
+   taxonomy; khác 0 thì dừng và báo).
+10. **Ghi thử 50 bài**, rồi mở xem bằng mắt (đoạn văn tách đúng như site cũ, ảnh, chuyên mục,
+    tag). `--limit 50` đếm 50 dòng ở mọi trạng thái, nên số bài ghi có thể dưới 50:
+    ```
+    npm run migrate:network -- import --tenant asn --site a080edc0-b7d7-4e90-9a02-ec913434af70 --mapping-overlay ~/asn-private/overlay.json --apply --limit 50 --run-id asn-real-1 --confirm-host=HOST_CENTRAL
+    ```
+11. **Chạy toàn bộ** (Mac không ngủ). Dừng giữa chừng: chạy lại đúng lệnh này.
+    ```
+    caffeinate -i npm run migrate:network -- import --tenant asn --site a080edc0-b7d7-4e90-9a02-ec913434af70 --mapping-overlay ~/asn-private/overlay.json --apply --resume --run-id asn-real-1 --confirm-host=HOST_CENTRAL
+    ```
+12. **Sửa link trong bài**:
+    ```
+    npm run migrate:network -- rewrite-links --tenant asn --run-id asn-real-1 --apply --confirm-host=HOST_CENTRAL
+    ```
+13. **Sửa ngày tạo/sửa** bằng psql với URL **direct** của Neon (console.neon.tech, project
+    **apcg-master-db**, **Connect**, database **neondb**, TẮT **Connection pooling**, copy):
+    ```
+    read -s DIRECT_URL
+    ```
+    ```
+    export DIRECT_URL
+    ```
+    Phải in đúng `/neondb`; host KHÔNG có chữ `-pooler`:
+    ```
+    node -e 'console.log(new URL(process.env.DIRECT_URL).pathname)'
+    ```
+    ```
+    npm run migrate:network -- timestamps-fix --tenant asn --run-id asn-real-1
+    ```
+    ```
+    psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f scripts/migrate/out/asn-real-1/timestamps-fix.sql
+    ```
+14. **Kiểm 12 phép**:
+    ```
+    npm run migrate:network -- verify --tenant asn --site a080edc0-b7d7-4e90-9a02-ec913434af70 --run-id asn-real-1 --mapping-overlay ~/asn-private/overlay.json --confirm-host=HOST_CENTRAL
+    ```
+15. **Chạy bù trước cutover** với run-id MỚI `asn-real-2` (chủ dự án tắt pipeline cũ NGAY
+    TRƯỚC lượt này). Không `--resume` run-id cũ, cùng thư mục out. Nếu đã xoá role ở bước 16
+    thì tạo lại bằng bước 3, 4, 6 (và khoá R2 tạm mới). Chạy khô trước để xem số bài mới (bài
+    đã có là `skippedExisting`, tác giả bài cũ giữ nguyên, chỉ bài mới được chia), rồi ghi,
+    sửa link, sửa ngày (như bước 13, cần `DIRECT_URL`), kiểm:
+    ```
+    npm run migrate:network -- import --tenant asn --site a080edc0-b7d7-4e90-9a02-ec913434af70 --mapping-overlay ~/asn-private/overlay.json --run-id asn-real-2 --confirm-host=HOST_CENTRAL
+    ```
+    ```
+    npm run migrate:network -- import --tenant asn --site a080edc0-b7d7-4e90-9a02-ec913434af70 --mapping-overlay ~/asn-private/overlay.json --apply --run-id asn-real-2 --confirm-host=HOST_CENTRAL
+    ```
+    ```
+    npm run migrate:network -- rewrite-links --tenant asn --run-id asn-real-2 --apply --confirm-host=HOST_CENTRAL
+    ```
+    ```
+    npm run migrate:network -- timestamps-fix --tenant asn --run-id asn-real-2
+    ```
+    ```
+    psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f scripts/migrate/out/asn-real-2/timestamps-fix.sql
+    ```
+    ```
+    npm run migrate:network -- verify --tenant asn --site a080edc0-b7d7-4e90-9a02-ec913434af70 --run-id asn-real-2 --mapping-overlay ~/asn-private/overlay.json --confirm-host=HOST_CENTRAL
+    ```
+    Giới hạn như agr/amb: chỉ THÊM bài mới đăng (kể cả bài trước là nháp nay đã đăng); bài đã
+    nhập mà site cũ sửa sau đó không cập nhật lại; bài site cũ gỡ đi vẫn còn trên Central.
+16. **Lúc cutover**: dựng redirect từ known-routes của web (thoát mã 3 nếu có chuỗi, vòng lặp
+    hoặc đích không tồn tại). `redirects` (như `rewrite-links`) chỉ đọc slug map của đúng
+    run-id đưa vào, nên chạy cho từng run-id đã ghi (`asn-real-1`, rồi `asn-real-2`). Rồi xoá
+    role bằng `sql/03-drop-role-and-views-asn.sql` (ô `asn_cleanup_check` phải là
+    `CLEANUP OK`) và xoá khoá R2 tạm. Giữ project cũ tới khi cutover xong.
+    ```
+    npm run migrate:network -- redirects --tenant asn --run-id asn-real-1 --known-routes ~/asn-private/known-routes.json --mapping-overlay ~/asn-private/overlay.json
+    ```
+    ```
+    npm run migrate:network -- redirects --tenant asn --run-id asn-real-2 --known-routes ~/asn-private/known-routes.json --mapping-overlay ~/asn-private/overlay.json
+    ```
+
+Rủi ro như AER: role `asn_migrator` đọc được hai bảng pg_net (`net._http_response`,
+`net.http_request_queue`); làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role tự
+hết hạn sau 14 ngày.
