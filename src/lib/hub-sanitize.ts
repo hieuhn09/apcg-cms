@@ -201,7 +201,7 @@ export interface HubPillar {
   icon: string | null;
   order: number | null;
   description: string | null;
-  /** True when the content engine may not write into this pillar (`ENGINE_BLOCKED_PILLARS`, PA-11). */
+  /** True when the HUB may not write this pillar as primary (engine-blocked minus single-home, PA-11 / 05-11-26). */
   blocked: boolean;
 }
 
@@ -278,10 +278,15 @@ export interface HubTag {
   id: number | string;
   slug: string | null;
   title: string | null;
+  /** Articles of the tenant using the tag (any status); absent when unknown. */
+  uses?: number;
 }
 
 export function sanitizeHubTag(doc: Doc): HubTag {
-  return { id: doc.id as number | string, slug: str(doc.slug), title: str(doc.title) };
+  const out: HubTag = { id: doc.id as number | string, slug: str(doc.slug), title: str(doc.title) };
+  const u = doc.uses;
+  if (typeof u === "number" && Number.isInteger(u) && u >= 0) out.uses = u;
+  return out;
 }
 
 export interface HubCountry {

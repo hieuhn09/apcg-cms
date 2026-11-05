@@ -10,13 +10,16 @@
  *
  * APCGHub P5.1 composer kinds (each block `{items, count, totalDocs, truncated}`,
  * locale `en`, order ends in `id`): subsections `{id, slug, title, pillarId, order}`
- * (cap 500), tags `{id, slug, title}` (cap 3000), countries `{id, slug, name, code}`
+ * (cap 500), tags `{id, slug, title, uses}` (cap 3000; ordered by usage DESC, slug, id —
+ * `uses` = articles of the tenant using the tag, any status; one aggregate query per
+ * tenant, `src/lib/hub-tags-usage.ts`; a cut list keeps the most used), countries `{id, slug, name, code}`
  * (GLOBAL reference data — not tenant-filtered; cap 300), cities `{id, slug, name,
  * country}` (cap 1000; a tenant without `citiesMap` gets an empty block with
  * `disabled: true`).
  *
  * Each pillar item also carries `blocked: boolean` (hub docx import phase A, PA-11):
- * true when `ENGINE_BLOCKED_PILLARS` keeps the content engine out of that pillar for
+ * true when the hub may not write that pillar as primary (engine-blocked minus the
+ * single-home Pressroom pillars, 05-11-26) for
  * that tenant (`markBlockedPillars`, `hub-taxonomy-blocks.ts`). Additive key.
  *
  * Empty/absent tenants|pillar|kinds means ALL allowed — callers must never send
@@ -38,6 +41,10 @@ import { getPayload } from "payload";
 import config from "@payload-config";
 import { authenticateHubEngine, narrowHubTenants } from "@/lib/hub-auth";
 import { scopedFind } from "@/lib/scoped";
+import { buildHubTagUsageQuery, mapHubTagRows } from "@/lib/hub-tags-usage";
+import { rowsOrThrow } from "@/lib/public-tags";
+
+type RawDb = { drizzle: { execute: (q: unknown) => Promise<unknown> } };
 import { parseKinds } from "@/lib/hub-query";
 import {
   AUTHOR_SELECT,
@@ -55,7 +62,6 @@ import {
   CITY_SELECT,
   COUNTRY_SELECT,
   SUBSECTION_SELECT,
-  TAG_SELECT,
   sanitizeHubCity,
   sanitizeHubCountry,
   sanitizeHubSubsection,
@@ -188,7 +194,9 @@ export async function GET(request: Request): Promise<Response> {
             ? scopedFind({ payload, collection: "subsections", tenantId: t.id, select: SUBSECTION_SELECT, depth: 0, locale: "en", limit: SUBSECTIONS_CAP + 1, page: 1, sort: ["order", "slug", "id"] })
             : null,
           wantTags
-            ? scopedFind({ payload, collection: "tags", tenantId: t.id, select: TAG_SELECT, depth: 0, locale: "en", limit: TAGS_CAP + 1, page: 1, sort: ["slug", "id"] })
+            ? (payload.db as unknown as RawDb).drizzle
+                .execute(buildHubTagUsageQuery(t.id, TAGS_CAP + 1))
+                .then((res) => mapHubTagRows(rowsOrThrow(res)))
             : null,
           citiesOn
             ? scopedFind({ payload, collection: "cities", tenantId: t.id, select: CITY_SELECT, depth: 0, locale: "en", limit: CITIES_CAP + 1, page: 1, sort: ["slug", "id"] })
@@ -197,7 +205,7 @@ export async function GET(request: Request): Promise<Response> {
         if (subsections) {
           entry.subsections = hubBlock(subsections.docs as unknown as Record<string, unknown>[], subsections.totalDocs, SUBSECTIONS_CAP, sanitizeHubSubsection);
         }
-        if (tags) entry.tags = hubBlock(tags.docs as unknown as Record<string, unknown>[], tags.totalDocs, TAGS_CAP, sanitizeHubTag);
+        if (tags) entry.tags = hubBlock(tags.docs, tags.totalDocs, TAGS_CAP, sanitizeHubTag);
         if (countriesBlock) entry.countries = countriesBlock;
         if (wantCities) {
           entry.cities = cities

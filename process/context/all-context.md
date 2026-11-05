@@ -1,6 +1,8 @@
 # apcg-cms — All Context
 
-Last updated: 2026-11-04 (Opentechwire/OTW Pressroom, owner decision 04-11-26, branch `claude/lucid-wright-df7sdd`, uncommitted, NOT pushed, nothing run against any real database: `dtw: ["pressroom"]` added to both `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` (`src/lib/constants.ts`), no migration; the dtw `pressroom` row does not exist yet, the owner creates it in /admin after the CMS and dtw-web deploys (runbook + read-only dtw violator SQL in `docs/11-operations.md`); tests: `test:single-home` 365 (was 355), `test:hub-direct-upload` 85 (was 84); probe gained a `[DTW]` section, 85/85 fresh and 95/95 with `--http` on a disposable PG16; plan `dtw-web/process/general-plans/active/otw-pressroom_04-11-26/`)
+Last updated: 2026-11-05 (UPDATE PROCESS, docs/context only: hub direct image upload and hub Pressroom authoring are MERGED and deployed. apcg-cms#55 `019c724` (+ `2e5fe28` per-format pixel caps: JPEG/PNG 50 MP, WebP 16.8 MP, GIF 16.8 MP first frame stored as PNG; functions Vercel Standard 2 GB): `POST /api/hub/media/sign` + `/register`, switch `HUB_DIRECT_UPLOAD_TENANTS` (production `gcv,wad,dtw,brief-asia,world-travel-brief`, set 05-11-26), private R2 staging bucket `R2_STAGING_BUCKET=apcg-hub-staging`, `caption` on register, `blocked` on taxonomy pillars; used live on hub Preview 04-11-26 (WAD docx, 11 images); spike A1 not run, HEAD + delete fallback in place. apcg-cms#60 `a6d2780`: `isHubBlockedPillar` = engine-blocked minus `SINGLE_HOME_PILLARS`; the hub may write Pressroom as primary pillar (author optional; sub-section/secondary/exclusive => 422 `single_home`), engine intake unchanged; not yet live-accepted. No migration. Consumer: content-engine#223 `b7a4d7d0` (hub docx import with images + AI fill; hub DB migration `048_ai_edits` lives in that repo). New/changed scoped tests: `test:hub-direct-upload` 85, `test:hub-media` 113, `test:hub-pressroom` 10, `test:single-home` 365, `test:hub-live` 27, `test:hub-p56` 127. Details: `integrations/all-integrations.md` §HUB AUTHORING → Direct image upload, `tests/all-tests.md`)
+
+Previously: 2026-11-04 (Opentechwire/OTW Pressroom, owner decision 04-11-26, branch `claude/lucid-wright-df7sdd`, uncommitted, NOT pushed, nothing run against any real database: `dtw: ["pressroom"]` added to both `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS` (`src/lib/constants.ts`), no migration; the dtw `pressroom` row does not exist yet, the owner creates it in /admin after the CMS and dtw-web deploys (runbook + read-only dtw violator SQL in `docs/11-operations.md`); tests: `test:single-home` 365 (was 355), `test:hub-direct-upload` 85 (was 84); probe gained a `[DTW]` section, 85/85 fresh and 95/95 with `--http` on a disposable PG16; plan `dtw-web/process/general-plans/active/otw-pressroom_04-11-26/`)
 
 Previously: 2026-10-27 (AsiaMaterialsBrief tenant `amb` groundwork, amb launch W2, branch `claude/sharp-ramanujan-6bxu4n` from `main` `de969fa`, local commit only, NOT pushed, nothing run against any real database: `SINGLE_HOME_PILLARS.amb` = `ENGINE_BLOCKED_PILLARS.amb` = `["press-room"]` (no sub-section block in Central: the engine-side rule keeps the engine off `projects/specified` and `projects/design-voices`); taxonomy module `scripts/lib/amb-taxonomy.ts` (6 pillars, 18 sub-sections, 3 newsletters, 6 authors, 6 tags = 39 rows, plus `AMB_EXHIBITION_HALLS` and `AMB_ENGINE_EXCLUDED_SUBSECTIONS`); OWNER-RUN `npm run audit:add-amb-taxonomy`; The Exhibition reuses the abb `booths` collection: per-tenant halls `BOOTH_HALLS_BY_TENANT` (`src/lib/booth-halls.ts`, field validate `src/hooks/booth-hall.ts`) and NEW migration `20261027_000000_add_amb_booth_halls` (4 x `ALTER TYPE enum_booths_hall ADD VALUE`, down no-op), runs at the next production deploy; legacy import profile/mapping (FINAL 27-10-26, owner: published only, 252 rows)/SQL Editor files (incl. read-only `01b-inspect-amb-booths.sql`) under `scripts/migrate/network/`; `test:single-home` 10 files / 355 tests, `test:migrate-network` 38, `test:booths` 9. Details: `integrations/all-integrations.md` §AMB tenant rules, `docs/11-operations.md` "AsiaMaterialsBrief rollout".)
 
@@ -150,7 +152,7 @@ can jump straight to source.
 | `database/` | `process/context/database/all-database.md` | Payload collections, Postgres schema/migrations, the tenant/engine data model, and the two data-access lanes (Payload Local API vs Console's read-only Drizzle) — database context group entrypoint |
 | `integrations/` | `process/context/integrations/all-integrations.md` | API surface (public/engine/cron/preview), the two independent auth mechanisms (human session vs machine bearer), activity logging, and the cross-tenant read gap relevant to any new hub/bridge work — integrations context group entrypoint |
 | `planning/` | `process/context/planning/all-planning.md` | Plan-shape calibration for apcg-cms — SIMPLE vs COMPLEX, where plans actually live (no process/features folder here), and this repo's own recent plans as real-world shape examples |
-| `tests/` | `process/context/tests/all-tests.md` | Verification quick-start for apcg-cms — there is no general test framework and no CI here (scoped node:test scripts: test:media-redirect and test:single-home on main, plus test:hub-media, test:hub-live, test:hub-p56 on the unmerged P5.6 branch; local-only DB probes probe:single-home and scripts/hub-probe.ts); the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified. |
+| `tests/` | `process/context/tests/all-tests.md` | Verification quick-start for apcg-cms — there is no general test framework and no CI here (scoped node:test scripts: test:media-redirect, test:single-home, test:hub-media, test:hub-direct-upload, test:hub-pressroom, test:hub-live, test:hub-p56, all on main; local-only DB probes probe:single-home and scripts/hub-probe.ts); the real gates are typecheck + lint + manual/live verification. Read before claiming any change is verified. |
 <!-- /GENERATED:routing -->
 
 ## Task Routing Table
@@ -402,6 +404,7 @@ independent verification, not from guessing.
   (the 302's own ACAO only covers the redirect hop); note `npm run r2:cors`
   (`scripts/set-r2-cors.ts`) REPLACES the whole bucket CORS rule set, so a hand-added rule is wiped
   by the next run.
+- **Hub direct image upload (merged #55, 04-11-26):** `HUB_DIRECT_UPLOAD_TENANTS` (CSV of CMS tenant slugs, exact match, read on every call, default OFF; production `gcv,wad,dtw,brief-asia,world-travel-brief` since 05-11-26), `R2_STAGING_BUCKET` (private staging bucket, production `apcg-hub-staging`, 1-day lifecycle, CORS PUT/HEAD for the hub origins; when unset or equal to `R2_BUCKET` the main bucket under `R2_STAGING_PREFIX`, default `_hub-staging/`), optional `R2_STAGING_ACCESS_KEY_ID` / `R2_STAGING_SECRET_ACCESS_KEY` (else the main R2 key pair), plus `R2_ENDPOINT`. Staging CORS: `npm run r2:cors -- --staging [--dry-run]`.
 - **Signing:** `CENTRAL_SIGNING_SECRET` (HMAC for preview tokens + the outbound revalidate webhook —
   must match the *same* secret on each tenant frontend)
 - **Public API CORS:** `PUBLIC_API_ALLOWED_ORIGINS` (comma-separated frontend origins)
@@ -410,7 +413,7 @@ independent verification, not from guessing.
 - **Hub live edit (P5.4, branch-only until `apcg-cms#36` merges):** `HUB_LIVE_EDIT_TENANTS` — CSV of tenant slugs (exact match), default OFF/unset, read on every `PATCH /api/hub/articles/{id}/live` call; set ONLY by the owner on this repo's Vercel project; not in `.env.example`. A tenant not listed gets 403 `feature_disabled` before any article read.
 - **Misc:** `PORT` (dev server port, `3508` in `.env.example`)
 
-**npm scripts (real, from `package.json` — no `npm test`; the scoped test scripts are `test:media-redirect`, `test:single-home`, and — on the unmerged branch only — `test:hub-media`, `test:hub-live`, `test:hub-p56`):**
+**npm scripts (real, from `package.json` — no `npm test`; the scoped test scripts are `test:media-redirect`, `test:single-home`, and — added since 2026-10-15 and now on `main` — `test:hub-media`, `test:hub-direct-upload`, `test:hub-pressroom`, `test:hub-live`, `test:hub-p56`):**
 
 | Script | What it does |
 |---|---|
@@ -431,10 +434,12 @@ independent verification, not from guessing.
 | `npm run migrate:gtp:{discover,export,validate-mapping,import,rewrite-links,rollback,redirects,verify,fixture}` | gtp legacy-site migration CLIs (`scripts/migrate/*-gtp*.ts`); see `scripts/migrate/GTP-LEGACY.md` and `docs/12-migration.md`; proven only on a synthetic fixture so far |
 | `npm run rehearse:gtp` | `bash scripts/migrate/fixtures/gtp-legacy/rehearse-gtp.sh` — scripted end-to-end rehearsal on a local legacy fixture (needs Docker or native PG16) |
 | `npm run lint:migrate` / `npm run test:migrate-gtp` | eslint over `scripts/migrate`; `tsx --test scripts/migrate/lib/*.test.ts` |
-| `npm run test:single-home` | `tsx --test` on 6 files (rule module, hook, local-db guard incl. its 27-URL table, gtp/vowasia taxonomy, central-db-name guard), 276 tests (20-10-26); no DB, no network |
-| `npm run test:hub-media` | `tsx --test` on 3 files (`hub-media-validate`, `media-create`, `hub-author-media-token`), 100 tests (re-run 2026-10-15 on `5d5b28c`); P5.3, branch-only | `node:test`, no DB/network |
-| `npm run test:hub-live` | `tsx --test` on 2 files (`hub-author-live-pure`, `hub-author-live-core`), 27 tests (re-run 2026-10-15); P5.4, branch-only | `node:test`, no DB/network |
-| `npm run test:hub-p56` | `tsx --test` on 4 files (`hub-author-preview-{pure,core}`, `hub-taxonomy-create-{pure,core}`), 127 tests (re-run 2026-10-15); P5.6, branch-only | `node:test`, no DB/network |
+| `npm run test:single-home` | `tsx --test` on 10 files (rule module, hook, local-db guard incl. its 27-URL table, gtp/vowasia/aer/agr/amb/abb taxonomy, central-db-name guard), 365 tests (05-11-26); no DB, no network |
+| `npm run test:hub-media` | `tsx --test` on 3 files (`hub-media-validate`, `media-create`, `hub-author-media-token`), 113 tests (05-11-26; 100 on 2026-10-15); P5.3 + direct-path cases, on `main` |
+| `npm run test:hub-direct-upload` | `tsx --test` on 4 files (`hub-direct-upload-{pure,core}`, `hub-taxonomy-blocks`, `scripts/lib/r2-cors-rules`), 85 tests (05-11-26); hub direct image upload | `node:test`, no DB/network/R2 |
+| `npm run test:hub-pressroom` | `tsx --test src/lib/hub-pressroom.test.ts`, 10 tests (05-11-26); hub may write single-home Pressroom as primary | `node:test`, fake Payload, no DB | `node:test`, no DB/network |
+| `npm run test:hub-live` | `tsx --test` on 2 files (`hub-author-live-pure`, `hub-author-live-core`), 27 tests (re-measured 05-11-26); P5.4, on `main` | `node:test`, no DB/network |
+| `npm run test:hub-p56` | `tsx --test` on 4 files (`hub-author-preview-{pure,core}`, `hub-taxonomy-create-{pure,core}`), 127 tests (re-measured 05-11-26); P5.6, on `main` | `node:test`, no DB/network |
 | `npm run probe:single-home` | `tsx scripts/single-home-probe.ts` (`-- --http` adds REST/GraphQL checks) — LOCAL DISPOSABLE Postgres only, creates and deletes rows; see `tests/all-tests.md` |
 | `npm run db:status` | `tsx scripts/db-status.ts` |
 | `npm run r2:cors` | `tsx scripts/set-r2-cors.ts` — required once for R2 client-side uploads to work |
@@ -449,7 +454,7 @@ independent verification, not from guessing.
   general automated quality commands in this repo.
 - **There is still no general test framework** — no `npm test`, and no
   vitest/jest/playwright/mocha dependency anywhere in `package.json`. Do not assume one exists or
-  invent a `npm test` command. The only exceptions are scoped `node:test` scripts (five on the P5.6 stacked branch: the two below plus `test:hub-media`, `test:hub-live`, `test:hub-p56`; `main` has the first two only)
+  invent a `npm test` command. The only exceptions are scoped `node:test` scripts (seven, all on `main`: the two below plus `test:hub-media`, `test:hub-direct-upload`, `test:hub-pressroom`, `test:hub-live`, `test:hub-p56`)
   (`tsx --test`, no new dependency): `npm run test:media-redirect` (`src/lib/media-redirect.ts` only) and
   `npm run test:single-home` (the single-home pillar rule, its hooks and the local-DB guard); plus the
   local-only `npm run probe:single-home` DB probe (see `tests/all-tests.md`).

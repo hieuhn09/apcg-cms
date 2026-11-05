@@ -105,6 +105,19 @@ export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   asn: ["the-brief", "columns", "explainers", "press-room"],
 };
 
+/**
+ * True when the HUB may not write into `pillarSlug` for `tenantSlug` (hub
+ * Pressroom authoring, 05-11-26, owner decision): every engine-blocked pillar
+ * EXCEPT the tenant's single-home pillars (Pressroom / Press Room), which
+ * editors post from the hub. Engine intake keeps `isEngineBlockedPillar`.
+ * Same trim + lower-case comparison on both lists.
+ */
+export function isHubBlockedPillar(tenantSlug: string | undefined | null, pillarSlug: string): boolean {
+  if (!isEngineBlockedPillar(tenantSlug, pillarSlug)) return false;
+  const want = normalizeEngineBlockedSlug(pillarSlug);
+  return !(SINGLE_HOME_PILLARS[tenantSlug as string] ?? []).some((s) => normalizeEngineBlockedSlug(s) === want);
+}
+
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */
 export function normalizeEngineBlockedSlug(slug: string): string {
   return slug.trim().toLowerCase();
