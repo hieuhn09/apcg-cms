@@ -107,6 +107,7 @@ export const LIVE_KEY_COLUMNS: Record<HubLiveFieldKey, readonly string[]> = {
   coAuthorIds: ["coAuthors"],
   flags: HUB_LIVE_EDITABLE_FLAGS,
   sponsor: ["sponsor"],
+  pinnedUntil: ["pinnedUntil"],
 };
 
 /** The columns left out of D12 (1) for this write: the mapped columns of every CHANGED key. */

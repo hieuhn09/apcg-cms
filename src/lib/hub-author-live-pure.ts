@@ -33,6 +33,7 @@ export const HUB_LIVE_FIELD_KEYS = [
   "coAuthorIds",
   "flags",
   "sponsor",
+  "pinnedUntil",
 ] as const satisfies readonly HubDraftFieldKey[];
 export type HubLiveFieldKey = (typeof HUB_LIVE_FIELD_KEYS)[number];
 
@@ -41,7 +42,7 @@ export const HUB_LIVE_LOCKED_FIELD_KEYS = ["slug", "heroImageId", "leadImageCapt
 /** D4 / O9 / O13: flags locked on a live article (present at all ⇒ 422 flags_locked). */
 export const HUB_LIVE_LOCKED_FLAGS = ["breaking", "aiAssisted", "sponsored", "affiliate"] as const;
 /** D4: the only flags a live edit may change. */
-export const HUB_LIVE_EDITABLE_FLAGS = ["deepDive", "longHaul"] as const;
+export const HUB_LIVE_EDITABLE_FLAGS = ["deepDive", "longHaul", "pinnedToLatest", "exclusive"] as const;
 /** T1: the outer keys of the nested `/live` body — exactly these, all required. */
 export const HUB_LIVE_BODY_KEYS = ["tenant", "expectedVersion", "actor", "fields"] as const;
 

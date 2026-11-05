@@ -53,6 +53,7 @@ export const HUB_ARTICLE_EDIT_SELECT = {
   longHaul: true,
   pinnedToLatest: true,
   exclusive: true,
+  pinnedUntil: true,
   sponsor: true,
   scheduledFor: true, // K10 (P5.2): the hour of a hub-scheduled latest version
   leadImageCaption: true, // P5.3 T9 (heroImage already comes from the detail select)
@@ -115,12 +116,14 @@ export interface HubArticleEditYes {
     affiliate: boolean;
     deepDive: boolean;
     longHaul: boolean;
-    /** Read-only in P5.1. */
+    /** Hub-writable since 05-11-26. */
     pinnedToLatest: boolean;
-    /** Read-only in P5.1. */
+    /** Hub-writable since 05-11-26. */
     exclusive: boolean;
   };
   sponsor: string | null;
+  /** 05-11-26: pin expiry as ISO UTC, null = none. */
+  pinnedUntil: string | null;
 }
 
 /** P5.3 T9 / D6: one media of THIS tenant, raw `url` (the hub filters + absolutises it). */
@@ -150,7 +153,7 @@ export interface HubArticleEditLiveNo {
   version: number | null;
 }
 
-/** P5.4 (T3): the live-editable block — EXACTLY 17 keys, flat like `HubArticleEditYes` (no `origin`, `reason` for `editableReason`). */
+/** P5.4 (T3): the live-editable block — EXACTLY 18 keys (pinnedUntil added 05-11-26), flat like `HubArticleEditYes` (no `origin`, `reason` for `editableReason`). */
 export interface HubArticleEditLiveYes {
   editable: true;
   reason: "ok";
@@ -166,6 +169,8 @@ export interface HubArticleEditLiveYes {
   coAuthorIds: (number | string)[];
   flags: HubArticleEditYes["flags"];
   sponsor: string | null;
+  /** 05-11-26: pin expiry, ISO UTC or null. */
+  pinnedUntil: string | null;
   hero: HubArticleEditMedia["hero"];
   leadImageCaption: string | null;
   bodyMedia: HubEditMedia[];
@@ -263,7 +268,14 @@ export function sanitizeHubArticleEdit(
       exclusive: bool(doc.exclusive),
     },
     sponsor: str(doc.sponsor),
+    pinnedUntil: isoOrNull(doc.pinnedUntil),
   };
+}
+
+function isoOrNull(v: unknown): string | null {
+  if (typeof v !== "string" || v === "") return null;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
 }
 
 /**
@@ -383,6 +395,7 @@ export async function computeEditLive(args: {
     coAuthorIds: y.coAuthorIds,
     flags: y.flags,
     sponsor: y.sponsor,
+    pinnedUntil: y.pinnedUntil,
     hero: media.hero,
     leadImageCaption: media.leadImageCaption,
     bodyMedia: media.bodyMedia,

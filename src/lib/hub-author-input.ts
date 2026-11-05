@@ -38,7 +38,7 @@ import {
 import { hasBidi, hasForbiddenC0, hasLoneSurrogate, isWs, validateBodyPure } from "@/lib/hub-author-body";
 import { MEDIA_LEAD_CAPTION_MAX } from "@/lib/hub-author-refs";
 
-export const HUB_FLAG_KEYS = ["aiAssisted", "breaking", "sponsored", "affiliate", "deepDive", "longHaul"] as const;
+export const HUB_FLAG_KEYS = ["aiAssisted", "breaking", "sponsored", "affiliate", "deepDive", "longHaul", "pinnedToLatest", "exclusive"] as const;
 export type HubFlagKey = (typeof HUB_FLAG_KEYS)[number];
 
 /** Field keys a create may carry (besides `tenant` and `actor`). */
@@ -62,6 +62,8 @@ export const HUB_DRAFT_FIELD_KEYS = [
   // APCGHub P5.3 (T5): hero image (media id of THIS tenant; null clears) + WTB lead caption.
   "heroImageId",
   "leadImageCaption",
+  // 05-11-26: pin expiry (ISO UTC, future only; null clears). Meaningful while flags.pinnedToLatest.
+  "pinnedUntil",
 ] as const;
 export type HubDraftFieldKey = (typeof HUB_DRAFT_FIELD_KEYS)[number];
 
@@ -103,6 +105,8 @@ export interface HubDraftFields {
   heroImageId?: number | null;
   /** P5.3 T5: hero caption (WTB), ≤ MEDIA_LEAD_CAPTION_MAX; null / "" = clear. */
   leadImageCaption?: string | null;
+  /** 05-11-26: `Articles.pinnedUntil` as ISO UTC (`…Z`), strictly in the future; null = clear (no expiry). */
+  pinnedUntil?: string | null;
 }
 
 export interface HubDraftInput extends HubDraftFields {
@@ -488,6 +492,18 @@ function parseCommon(raw: unknown, mode: "create" | "update"): HubParseResult {
       const r = checkMediaId(raw.heroImageId);
       if (r.ok) value.heroImageId = r.value;
       else fail("heroImageId", r.code);
+    }
+  }
+
+  // pinnedUntil (05-11-26): ISO UTC, must be in the future; null clears.
+  if (has("pinnedUntil")) {
+    if (raw.pinnedUntil === null) value.pinnedUntil = null;
+    else if (typeof raw.pinnedUntil !== "string") fail("pinnedUntil", "type");
+    else {
+      const n = normalizeHubUtc(raw.pinnedUntil);
+      if (!n) fail("pinnedUntil", "format");
+      else if (Date.parse(n) <= Date.now()) fail("pinnedUntil", "out_of_range");
+      else value.pinnedUntil = n;
     }
   }
 
