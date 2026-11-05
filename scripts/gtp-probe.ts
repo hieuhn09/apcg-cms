@@ -232,13 +232,16 @@ async function main(): Promise<void> {
   try {
     /* ── A: intake gates ───────────────────────────────────────────────── */
     console.log("\n[A] intake gates (G10)");
-    for (const blocked of ["press-room", "events-awards"]) {
+    // Owner decision 05-11-26: only press-room is engine-blocked on gtp; events-awards is engine-writable.
+    for (const blocked of ["press-room"]) {
       const r = await intake(baseArticle(`blk-${blocked}`, { pillarSlug: blocked }));
       check(`intake ${blocked} -> 422 pillar not writable by engine`, r.status === 422 && r.json.reason === `pillar not writable by engine: ${blocked}`, `${r.status} ${String(r.json.reason)}`);
     }
+    const ev = await intake(baseArticle("primary-events", { pillarSlug: "events-awards" }));
+    check("intake events-awards (engine-writable since 05-11-26) -> 201 pending_review", ev.status === 201 && ev.json.status === "pending_review", `${ev.status} ${String(ev.json.reason ?? ev.json.status)}`);
     const a1 = await intake(baseArticle("a-news", { engineDraftId: `content-engine:gtp:probe-${RUN}-a1` }));
     check("intake news -> 201 pending_review", a1.status === 201 && a1.json.status === "pending_review", `${a1.status} ${String(a1.json.status)}`);
-    for (const blocked of ["press-room", "events-awards"]) {
+    for (const blocked of ["press-room"]) {
       const r = await intake(baseArticle("a-news", { engineDraftId: `content-engine:gtp:probe-${RUN}-a1`, pillarSlug: blocked }));
       check(`refresh of an existing article moved to ${blocked} -> 422`, r.status === 422 && r.json.reason === `pillar not writable by engine: ${blocked}`, `${r.status} ${String(r.json.reason)}`);
     }

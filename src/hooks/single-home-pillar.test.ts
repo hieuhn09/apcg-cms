@@ -29,7 +29,7 @@ const V6 = 'pillar rule: "pressroom" is a single-home pillar: an article filed t
 type Doc = Record<string, unknown>;
 // 10 = brief-asia pressroom (single-home), 11 = brief-asia asia, 12 = wad pressroom, 13 = gcv finance,
 // 14 = gcv pressroom (single-home since GCV Pressroom parity), 15 = gtp press-room (single-home),
-// 16 = gtp events-awards (engine-blocked only, NOT single-home),
+// 16 = gtp events-awards (NOT single-home; engine-writable since owner decision 05-11-26),
 // 17 = vowasia press-room (single-home), 18 = vowasia real-weddings (ordinary),
 // 12 = wad pressroom is single-home since 20-10-26 (WAD Pressroom parity), 20 = wad architecture (ordinary),
 // 19 = world-travel-brief pressroom (fixture only, NOT single-home: the negative control),
@@ -453,7 +453,7 @@ describe("Articles author validate (optional only for single-home)", () => {
     assert.equal(await validate(null, opts(18)), REQ);
     assert.equal(await validate(5, opts(18)), true);
   });
-  it("a gtp events-awards article (engine-blocked, not single-home) requires an author", async () => {
+  it("a gtp events-awards article (not single-home) requires an author", async () => {
     assert.equal(await validate(null, opts(16)), REQ);
     assert.equal(await validate(5, opts(16)), true);
   });

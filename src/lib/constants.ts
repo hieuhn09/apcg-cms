@@ -41,16 +41,17 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // 04-11-26, OTW Pressroom) is blocked the same way: editor-only.
 //
 // GTP (GlobalTravelPost, tenant `gtp`, gtp-launch P1): `press-room` (hyphenated
-// slug; single-home too, see below) and `events-awards` are editor-only. The
-// engine block checks the PRIMARY pillar only; `events-awards` is NOT
-// single-home, so it keeps sub-sections, secondary sections and a REQUIRED
-// author. The four other gtp pillars stay engine-writable.
+// slug; single-home too, see below) is editor-only. The engine block checks the
+// PRIMARY pillar only. Owner decision 05-11-26 ("engine viết hết chỉ trừ
+// pressroom thôi"): `events-awards`, editor-only since gtp-launch P1, is now
+// engine-writable like the four other gtp pillars; it is NOT single-home, so it
+// keeps sub-sections, secondary sections and a REQUIRED author.
 //
 // VowAsia (tenant `vowasia`, vowasia launch P1, owner decision 13-10-26):
 // `press-room` (hyphenated slug, like gtp; single-home too, see below) is
 // editor-only. Owner decision 13-10-26: `real-weddings` and `directory` are
 // also engine-blocked (editor-only) but NOT single-home (like gtp
-// `events-awards`). VowAsia has no `events-awards` pillar; its five other
+// `events-awards` was until 05-11-26). VowAsia has no `events-awards` pillar; its five other
 // pillars stay engine-writable.
 //
 // Asia Economic Review (tenant `aer`, aer launch W2, owner
@@ -86,7 +87,7 @@ export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
   abb: ["pressroom"],
   gcv: ["exclusive", "pressroom"],
   "brief-asia": ["pressroom"],
-  gtp: ["press-room", "events-awards"],
+  gtp: ["press-room"],
   vowasia: ["press-room", "real-weddings", "directory"],
   wad: ["pressroom"],
   dtw: ["pressroom"],
@@ -125,7 +126,7 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // protected from rename / tenant move / in-use delete by the Pillars guards.
 // GTP `press-room` (hyphenated, exact slug; gtp-launch P1) is single-home with
 // an optional author, like the Pressroom pillars; GTP `events-awards` is NOT
-// (it is only engine-blocked, above).
+// single-home (and, since owner decision 05-11-26, not engine-blocked either).
 // VowAsia `press-room` (vowasia launch P1, owner decision 13-10-26: "pressroom
 // is a pillar and has no secondary pillar") is single-home with an optional
 // author, exactly like GTP `press-room`.

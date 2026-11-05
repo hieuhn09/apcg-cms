@@ -163,7 +163,8 @@ and status.
 
 - **GTP rollout (owner-run; GlobalTravelPost, tenant `gtp`):** the rules ship in code
   (`gtp` in `SINGLE_HOME_PILLARS` (`press-room`) and `ENGINE_BLOCKED_PILLARS`
-  (`press-room`, `events-awards`)) and are inert until the tenant exists. No migration.
+  (`press-room`; `events-awards` was also blocked until owner decision 05-11-26 made it
+  engine-writable)) and are inert until the tenant exists. No migration.
   Steps: (1) merge + deploy; (2) create the tenant in /admin (`docs/07-website-management.md`,
   `autoPublishEngineDrafts` off, frontend URL empty); (3) print the DB **hostname** (no
   port) AND the database name with

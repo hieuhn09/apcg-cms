@@ -156,12 +156,13 @@ describe("gtp fixture: slug contract (plan section 3)", () => {
 });
 
 describe("gtp fixture: parity with the constants", () => {
-  it("exactly 4 engine-writable pillars (the P2 engine taxonomy list)", () => {
+  it("exactly 5 engine-writable pillars: all but press-room (owner decision 05-11-26 opened events-awards)", () => {
     assert.deepEqual(
       GTP_PILLARS.filter((p) => p.engineWritable).map((p) => p.slug),
-      ["news", "destinations", "business-of-travel", "experiences-luxury"],
+      ["news", "destinations", "business-of-travel", "experiences-luxury", "events-awards"],
     );
-    assert.deepEqual(GTP_PILLARS.filter((p) => !(ENGINE_BLOCKED_PILLARS.gtp ?? []).includes(p.slug)).length, 4);
+    assert.deepEqual(GTP_PILLARS.filter((p) => !(ENGINE_BLOCKED_PILLARS.gtp ?? []).includes(p.slug)).length, 5);
+    assert.deepEqual(GTP_PILLARS.filter((p) => !p.engineWritable).map((p) => p.slug), ["press-room"]);
   });
   it("every SINGLE_HOME_PILLARS.gtp / ENGINE_BLOCKED_PILLARS.gtp slug exists in the fixture", () => {
     const slugs = new Set(GTP_PILLARS.map((p) => p.slug));

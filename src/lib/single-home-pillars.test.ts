@@ -49,7 +49,7 @@ describe("constants", () => {
       abb: ["pressroom"],
       gcv: ["exclusive", "pressroom"],
       "brief-asia": ["pressroom"],
-      gtp: ["press-room", "events-awards"],
+      gtp: ["press-room"],
       vowasia: ["press-room", "real-weddings", "directory"],
       wad: ["pressroom"],
       dtw: ["pressroom"],
@@ -123,7 +123,7 @@ describe("constants", () => {
   });
 });
 
-describe("gtp (GlobalTravelPost): press-room single-home + engine-blocked, events-awards engine-blocked only", () => {
+describe("gtp (GlobalTravelPost): press-room single-home + engine-blocked; events-awards engine-writable since 05-11-26", () => {
   const G_V1 = 'pillar rule: "press-room" is a single-home pillar: an article filed there cannot also have secondary sections.';
   const G_V2 = 'pillar rule: "press-room" is a single-home pillar: an article filed there cannot have a sub-section.';
   const G_V3 = 'pillar rule: "press-room" is a single-home pillar: it cannot be added as a secondary section to another article.';
@@ -136,11 +136,12 @@ describe("gtp (GlobalTravelPost): press-room single-home + engine-blocked, event
     assert.equal(isSingleHomePillar("brief-asia", "press-room"), false);
     assert.equal(isSingleHomePillar("wad", "press-room"), false);
   });
-  it("isEngineBlockedPillar: press-room and events-awards blocked (case/whitespace-insensitive); the four writable pillars and other tenants are not", () => {
+  it("isEngineBlockedPillar: only press-room blocked (case/whitespace-insensitive); events-awards (owner decision 05-11-26), the four other pillars and other tenants are not", () => {
     assert.equal(isEngineBlockedPillar("gtp", "press-room"), true);
     assert.equal(isEngineBlockedPillar("gtp", " Press-Room "), true);
-    assert.equal(isEngineBlockedPillar("gtp", "events-awards"), true);
-    for (const s of ["news", "destinations", "business-of-travel", "experiences-luxury"]) {
+    assert.equal(isEngineBlockedPillar("gtp", "events-awards"), false);
+    assert.equal(isEngineBlockedPillar("gtp", " Events-Awards "), false);
+    for (const s of ["news", "destinations", "business-of-travel", "experiences-luxury", "events-awards"]) {
       assert.equal(isEngineBlockedPillar("gtp", s), false, s);
     }
     assert.equal(isEngineBlockedPillar("gcv", "events-awards"), false);
