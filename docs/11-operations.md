@@ -306,6 +306,27 @@ and status.
   "AsiaMaterialsBrief" (old site `asiamaterialsbrief` found 27-10-26; mapping FINAL, owner 27-10-26: published only, 252 rows). Author bios, contacts
   and the tag set are PENDING OWNER wording.
 
+- **Asianomist rollout (owner-run; tenant `asn`):** the rule ships in code
+  (`ENGINE_BLOCKED_PILLARS.asn = ["the-brief", "columns", "explainers", "press-room"]`;
+  `SINGLE_HOME_PILLARS.asn = ["press-room"]`) and is inert until the tenant exists. **No
+  migration** (no booths, no schema change). **Status 05-11-26: code only, nothing applied.**
+  Steps: (1) merge + deploy; (2) create the tenant by hand in /admin from `ASN_TENANT_FIELDS`
+  (`docs/07-website-management.md`; slug `asn`, `autoPublishEngineDrafts` off, features
+  Articles + Newsletters + Corrections, frontend URL empty); (3) print host and database
+  name: `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-asn-taxonomy -- --confirm-host=<hostname>` (9 pillars, 17 sub-sections,
+  2 newsletters, 6 authors, 6 tags = 40 rows, all `create`); (5) apply from an interactive
+  terminal: `npm run audit:add-asn-taxonomy -- --apply --confirm-host=<hostname>`;
+  (6) re-run the dry run: all 40 rows must read `exists`; (7) read token:
+  `npx tsx scripts/mint-token.ts read --tenant asn --label frontend-preview`; (8) engine
+  record `content-engine-asn` in Console `/console/engines/new`: writer, allowed tenant only
+  `asn`, actions only `create_article` + `update_article`, hub flags off; (9) add the
+  asianomist-web origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import:
+  `scripts/migrate/network/NETWORK-LEGACY.md` "Asianomist" (old site expected at slug
+  `asianomist`, not yet discovered; mapping is a DRAFT, `_provisional` non-empty). Author
+  bios, newsletters, contacts and the tag set are PENDING OWNER wording.
+
 ## Token rotation
 
 `tsx scripts/mint-token.ts read --tenant <slug>` / `engine --engine "<name>"`.
