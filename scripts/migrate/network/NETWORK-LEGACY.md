@@ -278,6 +278,21 @@ AER. Làm bước 3 tới 14 trong một lần ngồi, xoá role khi xong; role 
   ở bước riêng sau. Chuẩn bị: `sql/01b-inspect-amb-booths.sql` (chỉ đọc, một bảng kết quả)
   in danh sách cột, số dòng của site này, và từng dòng gian hàng/đơn đăng ký dạng JSON; cột
   có tên giống email/phone/password/token/secret chỉ in TÊN, không in giá trị.
+- **AsiaMaterialsBrief legacy booths (28-10-26):** 6 gian hàng `amb_booths` đã nhúng thành dữ
+  liệu trong `scripts/lib/amb-legacy-booths.ts` (thông tin công ty công khai, không dữ liệu cá
+  nhân); KHÔNG cần role DB cũ. Script CHỦ DỰ ÁN chạy `npm run audit:add-amb-booths` tạo cả 6
+  vào collection `booths` của tenant `amb`: giữ slug cũ (`/exhibition/<slug>` còn sống),
+  `published`, `tier: basic`, `verified: false`, hall `studios` → `design-studios` (còn lại
+  giữ nguyên); không logo, catalog, email hỏi giá, bài liên quan. 1 dòng
+  `amb_booth_applications` (có thông tin liên hệ cá nhân) KHÔNG chuyển. Chạy SAU khi tenant
+  `amb` có (bật Exhibition) và migration `20261027_000000_add_amb_booth_halls` đã chạy ở
+  production (script tự kiểm cả hai, chỉ đọc). Bảo vệ DB giống `audit:add-amb-taxonomy`
+  (in tên DB trước, `--confirm-host`, TTY cho `--apply`, tên phải `/neondb`). Lệnh:
+  ```
+  npm run audit:add-amb-booths -- --confirm-host=HOST_CENTRAL           # khô: 6 create
+  npm run audit:add-amb-booths -- --apply --confirm-host=HOST_CENTRAL   # tạo 6
+  npm run audit:add-amb-booths -- --confirm-host=HOST_CENTRAL           # khô lại: 6 exists, "nothing to create"
+  ```
 - Overlay của chủ dự án `~/amb-private/overlay.json` (ngoài repo):
   ```
   {
