@@ -330,6 +330,7 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     if (v.sponsor != null) data.sponsor = v.sponsor;
     if (refs.heroImage != null) data.heroImage = refs.heroImage;
     if (v.leadImageCaption != null) data.leadImageCaption = v.leadImageCaption;
+    if (v.pinnedUntil != null) data.pinnedUntil = v.pinnedUntil;
 
     // CMS-A (M5): the slug lock, the slug check again and the create run in ONE transaction.
     return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data }));
@@ -625,6 +626,14 @@ export async function buildDraftUpdateData(
           mark(k);
         }
         break;
+      case "pinnedUntil": {
+        const cur = typeof latest.pinnedUntil === "string" && latest.pinnedUntil ? new Date(latest.pinnedUntil).toISOString() : null;
+        if ((v.pinnedUntil ?? null) !== cur) {
+          data.pinnedUntil = v.pinnedUntil ?? null;
+          mark(k);
+        }
+        break;
+      }
     }
   }
   return { ok: true, data, changed };

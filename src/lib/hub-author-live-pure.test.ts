@@ -186,8 +186,8 @@ test("parseLiveBody rejects tenant, actor, expectedVersion, fields and __proto__
 });
 
 describe("HUB_LIVE_FIELD_KEYS (D4)", () => {
-  it("is HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption — exactly 15 keys", () => {
+  it("is HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption — exactly 16 keys (pinnedUntil added 05-11-26)", () => {
     assert.deepEqual([...HUB_LIVE_FIELD_KEYS], [...DERIVED_LIVE_FIELD_KEYS]);
-    assert.equal(HUB_LIVE_FIELD_KEYS.length, 15);
+    assert.equal(HUB_LIVE_FIELD_KEYS.length, 16);
   });
 });

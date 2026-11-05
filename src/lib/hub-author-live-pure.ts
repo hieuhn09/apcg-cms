@@ -33,6 +33,7 @@ export const HUB_LIVE_FIELD_KEYS = [
   "coAuthorIds",
   "flags",
   "sponsor",
+  "pinnedUntil",
 ] as const satisfies readonly HubDraftFieldKey[];
 export type HubLiveFieldKey = (typeof HUB_LIVE_FIELD_KEYS)[number];
 

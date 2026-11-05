@@ -422,8 +422,8 @@ test("view=edit live block carries populated values and cms-media tokens when li
     return a.collection === "articles" && a.depth === 2 ? { ...d, ...display } : d;
   };
   const live = await sel.computeEditLive({ payload: w.payload, mainDoc: { ...w.st.main }, tenantId: 1, tenantSlug: "gcv", liveTenants: ["gcv"] });
-  assert.deepEqual(Object.keys(live), ["editable", "reason", "version", "bodyEditable", "pillarSlug", "subSectionSlug", "secondary", "tagSlugs", "countrySlugs", "citySlugs", "authorId", "coAuthorIds", "flags", "sponsor", "hero", "leadImageCaption", "bodyMedia"]);
-  assert.equal(Object.keys(live).length, 17);
+  assert.deepEqual(Object.keys(live), ["editable", "reason", "version", "bodyEditable", "pillarSlug", "subSectionSlug", "secondary", "tagSlugs", "countrySlugs", "citySlugs", "authorId", "coAuthorIds", "flags", "sponsor", "pinnedUntil", "hero", "leadImageCaption", "bodyMedia"]);
+  assert.equal(Object.keys(live).length, 18);
   const y = live as unknown as Doc;
   assert.deepEqual([y.editable, y.reason, y.version, y.bodyEditable, y.pillarSlug, y.subSectionSlug, y.tagSlugs, y.countrySlugs, y.authorId, y.coAuthorIds, y.leadImageCaption], [true, "ok", 4, true, "p-main", "s-a", ["t-a"], ["vietnam"], 3, [4], "Cap"]);
   assert.deepEqual(y.secondary, [{ pillarSlug: "p-other", subSectionSlug: null }]);
