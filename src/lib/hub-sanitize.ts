@@ -278,10 +278,15 @@ export interface HubTag {
   id: number | string;
   slug: string | null;
   title: string | null;
+  /** Articles of the tenant using the tag (any status); absent when unknown. */
+  uses?: number;
 }
 
 export function sanitizeHubTag(doc: Doc): HubTag {
-  return { id: doc.id as number | string, slug: str(doc.slug), title: str(doc.title) };
+  const out: HubTag = { id: doc.id as number | string, slug: str(doc.slug), title: str(doc.title) };
+  const u = doc.uses;
+  if (typeof u === "number" && Number.isInteger(u) && u >= 0) out.uses = u;
+  return out;
 }
 
 export interface HubCountry {
