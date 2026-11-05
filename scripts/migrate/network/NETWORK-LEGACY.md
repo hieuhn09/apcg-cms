@@ -409,3 +409,66 @@ hết hạn sau 14 ngày.
   `01-discover-aer.sql` / `01-discover-agr.sql` luôn để trống cột `detail`, vì
   `query_to_xml(..., tableforest => false)` bọc kết quả trong `<table>` mà xpath lại tìm
   `/row/n`. File amb dùng `/table/row/n` (đã thử).
+
+## Asianomist (`--tenant asn`)
+
+- Slug Central: **`asn`** (mặc định agent điền, chủ dự án sửa được trước khi merge; plan
+  delta 05-11-26). Role DB cũ: `asn_migrator`; schema view: `asn_ro`; overlay riêng:
+  `~/asn-private/overlay.json`; run-id: `asn-real-1`, `asn-real-2`, ...
+- Tenant tạo tay trong /admin, **không** bật `exhibition` (Asianomist không có gian hàng,
+  không có `booths`); danh sách trường: `ASN_TENANT_FIELDS` trong
+  `scripts/lib/asn-taxonomy.ts`. Taxonomy mới (9 pillar, 17 mục con): cùng file đó.
+- Dòng site cũ: **chưa xác nhận**, dự kiến slug **`asianomist`** (theo
+  `apcg-network/sites/asianomist.json`). File khám phá `sql/01-discover-asn.sql` tìm dòng
+  site theo slug `asianomist`, tên chứa `asianomist`, hoặc slug đúng `asn` (chỉ đọc cột slug
+  và tên, nên site khác có link tới asianomist.com trong cấu hình không bị tính), in mọi
+  slug site để so, và chỉ trả MỘT bảng kết quả. Các mục như amb, trừ cờ "directory-like"
+  của gian hàng (bỏ). Mục `8 media_assets` cho biết kho ảnh cũ của site có bao nhiêu dòng
+  (Q6: chuyển sang Media Engine là plan riêng sau bước này).
+- File SQL Editor của asn là bản riêng: `sql/01-discover-asn.sql`,
+  `sql/02-create-readonly-role-views-asn.sql`, `sql/02p-set-password-asn.sql`,
+  `sql/03-drop-role-and-views-asn.sql` (chép từ bản amb, đổi role/schema/site; không có
+  file 01b gian hàng). Mỗi file trả đúng một bảng kết quả. Đã chạy thử cả bốn file trên
+  Postgres 16 giả trong máy (05-11-26): khám phá ra đúng 1 site (site khác có
+  `asianomist.com` trong cột cấu hình không khớp; 2 site khớp thì không mô tả bài, 02 dừng
+  `SITE STOP`), mục 8 có số (không trống), `SELF-CHECK OK`, role chỉ đọc được `asn_ro`
+  (đọc `public.articles` bị từ chối), 02 chạy lần hai dừng `ALREADY STOP`, `CLEANUP OK`.
+- Mapping `mappings/asn.mapping.json` là **NHÁP, CHƯA chốt** (`_provisional` còn:
+  `status.map`, `categories.map`, `authors.distribute`, `tags.keepOnly`, `media.bodyImages`,
+  `body.reflowMaxChars`, các `urls.*`, `archivedAs`). `validate-mapping --require-final`
+  (ngầm bật khi chạy với Central thật) từ chối cho tới khi chủ dự án chốt sau bước khám
+  phá. Gợi ý đang ghi (theo taxonomy cũ trong `asianomist.json`, kiểm lại với mục 3 của
+  file 01):
+  - chỉ chuyển bài `published`;
+  - mục con cũ trùng slug mới giữ nguyên (`the-brief/week-ahead`, `weekend-read`; 4 mục
+    con `economies`; 5 mục con `markets`; 5 mục con `industries`);
+  - `economies/greater-china` → `economies/china`; `the-brief/morning-brief` → `the-brief`
+    không mục con (Morning Brief là bài `the-brief` không mục con);
+  - mục con cũ của `banking-fintech` (`banks`, `payments-lending`, `insurtech-wealthtech`)
+    và `wealth` (`investing`, `savings-rates`, `property-investment`, `expat-money`) →
+    pillar đó, không mục con (thiết kế mới không có mục con ở hai pillar này);
+  - `columns-explainers/columns` → `columns`; `columns-explainers/explainers` →
+    `explainers`; `columns-explainers` không mục con hoặc mục con lạ: **không có dòng** cố ý
+    (không tách được bằng luật), bài đó bị từ chối cho tới khi chủ dự án chọn pillar;
+  - `press-room/*` → `press-room` không mục con (một nhà); mỗi pillar khác giữ dòng dự
+    phòng `<pillar>/*` → pillar đó, không mục con;
+  - tác giả chia đều 6 người trang Team (`mode: even`), không giữ byline cũ; chỉ giữ 6 tag
+    đề xuất (bản thân 6 tag cũng chờ chủ dự án); `body.reflowMaxChars: 380` như
+    AER/AGR/AMB (kiểm lại trên vài bài cũ); `archivedAs: section`;
+  - gốc cũ `https://asianomist.com`, bài `/article/{slug}`, chuyên mục là pillar cũ (kể cả
+    `/columns-explainers`). Redirect trang viết tay ở asianomist-web lúc cutover (như
+    agr/amb, `extraLegacyPaths`/`gonePaths` rỗng): `/columns-explainers` 301 `/columns`,
+    `/press-room-submit` 301 `/press-room/submit`; `/studio`, `/data` quyết sau khám phá.
+- Ảnh: như AMB, overlay PHẢI có host `mbolvnwkmkeroqmvbvmt.supabase.co` (giả định cùng
+  project Supabase cũ; xác nhận bằng mục `7 featured image hosts` của file 01).
+
+### Các bước của chủ dự án (asn), mỗi lần một bước
+
+Giống hệt AMB ở trên, thay `amb` bằng `asn`, `asiamaterialsbrief` bằng `asianomist`, và
+dùng đúng các file `-asn.sql`; không có bước 1b. Hai bước đầu khác:
+
+1. **Khám phá**: SQL Editor của project `globaltravelpost`, chạy `sql/01-discover-asn.sql`,
+   "Download CSV" và gửi. Hàng `1 site match` phải là 1 và in `asianomist`.
+2. **Chốt mapping**: agent sửa `mappings/asn.mapping.json` theo kết quả khám phá, chủ dự án
+   duyệt, `_provisional` về rỗng; rồi tiếp từ bước 3 của AMB (số bài, id site và overlay
+   lấy từ kết quả khám phá của asn).

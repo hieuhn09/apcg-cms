@@ -1,5 +1,5 @@
 /**
- * Tests of the network-legacy bundle (tenant profiles aer, agr and amb). Run: npm run test:migrate-network.
+ * Tests of the network-legacy bundle (tenant profiles aer, agr, amb and asn). Run: npm run test:migrate-network.
  * Every test that switches the profile restores the GTP default afterwards.
  */
 import { test, afterEach } from "node:test";
@@ -475,4 +475,109 @@ test("amb 01b booths inspection: one read-only statement, tables guarded, secret
   for (const c of ["contact_email", "email", "phone", "password_hash", "api_token", "client_secret"]) assert.match(c, re, c);
   for (const c of ["name", "hall", "description", "logo_url", "website", "country"]) assert.doesNotMatch(c, re, c);
   assert.doesNotMatch(s, /xpath\('\/row/);
+});
+
+/* ── asn (Asianomist) profile + DRAFT (owner-pending) mapping ── */
+const ASN: NetworkProfile = parseProfile(readJ("profiles/asn.json"));
+const ASN_OVERLAY = { source: { siteFilter: ASN.fixtureSiteId }, media: { hostAllowlist: ["mbolvnwkmkeroqmvbvmt.supabase.co"], hostRewrite: {} } };
+test("profile: asn parses; pillars = the 9 asn taxonomy pillars; press-room single-home; matches the constants", async () => {
+  const { ASN_PILLARS } = await import("../../lib/asn-taxonomy");
+  const { SINGLE_HOME_PILLARS } = await import("../../../src/lib/constants");
+  assert.equal(ASN.tenant, "asn");
+  assert.deepEqual([...ASN.pillarSlugs], ASN_PILLARS.map((p) => p.slug));
+  assert.deepEqual([...ASN.singleHomePillars], SINGLE_HOME_PILLARS.asn);
+  assert.deepEqual([...(ASN.requiredImageHosts ?? [])], ["mbolvnwkmkeroqmvbvmt.supabase.co"]);
+  assert.equal(ASN.markerSourceName, "legacy:asianomist");
+  for (const other of [AER, AGR, AMB]) assert.notEqual(ASN.fixtureSiteId, other.fixtureSiteId);
+  for (const p of [...ASN.pillarSlugs, "columns-explainers", "press-room-submit", "studio", "data"]) assert.ok(ASN.reservedSlugs?.includes(p), p);
+});
+test("entry: asn resolves its profile; missing --site names 01-discover-asn.sql", () => {
+  const p = planEntry(["import", "--tenant", "asn", "--site", "asianomist", "--apply", "--run-id", "asn-real-1"]);
+  assert.equal(p.profile.tenant, "asn");
+  assert.deepEqual([...p.profile.legacySiteSlugs], ["asianomist"]);
+  assert.deepEqual(planEntry(["validate-mapping", "--tenant", "asn"]).argv, ["--mapping", ASN.mappingPath]);
+  assert.throws(() => planEntry(["export", "--tenant", "asn"] as never), /sql\/01-discover-asn\.sql/);
+});
+test("mapping: committed asn mapping is a DRAFT: validates structurally, refused by --require-final", () => {
+  setProfile(ASN);
+  const m = readJ("mappings/asn.mapping.json");
+  const r = validateMapping(m, ASN_OVERLAY);
+  assert.deepEqual(r.provisional.map((x) => x.key).sort(), [...m._provisional].sort());
+  for (const k of ["status.map", "categories.map", "authors.distribute", "tags.keepOnly", "body.reflowMaxChars", "urls.oldOrigin", "archivedAs"]) assert.ok(m._provisional.includes(k), k);
+  assert.throws(() => validateMapping(m, ASN_OVERLAY, { requireFinal: true }), /require-final/);
+  assert.deepEqual(Object.entries(m.status.map).filter(([, v]) => v !== "SKIP").map(([k]) => k), ["published"]);
+  assert.equal(m.source.schema, "asn_ro");
+  assert.equal(m.urls.oldOrigin, "https://asianomist.com");
+  assert.equal(m.urls.articlePathTemplate, "/article/{slug}");
+  assert.deepEqual(Object.keys(m.urls.sectionPaths), ["the-brief", "economies", "markets", "banking-fintech", "industries", "wealth", "columns-explainers", "press-room"]);
+  assert.deepEqual([m.urls.extraLegacyPaths, m.urls.gonePaths], [[], []]);
+  assert.equal(m.categories.unmapped, "reject");
+  assert.equal(m.authors.distribute.mode, "even");
+  assert.equal(m.authors.distribute.keepLegacy, false);
+  assert.deepEqual(m.authors.staff, ["Mark Chen", "Anna Lee", "Linh Tran", "Ken Mori", "Grace Ong", "Ryan Cruz"]);
+  assert.deepEqual(m.authors.distribute.pool, m.authors.staff);
+  assert.throws(() => validateMapping(m, { ...ASN_OVERLAY, media: { hostAllowlist: ["x.example.com"], hostRewrite: {} } }), /mbolvnwkmkeroqmvbvmt/);
+});
+test("mapping: asn legacy taxonomy (apcg-network/sites/asianomist.json) resolves to the new pillars/sub-sections", async () => {
+  const { ASN_SUBSECTIONS, ASN_TAGS } = await import("../../lib/asn-taxonomy");
+  const m = readJ("mappings/asn.mapping.json");
+  const subs = new Set(ASN_SUBSECTIONS.map((s) => `${s.pillarSlug}/${s.slug}`));
+  for (const [k, t] of Object.entries(m.categories.map) as Array<[string, { pillar: string; subSection?: string }]>) {
+    assert.ok(ASN.pillarSlugs.includes(t.pillar), k);
+    if (t.subSection) assert.ok(subs.has(`${t.pillar}/${t.subSection}`), k);
+    if (t.pillar === "press-room") assert.equal(t.subSection, undefined, k);
+  }
+  assert.deepEqual([...m.tags.keepOnly], ASN_TAGS.map((t) => t.slug));
+  assert.deepEqual(m.tags.renames, {});
+  const tx = (sec: string, sub: string) => {
+    const r = resolveTaxonomy(sec, sub, m);
+    assert.ok(r.ok, `${sec}/${sub}`);
+    return r.ok ? [r.t.pillar, r.t.subSection ?? null] : null;
+  };
+  // Every new sub-section resolves from its own slug (the legacy values that survive 1:1, plus catch-up runs).
+  for (const s of ASN_SUBSECTIONS) assert.deepEqual(tx(s.pillarSlug, s.slug), [s.pillarSlug, s.slug], s.slug);
+  // Renames and flattenings of the legacy taxonomy.
+  assert.deepEqual(tx("economies", "greater-china"), ["economies", "china"]);
+  assert.deepEqual(tx("the-brief", "morning-brief"), ["the-brief", null]);
+  assert.deepEqual(tx("the-brief", ""), ["the-brief", null]);
+  assert.deepEqual(tx("columns-explainers", "columns"), ["columns", null]);
+  assert.deepEqual(tx("columns-explainers", "explainers"), ["explainers", null]);
+  for (const sub of ["banks", "payments-lending", "insurtech-wealthtech"]) assert.deepEqual(tx("banking-fintech", sub), ["banking-fintech", null], sub);
+  for (const sub of ["investing", "savings-rates", "property-investment", "expat-money"]) assert.deepEqual(tx("wealth", sub), ["wealth", null], sub);
+  for (const sub of ["press-releases", "company-announcements", "market-notices"]) assert.deepEqual(tx("press-room", sub), ["press-room", null], sub);
+  // Wildcard fallbacks: an unknown sub keeps its pillar with no sub-section.
+  for (const p of ASN.pillarSlugs) assert.deepEqual(tx(p, "something-new"), [p, null], p);
+  // columns-explainers with no or an unknown sub cannot be split by rule: no entry (unmapped = reject).
+  for (const sub of ["", "opinion"]) {
+    const sec = "columns-explainers";
+    assert.equal(m.categories.map[`${sec}/${sub}`] ?? m.categories.map[sec] ?? m.categories.map[`${sec}/*`], undefined, sub);
+  }
+});
+test("asn SQL Editor files are asn-only (role asn_migrator, schema asn_ro, site slug asianomist, no booths); 01 is one statement", () => {
+  const files = ["sql/01-discover-asn.sql", "sql/02-create-readonly-role-views-asn.sql", "sql/02p-set-password-asn.sql", "sql/03-drop-role-and-views-asn.sql"];
+  for (const f of files) {
+    const s = readFileSync(path.join(HERE, f), "utf8");
+    assert.doesNotMatch(s, /aer_ro|agr_ro|amb_ro|amb_migrator|asiamaterialsbrief|Asia Economic|AsiaGolf|asiagolfreview|directory-like|amb_booth/, f);
+    // The SQL Editor shows only the last result: every file ends with its one result statement.
+    const code = s.split("\n").filter((l) => l.trim() !== "" && !l.trimStart().startsWith("--"));
+    assert.ok((code[code.length - 1] as string).trimEnd().endsWith(";"), f);
+  }
+  const s02 = readFileSync(path.join(HERE, "sql/02-create-readonly-role-views-asn.sql"), "utf8");
+  assert.match(s02, /CREATE ROLE asn_migrator/);
+  assert.match(s02, /CREATE SCHEMA asn_ro/);
+  assert.match(s02, /AS asn_self_check/);
+  const s01 = readFileSync(path.join(HERE, "sql/01-discover-asn.sql"), "utf8");
+  assert.match(s01, /s\.slug::text = 'asianomist'/);
+  // Same site predicate in 01 and 02 (02 must pick exactly the row 01 showed).
+  const pred = /WHERE (s\.slug::text = 'asianomist'[^\n;]*'asn')/;
+  assert.ok(s01.match(pred)?.[1]);
+  assert.equal(s01.match(pred)?.[1], s02.match(pred)?.[1]);
+  const code = s01.split("\n").filter((l) => l.trim() !== "" && !l.trimStart().startsWith("--"));
+  assert.deepEqual(code.map((l, i) => [i, l.trimEnd().endsWith(";")]).filter(([, e]) => e).map(([i]) => i), [code.length - 1]);
+  assert.match(s01, /media_assets/);
+  assert.match(s01, /information_schema\.columns/);
+  // query_to_xml(..., tableforest => false) wraps rows in <table>: the xpath must start at /table (amb fix kept).
+  assert.doesNotMatch(s01, /xpath\('\/row/);
+  assert.match(readFileSync(path.join(HERE, "sql/02p-set-password-asn.sql"), "utf8"), /ALTER ROLE asn_migrator PASSWORD/);
+  assert.match(readFileSync(path.join(HERE, "sql/03-drop-role-and-views-asn.sql"), "utf8"), /AS asn_cleanup_check/);
 });
