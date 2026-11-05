@@ -137,9 +137,16 @@ export function mapWriteError(err: unknown): MappedWriteError {
   const data = (err as { data?: { errors?: unknown } } | null)?.data;
   if (name === "ValidationError" && Array.isArray(data?.errors)) {
     const fields: HubFieldErrors = {};
-    for (const e of data.errors as { path?: unknown }[]) {
+    for (const e of data.errors as { path?: unknown; message?: unknown }[]) {
+      if (typeof e?.path !== "string" || e.path === "") continue;
+      // Single-home rule (Pressroom) from the Articles hook ⇒ `single_home` on the hub field name.
+      if (typeof e.message === "string" && e.message.includes("is a single-home pillar")) {
+        const f = e.path.startsWith("secondarySections") ? "secondary" : e.path === "subSection" ? "subSectionSlug" : e.path === "exclusive" ? "flags.exclusive" : e.path;
+        fields[f] = "single_home";
+        continue;
+      }
       // P5.3 (review NIT 5): the hub sends `heroImageId`; Payload reports the field path `heroImage`.
-      if (typeof e?.path === "string" && e.path !== "") fields[e.path === "heroImage" ? "heroImageId" : e.path] = "invalid";
+      fields[e.path === "heroImage" ? "heroImageId" : e.path] = "invalid";
     }
     return { kind: "invalid", status: 422, fields };
   }

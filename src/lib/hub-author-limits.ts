@@ -105,6 +105,7 @@ export const HUB_FIELD_CODES_COMMON = [
   "unknown_ref",
   "not_enabled",
   "blocked_pillar",
+  "single_home",
   "c0",
   "bidi",
   "surrogate",
