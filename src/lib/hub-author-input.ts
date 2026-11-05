@@ -38,7 +38,7 @@ import {
 import { hasBidi, hasForbiddenC0, hasLoneSurrogate, isWs, validateBodyPure } from "@/lib/hub-author-body";
 import { MEDIA_LEAD_CAPTION_MAX } from "@/lib/hub-author-refs";
 
-export const HUB_FLAG_KEYS = ["aiAssisted", "breaking", "sponsored", "affiliate", "deepDive", "longHaul"] as const;
+export const HUB_FLAG_KEYS = ["aiAssisted", "breaking", "sponsored", "affiliate", "deepDive", "longHaul", "pinnedToLatest", "exclusive"] as const;
 export type HubFlagKey = (typeof HUB_FLAG_KEYS)[number];
 
 /** Field keys a create may carry (besides `tenant` and `actor`). */
