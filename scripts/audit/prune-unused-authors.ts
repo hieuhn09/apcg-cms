@@ -34,6 +34,7 @@
  *   npm run audit:prune-authors -- --confirm-host=<host> --apply --plan=migration-data/prune-authors.plan-<stamp>.json
  *
  * Options: `--keep-recent-days=<n>` (default 30) keeps authors created in the last n days.
+ *          `--include-profiles` also proposes 0-article authors that only have a slug/avatar/bio (dry run only).
  */
 import "../lib/env";
 import fs from "node:fs";
@@ -65,11 +66,12 @@ console.log(`${TAG} ${databaseNameBanner(process.env.DATABASE_URL)}`);
 const USAGE =
   "Usage:\n" +
   "  npm run audit:prune-authors [-- --confirm-host=<exact DB hostname>] [-- --tenant=<slug>[,<slug>...]]\n" +
-  "                              [-- --keep-recent-days=<n>] [-- --apply --plan=<plan file>]\n" +
+  "                              [-- --keep-recent-days=<n>] [-- --include-profiles] [-- --apply --plan=<plan file>]\n" +
   "\n" +
   "  (no flags)              dry run: summary + CSV report + plan file in migration-data/\n" +
   "  --tenant=a,b            only these Central tenant slugs (e.g. gcv,wad,brief-asia,world-travel-brief)\n" +
   "  --keep-recent-days=<n>  keep authors created in the last n days (default 30)\n" +
+  "  --include-profiles      also propose 0-article authors that only have a slug/avatar/bio (dry run only)\n" +
   "  --apply --plan=<file>   delete the plan's ids that are still unused (backup written first)\n" +
   "  --confirm-host=<host>   required for a NON-local DATABASE_URL; must equal its HOSTNAME;\n" +
   "                          a non-local database must be named exactly /neondb; --apply also needs a TTY.\n";
@@ -92,12 +94,13 @@ const CONFIRM_HOST = one("--confirm-host=");
 const TENANT_ARG = one("--tenant=");
 const PLAN_ARG = one("--plan=");
 const RECENT_ARG = one("--keep-recent-days=");
-const KNOWN = ["--apply", "--confirm-host=", "--tenant=", "--plan=", "--keep-recent-days="];
+const INCLUDE_PROFILES = argv.includes("--include-profiles");
+const KNOWN = ["--apply", "--confirm-host=", "--tenant=", "--plan=", "--keep-recent-days=", "--include-profiles"];
 const unknown = argv.filter((a) => !KNOWN.some((k) => (k.endsWith("=") ? a.startsWith(k) : a === k)));
 if (unknown.length) usage(`Unknown argument(s): ${unknown.join(", ")}`);
 if (APPLY && !PLAN_ARG) usage("--apply needs --plan=<plan file from a dry run>.");
 if (!APPLY && PLAN_ARG) usage("--plan is only used with --apply.");
-if (APPLY && (TENANT_ARG || RECENT_ARG)) usage("--apply takes its scope from the plan; drop --tenant / --keep-recent-days.");
+if (APPLY && (TENANT_ARG || RECENT_ARG || INCLUDE_PROFILES)) usage("--apply takes its scope from the plan; drop --tenant / --keep-recent-days / --include-profiles.");
 const TENANTS = TENANT_ARG ? TENANT_ARG.split(",").map((s) => s.trim()).filter(Boolean) : null;
 if (TENANTS && TENANTS.length === 0) usage("--tenant is empty.");
 const KEEP_RECENT_DAYS = RECENT_ARG === undefined ? DEFAULT_KEEP_RECENT_DAYS : Number(RECENT_ARG);
@@ -164,6 +167,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   console.log(`${TAG} database ${target.banner} (${target.local ? "local" : "NON-LOCAL, confirmed, name /neondb"}) - ${APPLY ? "APPLY" : "DRY RUN (no writes)"}`);
+  const includeProfiles = plan ? plan.includeProfiles : INCLUDE_PROFILES;
+  if (includeProfiles) console.log(`${TAG} --include-profiles: authors with 0 articles are candidates even with a slug, avatar or bio.`);
 
   const { getPayload } = await import("payload");
   const { sql } = await import("@payloadcms/db-postgres");
@@ -219,9 +224,9 @@ async function main(): Promise<void> {
   }
   const rows: Classified[] = all
     .filter((a) => !scope || (a.tenant !== null && scope.includes(a.tenant)))
-    .map((usage) => ({ usage, c: classifyAuthor(usage, { now, keepRecentDays }) }));
+    .map((usage) => ({ usage, c: classifyAuthor(usage, { now, keepRecentDays, includeProfiles }) }));
 
-  printSummary(rows);
+  printSummary(rows, includeProfiles);
 
   if (!APPLY) {
     const s = stamp();
@@ -234,6 +239,7 @@ async function main(): Promise<void> {
       createdAt: now.toISOString(),
       database: target.banner,
       keepRecentDays,
+      includeProfiles,
       tenants: scope,
       candidates,
     };
@@ -302,7 +308,7 @@ function readPlan(file: string): PruneAuthorsPlan {
   }
 }
 
-function printSummary(rows: Classified[]): void {
+function printSummary(rows: Classified[], includeProfiles: boolean): void {
   console.log(`\n${TAG} per tenant (keep reasons can overlap):`);
   for (const s of summarise(rows)) {
     const reasons = Object.entries(s.byReason).map(([k, v]) => `${k} ${v}`).join(", ");
@@ -310,7 +316,8 @@ function printSummary(rows: Classified[]): void {
   }
   const cands = rows.filter((r) => r.c.verdict === "delete");
   if (cands.length) {
-    console.log(`\n${TAG} delete candidates (no live article, no draft, not masthead / user / engine pool / recent / profile):`);
+    const protectedBy = `masthead / user / engine pool / recent${includeProfiles ? "" : " / profile"}`;
+    console.log(`\n${TAG} delete candidates (no live article, no draft, not ${protectedBy}):`);
     for (const r of cands.slice(0, 200)) {
       const hist = r.usage.historyRefs ? `  (in ${r.usage.historyRefs} old revision(s))` : "";
       console.log(`  ${String(r.usage.tenant).padEnd(20)} #${String(r.usage.id).padEnd(6)} ${r.usage.name}${r.usage.role ? ` (${r.usage.role})` : ""}${hist}`);

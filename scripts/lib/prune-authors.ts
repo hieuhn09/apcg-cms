@@ -19,7 +19,8 @@
  *                a ghost: Central finds-or-creates authors by EXACT name);
  *   recent     - created less than `keepRecentDays` ago (a pen name made from
  *                the hub for a piece that is not saved yet);
- *   profile    - has a slug, an avatar or a bio (someone curated an author page).
+ *   profile    - has a slug, an avatar or a bio (someone curated an author page);
+ *                skipped with `--include-profiles` (`opts.includeProfiles`).
  * Any other version reference (older revisions, or a published latest version
  * whose main row now names someone else) does not keep an author: the FK on
  * `_articles_v.version_author_id` is ON DELETE SET NULL and the rels row
@@ -96,7 +97,7 @@ export function liveArticleCount(a: AuthorUsage): number {
 
 const blank = (v: string | null) => v === null || v.trim() === "";
 
-export function classifyAuthor(a: AuthorUsage, opts: { now: Date; keepRecentDays: number }): Classification {
+export function classifyAuthor(a: AuthorUsage, opts: { now: Date; keepRecentDays: number; includeProfiles?: boolean }): Classification {
   const reasons: KeepReason[] = [];
   if (liveArticleCount(a) > 0) reasons.push("articles");
   if (a.draftRefs > 0) reasons.push("draft");
@@ -107,7 +108,7 @@ export function classifyAuthor(a: AuthorUsage, opts: { now: Date; keepRecentDays
   const created = Date.parse(a.createdAt);
   // An unreadable timestamp counts as recent: fail safe, keep the row.
   if (!Number.isFinite(created) || opts.now.getTime() - created < opts.keepRecentDays * 86_400_000) reasons.push("recent");
-  if (!blank(a.slug) || a.avatarId !== null || a.hasBio) reasons.push("profile");
+  if (opts.includeProfiles !== true && (!blank(a.slug) || a.avatarId !== null || a.hasBio)) reasons.push("profile");
   return { verdict: reasons.length === 0 ? "delete" : "keep", reasons };
 }
 
@@ -150,6 +151,7 @@ export interface PruneAuthorsPlan {
   createdAt: string;
   database: string;
   keepRecentDays: number;
+  includeProfiles: boolean;
   tenants: string[] | null;
   candidates: PlanCandidate[];
 }
@@ -172,7 +174,8 @@ export function parsePlan(text: string): PruneAuthorsPlan {
     if (seen.has(c.id)) throw new Error(`plan lists #${c.id} twice`);
     seen.add(c.id);
   }
-  return p as PruneAuthorsPlan;
+  if (p.includeProfiles !== undefined && typeof p.includeProfiles !== "boolean") throw new Error("plan has a bad includeProfiles");
+  return { ...(p as PruneAuthorsPlan), includeProfiles: p.includeProfiles === true };
 }
 
 /**

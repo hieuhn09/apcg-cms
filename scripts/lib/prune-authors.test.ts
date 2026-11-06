@@ -89,6 +89,19 @@ describe("classifyAuthor", () => {
     assert.equal(classifyAuthor(author({ slug: "  " }), OPTS).verdict, "delete");
   });
 
+  it("includeProfiles turns a profile-only row into a delete candidate", () => {
+    assert.equal(classifyAuthor(author({ slug: "x" }), OPTS).verdict, "keep");
+    assert.deepEqual(classifyAuthor(author({ slug: "x" }), { ...OPTS, includeProfiles: true }), { verdict: "delete", reasons: [] });
+  });
+
+  it("includeProfiles leaves every other keep rule in force", () => {
+    const c = classifyAuthor(author({ slug: "x", engineArticles: 1 }), { ...OPTS, includeProfiles: true });
+    assert.equal(c.verdict, "keep");
+    assert.ok(c.reasons.includes("articles"));
+    assert.ok(!c.reasons.includes("profile"));
+    assert.equal(classifyAuthor(author({ rank: 1 }), { ...OPTS, includeProfiles: true }).verdict, "keep");
+  });
+
   it("keepRecentDays 0 disables the recent rule", () => {
     assert.equal(classifyAuthor(author({ createdAt: "2026-11-05T23:00:00Z" }), { now: NOW, keepRecentDays: 0 }).verdict, "delete");
   });
@@ -115,13 +128,19 @@ describe("summarise", () => {
 });
 
 function plan(candidates: PruneAuthorsPlan["candidates"]): PruneAuthorsPlan {
-  return { kind: PLAN_KIND, version: PLAN_VERSION, createdAt: "x", database: "h:5432/neondb", keepRecentDays: 30, tenants: null, candidates };
+  return { kind: PLAN_KIND, version: PLAN_VERSION, createdAt: "x", database: "h:5432/neondb", keepRecentDays: 30, includeProfiles: false, tenants: null, candidates };
 }
 
 describe("parsePlan", () => {
   it("round-trips a valid plan", () => {
     const p = plan([{ id: 5, tenant: "gcv", name: "A" }]);
     assert.deepEqual(parsePlan(JSON.stringify(p)), p);
+  });
+  it("treats a missing includeProfiles as false and rejects a non-boolean", () => {
+    const old: Partial<PruneAuthorsPlan> = plan([]);
+    delete old.includeProfiles;
+    assert.equal(parsePlan(JSON.stringify(old)).includeProfiles, false);
+    assert.throws(() => parsePlan(JSON.stringify({ ...plan([]), includeProfiles: "yes" })), /bad includeProfiles/);
   });
   it("rejects junk, wrong kind, bad ids and duplicates", () => {
     assert.throws(() => parsePlan("{"), /JSON/);
