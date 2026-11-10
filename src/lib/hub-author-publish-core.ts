@@ -48,7 +48,7 @@ import { isEmptyBody } from "@/lib/hub-article-markdown";
 import { json } from "@/lib/http";
 import { toId } from "@/access/helpers";
 import { scopedFind } from "@/lib/scoped";
-import { isEngineBlockedPillar, isHubBlockedPillar } from "@/lib/constants";
+import { isHubBlockedPillar, isHubBlockedSecondaryPillar } from "@/lib/constants";
 import { isSingleHomePillar } from "@/lib/single-home-pillars";
 import { authenticateHubWriteEngine } from "@/lib/hub-write-auth";
 import { isHubAuthoredDoc } from "@/lib/hub-author-auth";
@@ -191,7 +191,8 @@ export async function checkPublishable(args: { payload: Payload; tenant: { id: I
   const nonNull = (x: Id | null | undefined): x is Id => x != null;
   const pillars = await byIds(payload, "pillars", tenant.id, unique([pillarId, ...rowPillar].filter(nonNull)));
   const subs = await byIds(payload, "subsections", tenant.id, unique([subId, ...rowSub].filter(nonNull)));
-  const blocked = (p: Doc) => isEngineBlockedPillar(tenant.slug, String(p.slug ?? ""));
+  // secondary rows: engine-blocked pillars refused except hub-writable ones (GCV `exclusive`, 10-11-26)
+  const blocked = (p: Doc) => isHubBlockedSecondaryPillar(tenant.slug, String(p.slug ?? ""));
 
   // (c) + (k) primary pillar — the hub may publish into a single-home pillar (Pressroom)
   const primary = pillarId != null ? pillars.get(String(pillarId)) : undefined;
