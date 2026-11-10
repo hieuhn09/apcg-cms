@@ -245,7 +245,12 @@ content-engine `npm run media:replace` CLI (media-gtp-vowasia phase 5). Code:
   activity row); no new engine action exists;
 - the tenant slug must be listed in `ENGINE_HERO_REPLACE_TENANTS` (CSV, exact match,
   read on every call; unset/empty = OFF). Not listed: 403 `feature_disabled` before any
-  article is read.
+  article is read;
+- `ENGINE_HERO_REPLACE_URL_HOSTS` must be non-empty (fail closed): a listed tenant with an
+  empty host list answers 403 `feature_disabled`, `reason: hero replace url hosts not
+  configured`, before any article read or fetch (only the local probe with
+  `ENGINE_HERO_REPLACE_ALLOW_LOCAL` is exempt). Both `feature_disabled` answers log an
+  `engine_action_denied` row with `detail: {action: "replace_hero", reason}`.
 
 Request (`Content-Type: application/json`, body at most 16 KB measured on the text):
 
@@ -270,7 +275,7 @@ Responses (error envelope as intake: `{ok:false, status, reason}`):
 | 200 | `dry_run` | `{articleId, currentHeroMediaId, currentHeroCredit, currentHeroFilename, version, workflowStatus, draftDiverged}`; never fetches, writes or logs |
 | 400 | `bad_request` | invalid JSON or fields (`reason` names them) |
 | 401 | `unauthorized` | unknown / inactive bearer |
-| 403 | `forbidden` / `feature_disabled` | missing action, tenant not allowed, or tenant not in the env switch |
+| 403 | `forbidden` / `feature_disabled` | missing action, tenant not allowed, tenant not in the env switch, or host list empty |
 | 404 | `not_found` | no such `engineDraftId` in THIS tenant |
 | 409 | `hero_changed` | current hero differs from `expectedHeroMediaId` (`currentHeroMediaId` in the body) |
 | 409 | `draft_diverged` | the article has a pending draft / newer version, or the post-write check refused (`reason: article has unpublished changes`) |
@@ -290,17 +295,24 @@ lock and a post-write check (only `heroImage`/`updatedAt` may move; `version`,
 translations are not re-queued. `editedByHuman` is not checked (an editor's own swap
 is protected by `expectedHeroMediaId`); any `workflowStatus` is accepted. The legacy
 imported shape (`_status: draft` + `workflowStatus: published`) keeps both values. The
-revalidate webhook fires as for any article save. Exactly one `engine_write_accepted`
+post-write check also requires the row to point at the new Media id. The write runs
+with `context.disableRevalidate`; the signed revalidate webhook (`tags: ["articles:all"]`,
+the article slug) is sent ONCE after the transaction committed, only for `replaced`
+(best-effort, never fails the call; no webhook on noop / 409 / rollback). Exactly one `engine_write_accepted`
 row is logged with `detail: {action: "replace_hero", reason, replacementKey,
 oldMediaId, newMediaId}`.
 
 URL rules (`validateHeroFetchUrl` + the upload helper): https only, no userinfo, no
 literal private/loopback/link-local/metadata address or internal name, every DNS
 answer must be public, no redirects (`redirect: manual`, 3xx = 422), 15 s timeout,
-response type `image/jpeg|png|webp` AND matching magic bytes, body streamed and cut at
-15 MB. `ENGINE_HERO_REPLACE_URL_HOSTS` (CSV of exact hosts, empty = any public host)
-pins the source host; set it to the engine's Supabase storage host BEFORE enabling a
-tenant. `ENGINE_HERO_REPLACE_ALLOW_LOCAL=true` relaxes http + loopback for the local
+the DNS lookup bounded by the same timeout, response type `image/jpeg|png|webp` (or
+`application/octet-stream` / no type, decided by the sniff) AND matching magic bytes
+(the stored type is the sniffed one), body streamed and cut at 15 MB, decoded header
+within the per-type pixel cap of the hub direct upload (JPEG/PNG 50 MP, WebP 16.8 MP;
+over = 422 `hero_too_large`, undecodable = 422 `hero_not_an_image`). Every
+`invalid_hero_url` refusal logs an `integration_error` row with the guard reason only
+(never the URL). `ENGINE_HERO_REPLACE_URL_HOSTS` (CSV of exact hosts) pins the source
+host and is REQUIRED: empty = the route is off for every tenant (403 above). `ENGINE_HERO_REPLACE_ALLOW_LOCAL=true` relaxes http + loopback for the local
 probe only and is ignored when `VERCEL_ENV` is set or `NODE_ENV=production`. Residual:
 DNS rebinding between the lookup and the connect.
 

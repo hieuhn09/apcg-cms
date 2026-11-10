@@ -334,9 +334,10 @@ and status.
 "Hero replace") ships OFF. Owner steps, in this order:
 
 1. Set `ENGINE_HERO_REPLACE_URL_HOSTS` to the engine's Supabase storage host on this
-   project's Vercel env (Production). This is a security control: while it is empty any
-   public https host passes, so a stolen engine bearer could publish an arbitrary public
-   image as a hero. Set it BEFORE step 2.
+   project's Vercel env (Production). This is a security control and the route fails
+   closed without it: a tenant listed in step 2 while this is empty answers 403
+   `feature_disabled` (`hero replace url hosts not configured`, plus an
+   `engine_action_denied` row). Set it BEFORE step 2.
 2. Set `ENGINE_HERO_REPLACE_TENANTS=vowasia` (CSV of tenant slugs, exact match) and
    Redeploy.
 3. In /admin → Content Engines, give the `content-engine-vowasia` record BOTH
@@ -346,7 +347,7 @@ and status.
 
 Never set `ENGINE_HERO_REPLACE_ALLOW_LOCAL` on Vercel (it is ignored there anyway).
 
-**Rollback:** unset or empty `ENGINE_HERO_REPLACE_TENANTS` and Redeploy: every call
+**Rollback:** unset or empty `ENGINE_HERO_REPLACE_TENANTS` (or `ENGINE_HERO_REPLACE_URL_HOSTS`) and Redeploy: every call
 answers 403 `feature_disabled`, nothing else changes (rehearsed on a local server
 10-11-26). Code rollback = revert the PR (no migration). A bad swap is undone in /admin
 by pointing the article's Hero Image back at the old Media (it is kept; the ids are in
