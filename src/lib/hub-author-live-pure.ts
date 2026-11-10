@@ -2,13 +2,20 @@
  * Hub LIVE edit — pure helpers (APCGHub P5.4, "Sửa bài đã đăng"; content-engine plan
  * process/features/apcg-hub/active/apcg-hub-p5-4-edit-published_PLAN_30-09-26.md, D2–D4,
  * D11, D12). No I/O, no Payload, no `@payload-config`: imported ONE WAY by
- * `hub-author-live-core.ts` and `hub-article-edit-select.ts` (this file imports neither
- * of them nor `hub-author-handlers.ts`).
+ * `hub-author-live-core.ts`, `hub-article-edit-select.ts` and (wide live edit, the media
+ * gate) `hub-author-handlers.ts` (this file imports none of them).
  *
  *   liveEditTenants   — the CMS switch `HUB_LIVE_EDIT_TENANTS` (D11), read on EVERY call
- *   liveGateReason    — the live gate on (main, latest) (D2)
- *   parseLiveBody     — the nested `/live` body → the flat PATCH parser (D3 / D4)
+ *   liveWideTenants   — the WIDE switch `HUB_LIVE_EDIT_WIDE_TENANTS`, read on EVERY call
+ *   liveGateReason    — the live gate on (main, latest) (D2; `wide` opens engine / CMS-hand articles)
+ *   parseLiveBody     — the nested `/live` body → the flat PATCH parser (D3 / D4; slug only)
+ *   liveLockedReason  — the media / flags locks, AFTER the tenant is known (wide ⇒ none)
  *   livePostWriteCheck — the post-write assertion inside the lock (D12)
+ *
+ * Wide scope (content-engine plan process/features/apcg-hub/active/hub-live-edit-widen_PLAN_10-11-26.md):
+ * a tenant in BOTH `HUB_LIVE_EDIT_TENANTS` and `HUB_LIVE_EDIT_WIDE_TENANTS` may live-edit published
+ * `engine` and CMS-hand-made `manual` articles, and may change the hero, the lead caption and the
+ * four flags of `HUB_LIVE_WIDE_FLAGS`. `slug` stays locked everywhere; `import` stays refused.
  */
 
 import { HUB_DRAFT_FIELD_KEYS, parseUpdateBody, type HubDraftFieldKey, type HubParseResult } from "@/lib/hub-author-input";
@@ -17,9 +24,13 @@ import { lexicalTreesEqual } from "@/lib/hub-author-convert-core";
 type Doc = Record<string, unknown>;
 
 /**
- * D4: the 17 keys a live edit may carry = HUB_DRAFT_FIELD_KEYS minus slug / heroImageId /
- * leadImageCaption, in the SAME order (pinned against DERIVED_LIVE_FIELD_KEYS by test:hub-live).
- * `heroFocal` (10-11-26) changes only the hero MEDIA doc's focal point, never the image itself.
+ * D4 (widened 10-11-26): the 19 keys a live body may carry = HUB_DRAFT_FIELD_KEYS minus slug, in
+ * the SAME order (pinned against DERIVED_LIVE_FIELD_KEYS by test:hub-live).
+ * `heroImageId` / `leadImageCaption` parse here but are locked (media_locked) unless the
+ * tenant is wide — see `liveLockedReason`. `heroFocal` (10-11-26) is NOT locked on any
+ * tenant: it changes only the hero MEDIA doc's focal point, never the image itself, and is
+ * applied to the hero as it is AFTER the save (so a wide save that also changes
+ * `heroImageId` sets the focal of the NEW hero).
  */
 export const HUB_LIVE_FIELD_KEYS = [
   "title",
@@ -37,16 +48,20 @@ export const HUB_LIVE_FIELD_KEYS = [
   "coAuthorIds",
   "flags",
   "sponsor",
+  "heroImageId",
+  "leadImageCaption",
   "heroFocal",
   "pinnedUntil",
 ] as const satisfies readonly HubDraftFieldKey[];
 export type HubLiveFieldKey = (typeof HUB_LIVE_FIELD_KEYS)[number];
 
-/** D4: draft keys that exist but are LOCKED on a live article (422 not_live_editable). */
-export const HUB_LIVE_LOCKED_FIELD_KEYS = ["slug", "heroImageId", "leadImageCaption"] as const satisfies readonly HubDraftFieldKey[];
-/** D4 / O9 / O13: flags locked on a live article (present at all ⇒ 422 flags_locked). */
-export const HUB_LIVE_LOCKED_FLAGS = ["breaking", "aiAssisted", "sponsored", "affiliate"] as const;
-/** D4: the only flags a live edit may change. */
+/** D4: draft keys that exist but are ALWAYS locked on a live article (422 not_live_editable slug_locked). */
+export const HUB_LIVE_LOCKED_FIELD_KEYS = ["slug"] as const satisfies readonly HubDraftFieldKey[];
+/** Media keys a live edit may change ONLY on a wide tenant (else 422 media_locked). */
+export const HUB_LIVE_WIDE_FIELD_KEYS = ["heroImageId", "leadImageCaption"] as const satisfies readonly HubDraftFieldKey[];
+/** D4 / O9 / O13: flags a live edit may change ONLY on a wide tenant (present at all elsewhere ⇒ 422 flags_locked). */
+export const HUB_LIVE_WIDE_FLAGS = ["breaking", "aiAssisted", "sponsored", "affiliate"] as const;
+/** D4: the flags a live edit may always change. */
 export const HUB_LIVE_EDITABLE_FLAGS = ["deepDive", "longHaul", "pinnedToLatest", "exclusive"] as const;
 /** T1: the outer keys of the nested `/live` body — exactly these, all required. */
 export const HUB_LIVE_BODY_KEYS = ["tenant", "expectedVersion", "actor", "fields"] as const;
@@ -87,6 +102,24 @@ export function isLiveEditTenant(slug: string, tenants: readonly string[]): bool
   return tenants.includes(slug);
 }
 
+/**
+ * `HUB_LIVE_EDIT_WIDE_TENANTS` — CSV of CMS tenant slugs, default OFF, same parsing and exact
+ * matching as `liveEditTenants`. Only meaningful for a tenant that is ALSO in
+ * `HUB_LIVE_EDIT_TENANTS` (the callers check that switch first).
+ */
+export function liveWideTenants(env: Record<string, string | undefined> = process.env): string[] {
+  const raw = env.HUB_LIVE_EDIT_WIDE_TENANTS;
+  if (typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+}
+
+export function isLiveWideTenant(slug: string, tenants: readonly string[]): boolean {
+  return tenants.includes(slug);
+}
+
 // ── D2: the live gate ────────────────────────────────────────────────────────
 
 export type HubLiveGateReason = "origin" | "scheduled" | "status" | "draft_diverged" | "not_hub_authored";
@@ -98,14 +131,23 @@ export type HubLiveGateReason = "origin" | "scheduled" | "status" | "draft_diver
  * clear) → status (main workflowStatus AND _status published) → draft_diverged (latest
  * `_status` published AND same `version` as main) → not_hub_authored (`isHubAuthored`
  * computed by the caller, and no `engineDraftId`). null = live-editable.
+ *
+ * `wide` (tenant in `HUB_LIVE_EDIT_WIDE_TENANTS`): origin ∈ {manual, engine} (import still
+ * `origin`) and NO not_hub_authored step (`isHubAuthored` is ignored); every other step unchanged.
  */
-export function liveGateReason(a: { main: Doc | null | undefined; latest: Doc | null | undefined; isHubAuthored: boolean }): HubLiveGateReason | null {
+export function liveGateReason(a: {
+  main: Doc | null | undefined;
+  latest: Doc | null | undefined;
+  isHubAuthored: boolean;
+  wide?: boolean;
+}): HubLiveGateReason | null {
   const { main, latest } = a;
-  if (!main || main.origin !== "manual") return "origin";
+  const wide = a.wide === true;
+  if (!main || !(main.origin === "manual" || (wide && main.origin === "engine"))) return "origin";
   if (main.workflowStatus === "scheduled" || latest?.workflowStatus === "scheduled") return "scheduled";
   if (main.workflowStatus !== "published" || main._status !== "published") return "status";
   if (!latest || latest._status !== "published" || latest.version !== main.version) return "draft_diverged";
-  if (!a.isHubAuthored || main.engineDraftId != null) return "not_hub_authored";
+  if (!wide && (!a.isHubAuthored || main.engineDraftId != null)) return "not_hub_authored";
   return null;
 }
 
@@ -134,12 +176,13 @@ const ALLOWED_FIELD_KEYS: readonly string[] = [...HUB_LIVE_FIELD_KEYS, ...HUB_LI
  * `{tenant, expectedVersion, actor, fields}` → the PATCH parser on a FLAT copy. Fixed order:
  * (1) outer keys exactly the four (an extra key first, in insertion order, then a missing
  * one, in the order above) and `fields` a plain object ⇒ 400 `field:<key>`;
- * (2) every key of `fields` ∈ the 15 live keys ∪ the 3 locked draft keys, else 400
+ * (2) every key of `fields` ∈ the 19 live keys ∪ `slug`, else 400
  * `field:fields.<key>` (`tenant`, `actor`, `expectedVersion`, `fields`, `__proto__`,
- * `constructor` included); (3) a locked key PRESENT ⇒ 422 not_live_editable (slug_locked,
- * then media_locked, then flags_locked — a locked flag present even with its stored value);
+ * `constructor` included); (3) `slug` PRESENT ⇒ 422 not_live_editable slug_locked;
  * (4) a SPREAD copy `{...fields, tenant, expectedVersion, actor}` (never Object.assign: a
  * `__proto__` own key would hit the setter) → `parseUpdateBody` (its 400 / 422 as-is).
+ * The media / flags locks are NOT here (the tenant is not known yet): `liveLockedReason`,
+ * called by the route right after the tenant switches.
  */
 export function parseLiveBody(raw: unknown): HubParseResult {
   if (!isPlainObject(raw)) return liveBadRequest("body must be a JSON object", "body");
@@ -158,11 +201,21 @@ export function parseLiveBody(raw: unknown): HubParseResult {
     }
   }
   if (has(fields, "slug")) return notLiveEditable("slug_locked");
-  if (has(fields, "heroImageId") || has(fields, "leadImageCaption")) return notLiveEditable("media_locked");
-  const flags = fields.flags;
-  if (isPlainObject(flags) && HUB_LIVE_LOCKED_FLAGS.some((f) => has(flags, f))) return notLiveEditable("flags_locked");
   const flat: Doc = { ...fields, tenant: raw.tenant, expectedVersion: raw.expectedVersion, actor: raw.actor };
   return parseUpdateBody(flat);
+}
+
+/**
+ * The media / flags locks of a NON-wide tenant, on the parsed fields (a key PRESENT is
+ * locked, even with its stored value): media_locked (`heroImageId` / `leadImageCaption`)
+ * first, then flags_locked (any of `HUB_LIVE_WIDE_FLAGS` in `flags`). Wide ⇒ always null.
+ */
+export function liveLockedReason(fields: Doc, wide: boolean): "media_locked" | "flags_locked" | null {
+  if (wide) return null;
+  if (HUB_LIVE_WIDE_FIELD_KEYS.some((k) => has(fields, k))) return "media_locked";
+  const flags = fields.flags;
+  if (isPlainObject(flags) && HUB_LIVE_WIDE_FLAGS.some((f) => has(flags, f))) return "flags_locked";
+  return null;
 }
 
 /** Every key of a parsed live input (sanity: never one of the draft-only keys). */

@@ -31,7 +31,7 @@ import { loadHubEditorConfig } from "@/lib/hub-article-markdown";
 import { isRoundTripSafeBody, type HubEditorConfig } from "@/lib/hub-author-body";
 import { isHubAuthoredDoc } from "@/lib/hub-author-auth";
 import { toId } from "@/access/helpers";
-import { isLiveEditTenant, liveEditTenants, liveGateReason } from "@/lib/hub-author-live-pure";
+import { isLiveEditTenant, isLiveWideTenant, liveEditTenants, liveGateReason, liveWideTenants } from "@/lib/hub-author-live-pure";
 
 /** The main-table read of `view=edit` = the detail select + `origin` (needed by the gate). */
 export const HUB_ARTICLE_EDIT_MAIN_SELECT = { ...HUB_ARTICLE_DETAIL_SELECT, origin: true } as const;
@@ -157,7 +157,15 @@ export interface HubArticleEditLiveNo {
   version: number | null;
 }
 
-/** P5.4 (T3): the live-editable block — EXACTLY 18 keys (pinnedUntil added 05-11-26), flat like `HubArticleEditYes` (no `origin`, `reason` for `editableReason`). */
+/**
+ * Wide live edit (10-11-26): which keys the hub may send on `/live` — "hub" = the P5.4 set
+ * (hub-authored articles only; hero, caption and the four wide flags locked); "wide" = the
+ * tenant is in `HUB_LIVE_EDIT_WIDE_TENANTS` (engine / CMS hand-made articles too; hero,
+ * caption, every flag). `slug` is locked in both.
+ */
+export type HubArticleEditLiveScope = "hub" | "wide";
+
+/** P5.4 (T3): the live-editable block — EXACTLY 19 keys (pinnedUntil added 05-11-26, scope 10-11-26), flat like `HubArticleEditYes` (no `origin`, `reason` for `editableReason`). */
 export interface HubArticleEditLiveYes {
   editable: true;
   reason: "ok";
@@ -178,6 +186,8 @@ export interface HubArticleEditLiveYes {
   hero: HubArticleEditMedia["hero"];
   leadImageCaption: string | null;
   bodyMedia: HubEditMedia[];
+  /** 10-11-26: the live scope (last key; absent on an older CMS ⇒ the hub assumes "hub"). */
+  scope: HubArticleEditLiveScope;
 }
 
 export type HubArticleEditLive = HubArticleEditLiveNo | HubArticleEditLiveYes;
@@ -295,13 +305,27 @@ export async function loadHubArticleEdit(args: {
   tenantSlug?: string;
   /** P5.4 (D11): the live-edit tenant switch (default: `liveEditTenants()`, read on this call). */
   liveTenants?: readonly string[];
+  /** Wide live edit (10-11-26): the wide switch (default: `liveWideTenants()`, read on this call). */
+  wideTenants?: readonly string[];
 }): Promise<{ edit: HubArticleEdit; latest: Doc | null }> {
   const { payload, mainDoc, tenantId } = args;
   const mainReason = editableReasonOf(mainDoc);
   // P5.4 (D6): the main row is published ⇒ add the `live` block, only when the caller named the tenant slug.
-  if (mainReason === "status" && mainDoc.workflowStatus === "published" && args.tenantSlug !== undefined) {
-    const live = await computeEditLive({ payload, mainDoc, tenantId, tenantSlug: args.tenantSlug, liveTenants: args.liveTenants ?? liveEditTenants() });
-    return { edit: { editable: false, editableReason: "status", live }, latest: null };
+  if (mainDoc.workflowStatus === "published" && args.tenantSlug !== undefined) {
+    const slug = args.tenantSlug;
+    const liveTenants = args.liveTenants ?? liveEditTenants();
+    const wideTenants = args.wideTenants ?? liveWideTenants();
+    // Wide live edit: a published ENGINE article (origin branch) gets the live block too, only when the
+    // tenant is in both switches; it answers editableReason "status" (published, not a draft) like a manual one.
+    const engineWide =
+      mainReason === "origin" &&
+      mainDoc.origin === "engine" &&
+      isLiveEditTenant(slug, liveTenants) &&
+      isLiveWideTenant(slug, wideTenants);
+    if (mainReason === "status" || engineWide) {
+      const live = await computeEditLive({ payload, mainDoc, tenantId, tenantSlug: slug, liveTenants, wideTenants });
+      return { edit: { editable: false, editableReason: "status", live }, latest: null };
+    }
   }
   if (mainReason) return { edit: { editable: false, editableReason: mainReason }, latest: null };
 
@@ -353,6 +377,8 @@ export async function loadHubArticleEdit(args: {
  * main row (depth 0, no select) + the latest version — through `liveGateReason`; (ii)
  * only when the gate passes, ONE display read (no draft, detail depth, `en`,
  * `HUB_ARTICLE_EDIT_SELECT`) feeds the sanitizer, the media block and `bodyEditable`.
+ * Wide live edit (10-11-26): `wideTenants` (default none) opens the gate to engine and CMS
+ * hand-made articles (no hub-authorship lookup) and sets `scope: "wide"`; else `scope: "hub"`.
  */
 export async function computeEditLive(args: {
   payload: Payload;
@@ -360,15 +386,17 @@ export async function computeEditLive(args: {
   tenantId: number | string;
   tenantSlug: string;
   liveTenants: readonly string[];
+  wideTenants?: readonly string[];
 }): Promise<HubArticleEditLive> {
   const { payload, mainDoc, tenantId } = args;
   if (!isLiveEditTenant(args.tenantSlug, args.liveTenants)) return { editable: false, reason: "feature_disabled", version: null };
+  const wide = isLiveWideTenant(args.tenantSlug, args.wideTenants ?? []);
   const id = mainDoc.id as number | string;
   const main = (await payload.findByID({ collection: "articles", id, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc | null;
   if (!main || String(toId(main.tenant)) !== String(tenantId)) return { editable: false, reason: "status", version: null };
   const latest = (await payload.findByID({ collection: "articles", id, draft: true, depth: 0, overrideAccess: true, disableErrors: true })) as unknown as Doc | null;
   const version = typeof main.version === "number" ? main.version : null;
-  const reason = liveGateReason({ main, latest, isHubAuthored: latest ? await isHubAuthoredDoc(payload, latest) : false });
+  const reason = liveGateReason({ main, latest, wide, isHubAuthored: !wide && latest ? await isHubAuthoredDoc(payload, latest) : false });
   if (reason) return { editable: false, reason: reason === "origin" ? "status" : reason, version };
   const shown = (await payload.findByID({
     collection: "articles",
@@ -403,6 +431,7 @@ export async function computeEditLive(args: {
     hero: media.hero,
     leadImageCaption: media.leadImageCaption,
     bodyMedia: media.bodyMedia,
+    scope: wide ? "wide" : "hub",
   };
 }
 

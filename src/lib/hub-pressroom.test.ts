@@ -13,7 +13,7 @@ import type { Payload } from "payload";
 process.env.DATABASE_URL ??= "postgres://pressroom-unit@127.0.0.1:1/no_db";
 process.env.PAYLOAD_SECRET ??= "pressroom-unit-placeholder";
 
-import { ENGINE_BLOCKED_PILLARS, HUB_WRITABLE_BLOCKED_PILLARS, SINGLE_HOME_PILLARS, isEngineBlockedPillar, isHubBlockedPillar } from "./constants";
+import { ENGINE_BLOCKED_PILLARS, HUB_WRITABLE_BLOCKED_PILLARS, SINGLE_HOME_PILLARS, isEngineBlockedPillar, isHubBlockedPillar, isHubBlockedSecondaryPillar } from "./constants";
 
 type Doc = Record<string, unknown>;
 let pub: typeof import("./hub-author-publish-core");
@@ -72,6 +72,16 @@ describe("isHubBlockedPillar", () => {
     assert.equal(isHubBlockedPillar("gcv", " Pressroom "), false);
     assert.equal(isHubBlockedPillar("gcv", "travel"), false);
   });
+  it("isHubBlockedSecondaryPillar: only hub-writable pillars open; single-home + other engine-blocked stay blocked", () => {
+    for (const [t, list] of Object.entries(ENGINE_BLOCKED_PILLARS)) {
+      const open = HUB_WRITABLE_BLOCKED_PILLARS[t] ?? [];
+      for (const s of list) assert.equal(isHubBlockedSecondaryPillar(t, s), !open.includes(s), `${t}/${s}`);
+    }
+    assert.equal(isHubBlockedSecondaryPillar("gcv", " Exclusive "), false);
+    assert.equal(isHubBlockedSecondaryPillar("gcv", "pressroom"), true);
+    assert.equal(isHubBlockedSecondaryPillar("gcv", "travel"), false);
+    assert.equal(isHubBlockedSecondaryPillar(null, "exclusive"), false);
+  });
   it("engine gate unchanged: pressroom still engine-blocked; intake still uses isEngineBlockedPillar", () => {
     assert.equal(isEngineBlockedPillar("gcv", "pressroom"), true);
     assert.equal(isEngineBlockedPillar("brief-asia", "pressroom"), true);
@@ -87,8 +97,8 @@ describe("resolvePillar", () => {
     assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "pressroom"), { ok: true, id: 1 });
     assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "exclusive"), { ok: true, id: 2 });
   });
-  it("secondary exclusive still blocked", async () => {
-    assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "exclusive", "secondary"), { ok: false, code: "blocked_pillar" });
+  it("secondary exclusive ok (10-11-26)", async () => {
+    assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "exclusive", "secondary"), { ok: true, id: 2 });
   });
   it("secondary pressroom still blocked", async () => {
     assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "pressroom", "secondary"), { ok: false, code: "blocked_pillar" });
@@ -117,8 +127,11 @@ describe("checkPublishable", () => {
   it("exclusive is not single-home: author still required", async () => {
     assert.equal((await run({ pillar: 2, author: null })).authorId, "required");
   });
-  it("exclusive as a secondary row still blocked_pillar", async () => {
-    assert.equal((await run({ pillar: 3, subSection: 30, author: 5, secondarySections: [{ pillar: 2 }] })).secondary, "blocked_pillar");
+  it("exclusive as a secondary row publishes clean (10-11-26)", async () => {
+    assert.deepEqual(await run({ pillar: 3, subSection: 30, author: 5, secondarySections: [{ pillar: 2 }] }), {});
+  });
+  it("pressroom as a secondary row still blocked_pillar", async () => {
+    assert.equal((await run({ pillar: 3, subSection: 30, author: 5, secondarySections: [{ pillar: 1 }] })).secondary, "blocked_pillar");
   });
   it("pressroom with sub-section / secondary / exclusive ⇒ single_home codes", async () => {
     const f = await run({ pillar: 1, subSection: 30, secondarySections: [{ pillar: 3 }], exclusive: true });

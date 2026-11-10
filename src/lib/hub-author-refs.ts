@@ -20,7 +20,7 @@
 
 import type { Payload, Where } from "payload";
 import { scopedFind } from "@/lib/scoped";
-import { isEngineBlockedPillar, isHubBlockedPillar } from "@/lib/constants";
+import { isHubBlockedPillar, isHubBlockedSecondaryPillar } from "@/lib/constants";
 import { isSingleHomePillar } from "@/lib/single-home-pillars";
 import { featureEnabled, type TenantDoc } from "@/lib/tenant";
 import type { HubFieldCode, HubFieldErrors } from "@/lib/hub-author-limits";
@@ -99,10 +99,11 @@ export async function resolvePillar(
   slug: string,
   role: "primary" | "secondary" = "primary",
 ): Promise<{ ok: true; id: Id } | { ok: false; code: HubFieldCode }> {
-  // Primary: the hub may write single-home pillars (Pressroom); every other engine-blocked
-  // pillar stays refused. Secondary rows: every engine-blocked pillar refused (a single-home
-  // pillar is never another article's secondary section).
-  const blocked = role === "primary" ? isHubBlockedPillar(tenant.slug, slug) : isEngineBlockedPillar(tenant.slug, slug);
+  // Primary: the hub may write single-home pillars (Pressroom) and hub-writable pillars
+  // (GCV `exclusive`); every other engine-blocked pillar stays refused. Secondary rows: every
+  // engine-blocked pillar refused except hub-writable ones (a single-home pillar is never
+  // another article's secondary section).
+  const blocked = role === "primary" ? isHubBlockedPillar(tenant.slug, slug) : isHubBlockedSecondaryPillar(tenant.slug, slug);
   if (blocked) return { ok: false, code: "blocked_pillar" };
   const docs = await findIds(payload, "pillars", tenant.id, { slug: { equals: slug } }, 1);
   return docs[0] ? { ok: true, id: docs[0].id } : { ok: false, code: "unknown_ref" };
