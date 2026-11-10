@@ -12,7 +12,13 @@
  * Dry run by default; the local-DB guard runs in every mode; `--require-final`
  * is never enforced for rollback. The run directory is kept (audit trail).
  *
- *   npm run migrate:gtp:rollback -- --run-id <id> [--apply] [--confirm-host=<host>] [--include-edited] [--list-orphans] [--include-orphans] [--out dir]
+ *   npm run migrate:gtp:rollback -- --run-id <id> [--apply] [--confirm-host=<host>] [--include-edited] [--list-orphans] [--include-orphans] [--only-status archived,draft] [--out dir]
+ *
+ * `--only-status <list>` (owner decision 10-11-26, published-only gtp): deletes only journaled
+ * rows whose status recorded in the run's slug map AND whose current Central `workflowStatus`
+ * are both in the list (a row since published by an editor is never selected). All other rules
+ * (marker, tenant, untouched/--include-edited, media, tags) are unchanged. Cannot be combined
+ * with --include-orphans (orphans have no journal status).
  */
 import "../../lib/env";
 import path from "node:path";
@@ -24,6 +30,7 @@ import { parseCommand } from "./cli-spec";
 import { assertImportTenant, centralTarget, outDir, runMain } from "./cli-common";
 import { profile } from "./network-profile";
 import { untouched } from "./rollback-rules";
+import { matchesOnlyStatus, parseOnlyStatus } from "./gtp-status-policy";
 import { RunDir, RunDirError, RUN_MESSAGES, checkRunId, journaledArticleIds } from "./run-dir";
 
 type Doc = Record<string, unknown>;
@@ -47,6 +54,13 @@ async function main(): Promise<number> {
   const runIdRaw = a.get("run-id");
   if (!runIdRaw) throw new CliError("rollback: --run-id is required.");
   const runId = checkRunId(runIdRaw);
+  let onlyStatus: Set<string> | undefined;
+  try {
+    onlyStatus = parseOnlyStatus(a.get("only-status"));
+  } catch (err) {
+    throw new CliError(`rollback: ${(err as Error).message}`);
+  }
+  if (onlyStatus && a.has("include-orphans")) throw new CliError("rollback: --only-status cannot be combined with --include-orphans.");
   const central = centralTarget(a, a.apply);
   const tenantSlug = assertImportTenant();
   const out = outDir(a);
@@ -65,6 +79,9 @@ async function main(): Promise<number> {
     runId,
     target: central.banner,
     entries: entries.length,
+    onlyStatus: onlyStatus ? [...onlyStatus] : null,
+    keptOtherStatus: 0,
+    toDeleteByStatus: {} as Record<string, number>,
     toDelete: [] as string[],
     keptEdited: [] as string[],
     keptNotMarker: [] as string[],
@@ -94,11 +111,17 @@ async function main(): Promise<number> {
       rep.keptNotMarker.push(`${e.legacyId} (${e.slug})`);
       continue;
     }
+    if (!matchesOnlyStatus(e.status, doc.workflowStatus, onlyStatus)) {
+      rep.keptOtherStatus++;
+      continue;
+    }
     if (!a.has("include-edited") && !untouched(doc, e, tsBaseline)) {
       rep.keptEdited.push(`${e.legacyId} (${e.slug})`);
       continue;
     }
     rep.toDelete.push(`${e.legacyId} (${e.slug})`);
+    const sk = String(e.status);
+    rep.toDeleteByStatus[sk] = (rep.toDeleteByStatus[sk] ?? 0) + 1;
     deleteIds.push(doc.id as number | string);
   }
 
@@ -185,6 +208,10 @@ async function main(): Promise<number> {
   console.log(
     `[rollback] ${rep.mode.toUpperCase()} run ${runId}: entries ${rep.entries}; ${a.apply ? "deleted" : "would delete"} ${a.apply ? rep.deleted : rep.toDelete.length}; kept edited ${rep.keptEdited.length}; kept not-marker ${rep.keptNotMarker.length}; already gone ${rep.alreadyGone.length}; orphans ${rep.orphans.length}${a.apply ? ` (deleted ${rep.orphansDeleted})` : ""}; media ${a.apply ? `deleted ${rep.mediaDeleted}` : `would delete ${mediaToDelete.length}`}, kept referenced ${rep.mediaKeptReferenced}, kept adopted ${rep.mediaKeptAdopted}; tags deleted ${rep.tagsDeleted}; archived fallback ${rep.archivedFallback.length}; errors ${rep.errors.length}`,
   );
+  if (onlyStatus) {
+    console.log(`[rollback] --only-status ${[...onlyStatus].join(",")}: selected by status ${JSON.stringify(rep.toDeleteByStatus)}; kept (other status) ${rep.keptOtherStatus}`);
+    for (const x of rep.toDelete.slice(0, 20)) console.log(`[rollback]   sample: ${x}`);
+  }
   for (const o of rep.orphans) console.log(`[rollback] orphan: ${o}`);
   return rep.errors.length ? 2 : 0;
 }

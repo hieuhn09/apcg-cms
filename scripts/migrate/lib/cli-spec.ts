@@ -28,21 +28,21 @@ export const CLI_SPEC: Readonly<Record<Command, FlagSpec>> = {
   "validate-mapping": { mapping: "value", "mapping-overlay": "value", "structural-only": "bool", "require-final": "bool" },
   import: {
     mapping: "value", "mapping-overlay": "value", entity: "value", apply: "bool", "dry-run": "bool", limit: "value", ids: "value",
-    status: "value", since: "value", resume: "bool", "run-id": "value", batch: "value", "stop-after-failures": "value",
+    status: "value", since: "value", resume: "bool", "include-archived-drafts": "bool", "run-id": "value", batch: "value", "stop-after-failures": "value",
     "from-snapshot": "value", "snapshot-dir": "value", "confirm-host": "value", "require-final": "bool", rehearsal: "bool", out: "value",
   },
   "rewrite-links": { "run-id": "value", apply: "bool", "dry-run": "bool", "confirm-host": "value", "require-final": "bool", rehearsal: "bool", out: "value" },
   rollback: {
     "run-id": "value", apply: "bool", "dry-run": "bool", "confirm-host": "value", "include-edited": "bool", "list-orphans": "bool",
-    "include-orphans": "bool", out: "value",
+    "include-orphans": "bool", "only-status": "value", out: "value",
   },
   redirects: {
     "run-id": "value", "known-routes": "value", "emit-gtp-web": "value", "sitemap-urls": "value", "min-coverage": "value",
-    "mapping-overlay": "value", "require-final": "bool", rehearsal: "bool", mapping: "value", out: "value",
+    "mapping-overlay": "value", "require-final": "bool", rehearsal: "bool", mapping: "value", out: "value", "include-archived-drafts": "bool",
   },
   verify: {
     "run-id": "value", mapping: "value", "mapping-overlay": "value", "public-base": "value", base: "value", "confirm-host": "value",
-    "require-final": "bool", rehearsal: "bool", "read-token": "value", out: "value", "from-snapshot": "value", batch: "value",
+    "require-final": "bool", rehearsal: "bool", "read-token": "value", out: "value", "from-snapshot": "value", batch: "value", "include-archived-drafts": "bool",
   },
 };
 

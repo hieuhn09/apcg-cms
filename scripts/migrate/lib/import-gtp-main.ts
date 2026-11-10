@@ -35,7 +35,7 @@ import config from "../../../payload.config";
 import { pCreate, pFind } from "../../lib/payload-loose";
 import { CliError, intFlag } from "./args";
 import { parseCommand, resolveEntity, resolveRequireFinal, resolveTestHooks } from "./cli-spec";
-import { profile } from "./network-profile";
+import { isGtp, profile } from "./network-profile";
 import { assignByRule, bodyImageUrls } from "./network-authors";
 import { assertImportTenant, centralTarget, loadEffectiveMapping, openLegacy, outDir, resolvePath, runMain } from "./cli-common";
 import { assignAuthors, authorTotals, pillarsUnderTwoAuthors, type AuthorItem } from "./gtp-author-distribution";
@@ -56,6 +56,7 @@ import { missingR2Vars, r2GuardMessage } from "./r2-guard";
 import { normaliseKey } from "./normalise-path";
 import { assertOutDirSafe, writeFileSafe } from "./out-dir";
 import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId, type MediaMapEntry, type RunState, type SlugMapEntry } from "./run-dir";
+import { applyPublishedOnly, keepEventStatus } from "./gtp-status-policy";
 import { buildSlugPlan, pinPriorSlugs, planEventSlugs, type SlugPlanEntry } from "./slug-plan";
 
 type Doc = Record<string, unknown>;
@@ -184,6 +185,11 @@ async function main(): Promise<number> {
   const idsFilter = a.get("ids") ? new Set((a.get("ids") as string).split(",").map((s) => s.trim().toLowerCase())) : undefined;
   const statusFilter = a.get("status") ? new Set((a.get("status") as string).split(",").map((s) => s.trim().toLowerCase())) : undefined;
   const since = a.get("since");
+  // Owner decision 10-11-26 (supersedes OD-8): gtp imports PUBLISHED legacy rows only; archived and
+  // draft rows (and inactive events) are skipped with a counted reason. --include-archived-drafts restores the old behaviour.
+  const publishedOnly = isGtp() && !a.has("include-archived-drafts");
+  if (!publishedOnly && isGtp()) console.log("[import] --include-archived-drafts: archived and draft legacy rows WILL be imported (old behaviour).");
+  const decideStatus = (raw: unknown) => applyPublishedOnly(mapStatus(raw, m), publishedOnly);
   if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new CliError("import: --since must be YYYY-MM-DD.");
 
   const out = outDir(a);
@@ -272,7 +278,7 @@ async function main(): Promise<number> {
     return rows.map(toLegacyEvent);
   })() : [];
   if (!plan) {
-    const articlePlan = buildSlugPlan(planRows, m);
+    const articlePlan = buildSlugPlan(planRows.filter((r) => decideStatus(r.status).kind === "import"), m);
     const existingSlugs = new Set((await findAll(payload, "articles", { tenant: { equals: tenantId } }, { draft: true, select: { slug: true } })).map((d) => String(d.slug)));
     const allEvents = [];
     if (m.events.enabled) for await (const p of reader.pages("events", "all", 500)) allEvents.push(...p.map(toLegacyEvent));
@@ -295,7 +301,7 @@ async function main(): Promise<number> {
       for (const row of page) {
         const legacyId = String(row.id);
         if (str(row.section) === "events-awards" && str(row.subsection) === "industry-calendar") cal.push({ title: enText(row.title), date: isoOrNull(row.published_at)?.slice(0, 10) ?? null, legacyId });
-        if (mapStatus(row.status, m).kind !== "import" || !planById.has(legacyId)) continue;
+        if (decideStatus(row.status).kind !== "import" || !planById.has(legacyId)) continue;
         const tx = resolveTaxonomy(row.section, row.subsection, m);
         if (!tx.ok || !pillarId.has(tx.t.pillar) || (tx.t.subSection && !subId.has(`${tx.t.pillar}/${tx.t.subSection}`)) || (SINGLE_HOME.has(tx.t.pillar) && tx.t.subSection)) continue;
         const countriesRaw = Array.isArray(row.countries) ? row.countries.map((x) => String(x ?? "").trim().toLowerCase()).filter(Boolean) : [];
@@ -554,7 +560,7 @@ async function main(): Promise<number> {
           if (limit !== undefined && considered >= limit) break outer;
           considered++;
           report.seen++;
-          const sd = mapStatus(row.status, m);
+          const sd = decideStatus(row.status);
           if (sd.kind !== "import") {
             bump(report.rejects, sd.kind === "skip" ? `skip: ${sd.reason}` : `reject: ${sd.reason}`);
             rejectsLines.push(JSON.stringify({ legacyId, kind: sd.kind, reason: sd.reason }));
@@ -718,6 +724,11 @@ async function main(): Promise<number> {
           continue;
         }
         const status = eventStatus(e);
+        if (!keepEventStatus(status, publishedOnly)) {
+          bump(report.rejects, `skip: event status ${status} (published-only)`);
+          rejectsLines.push(JSON.stringify({ legacyId, kind: "skip", reason: `event status ${status} (published-only)` }));
+          continue;
+        }
         const entryBase = {
           legacyId, kind: "event" as const, slug: pe.slug, status, legacyCreatedAt: null, legacyUpdatedAt: null,
           pillar: "events-awards", subSection: "industry-calendar", internalLinkRewritable: false,
@@ -815,7 +826,7 @@ async function main(): Promise<number> {
   const canon = new Map<string, string[]>();
   for await (const page of reader.pages("articles", ["id", "source_url", "status", "created_at"], 500)) {
     for (const r of page) {
-      if (mapStatus(r.status, m).kind !== "import" || !str(r.source_url)) continue;
+      if (decideStatus(r.status).kind !== "import" || !str(r.source_url)) continue;
       const c = canonicalSourceUrl(str(r.source_url));
       canon.set(c, [...(canon.get(c) ?? []), String(r.id)]);
     }
