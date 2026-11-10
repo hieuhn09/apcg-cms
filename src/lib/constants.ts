@@ -106,16 +106,33 @@ export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
 };
 
 /**
+ * Engine-blocked pillars that are NOT single-home but that editors may still
+ * choose as the PRIMARY pillar from the hub (APCGHub composer). The engine stays
+ * blocked (intake keeps `isEngineBlockedPillar`), and they stay refused as a
+ * SECONDARY section from the hub too.
+ *
+ * GCV `exclusive` (owner decision 10-11-26): the hand-curated Exclusive pillar
+ * is written by editors, and the hub is now where editors write. Not
+ * single-home: sub-section rule, secondary sections and a REQUIRED author apply.
+ */
+export const HUB_WRITABLE_BLOCKED_PILLARS: Record<string, string[]> = {
+  gcv: ["exclusive"],
+};
+
+/**
  * True when the HUB may not write into `pillarSlug` for `tenantSlug` (hub
  * Pressroom authoring, 05-11-26, owner decision): every engine-blocked pillar
  * EXCEPT the tenant's single-home pillars (Pressroom / Press Room), which
- * editors post from the hub. Engine intake keeps `isEngineBlockedPillar`.
- * Same trim + lower-case comparison on both lists.
+ * editors post from the hub, and EXCEPT `HUB_WRITABLE_BLOCKED_PILLARS`
+ * (GCV `exclusive`, 10-11-26). Engine intake keeps `isEngineBlockedPillar`.
+ * Same trim + lower-case comparison on every list.
  */
 export function isHubBlockedPillar(tenantSlug: string | undefined | null, pillarSlug: string): boolean {
   if (!isEngineBlockedPillar(tenantSlug, pillarSlug)) return false;
   const want = normalizeEngineBlockedSlug(pillarSlug);
-  return !(SINGLE_HOME_PILLARS[tenantSlug as string] ?? []).some((s) => normalizeEngineBlockedSlug(s) === want);
+  const t = tenantSlug as string;
+  const allowed = [...(SINGLE_HOME_PILLARS[t] ?? []), ...(HUB_WRITABLE_BLOCKED_PILLARS[t] ?? [])];
+  return !allowed.some((s) => normalizeEngineBlockedSlug(s) === want);
 }
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */

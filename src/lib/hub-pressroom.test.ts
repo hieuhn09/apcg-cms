@@ -1,6 +1,7 @@
 /**
  * Hub Pressroom authoring (05-11-26): single-home pillars are hub-writable as primary,
- * every other engine-blocked pillar stays refused, the engine gate is unchanged.
+ * GCV `exclusive` too (HUB_WRITABLE_BLOCKED_PILLARS, 10-11-26); every other
+ * engine-blocked pillar stays refused, the engine gate is unchanged.
  * FAKE Payload only; no database.   npm run test:hub-pressroom
  */
 import { before, describe, it } from "node:test";
@@ -12,7 +13,7 @@ import type { Payload } from "payload";
 process.env.DATABASE_URL ??= "postgres://pressroom-unit@127.0.0.1:1/no_db";
 process.env.PAYLOAD_SECRET ??= "pressroom-unit-placeholder";
 
-import { ENGINE_BLOCKED_PILLARS, SINGLE_HOME_PILLARS, isEngineBlockedPillar, isHubBlockedPillar } from "./constants";
+import { ENGINE_BLOCKED_PILLARS, HUB_WRITABLE_BLOCKED_PILLARS, SINGLE_HOME_PILLARS, isEngineBlockedPillar, isHubBlockedPillar } from "./constants";
 
 type Doc = Record<string, unknown>;
 let pub: typeof import("./hub-author-publish-core");
@@ -49,11 +50,22 @@ const TAX = {
 const base: Doc = { title: "T", body: { root: { children: [{ type: "paragraph", children: [{ type: "text", text: "x" }] }] } }, slug: "t", readMin: 2 };
 
 describe("isHubBlockedPillar", () => {
-  it("every single-home pillar is hub-writable; every other engine-blocked pillar stays blocked", () => {
+  it("single-home + hub-writable pillars are hub-writable; every other engine-blocked pillar stays blocked", () => {
     for (const [t, list] of Object.entries(ENGINE_BLOCKED_PILLARS)) {
-      for (const s of list) assert.equal(isHubBlockedPillar(t, s), !(SINGLE_HOME_PILLARS[t] ?? []).includes(s), `${t}/${s}`);
+      const open = [...(SINGLE_HOME_PILLARS[t] ?? []), ...(HUB_WRITABLE_BLOCKED_PILLARS[t] ?? [])];
+      for (const s of list) assert.equal(isHubBlockedPillar(t, s), !open.includes(s), `${t}/${s}`);
     }
-    assert.equal(isHubBlockedPillar("gcv", "exclusive"), true);
+    // GCV Exclusive (owner decision 10-11-26): hub-writable as primary, engine still blocked.
+    assert.equal(isHubBlockedPillar("gcv", "exclusive"), false);
+    assert.equal(isHubBlockedPillar("gcv", " Exclusive "), false);
+    assert.equal(isEngineBlockedPillar("gcv", "exclusive"), true);
+    // every hub-writable entry is engine-blocked (else the list is meaningless) and not single-home
+    for (const [t, list] of Object.entries(HUB_WRITABLE_BLOCKED_PILLARS)) {
+      for (const s of list) {
+        assert.equal(isEngineBlockedPillar(t, s), true, `${t}/${s}`);
+        assert.equal((SINGLE_HOME_PILLARS[t] ?? []).includes(s), false, `${t}/${s}`);
+      }
+    }
     assert.equal(isHubBlockedPillar("agr", "course-reviews"), true);
     assert.equal(isHubBlockedPillar("vowasia", "real-weddings"), true);
     assert.equal(isHubBlockedPillar("gtp", "events-awards"), true);
@@ -71,9 +83,12 @@ describe("isHubBlockedPillar", () => {
 
 describe("resolvePillar", () => {
   const p = () => fakePayload(TAX);
-  it("primary pressroom ok, primary exclusive blocked", async () => {
+  it("primary pressroom ok, primary exclusive ok (10-11-26)", async () => {
     assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "pressroom"), { ok: true, id: 1 });
-    assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "exclusive"), { ok: false, code: "blocked_pillar" });
+    assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "exclusive"), { ok: true, id: 2 });
+  });
+  it("secondary exclusive still blocked", async () => {
+    assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "exclusive", "secondary"), { ok: false, code: "blocked_pillar" });
   });
   it("secondary pressroom still blocked", async () => {
     assert.deepEqual(await refs.resolvePillar(p(), { id: 1, slug: "gcv" }, "pressroom", "secondary"), { ok: false, code: "blocked_pillar" });
@@ -96,8 +111,14 @@ describe("checkPublishable", () => {
   it("ordinary pillar still needs an author", async () => {
     assert.equal((await run({ pillar: 3, subSection: 30, author: null })).authorId, "required");
   });
-  it("exclusive (non-single-home engine-blocked) still blocked_pillar", async () => {
-    assert.equal((await run({ pillar: 2, author: 5 })).pillarSlug, "blocked_pillar");
+  it("exclusive as primary publishes clean with an author (hub-writable, 10-11-26)", async () => {
+    assert.deepEqual(await run({ pillar: 2, author: 5 }), {});
+  });
+  it("exclusive is not single-home: author still required", async () => {
+    assert.equal((await run({ pillar: 2, author: null })).authorId, "required");
+  });
+  it("exclusive as a secondary row still blocked_pillar", async () => {
+    assert.equal((await run({ pillar: 3, subSection: 30, author: 5, secondarySections: [{ pillar: 2 }] })).secondary, "blocked_pillar");
   });
   it("pressroom with sub-section / secondary / exclusive ⇒ single_home codes", async () => {
     const f = await run({ pillar: 1, subSection: 30, secondarySections: [{ pillar: 3 }], exclusive: true });
