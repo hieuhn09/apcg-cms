@@ -186,8 +186,10 @@ test("parseLiveBody rejects tenant, actor, expectedVersion, fields and __proto__
 });
 
 describe("HUB_LIVE_FIELD_KEYS (D4)", () => {
-  it("is HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption — exactly 16 keys (pinnedUntil added 05-11-26)", () => {
+  it("is HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption — exactly 17 keys (pinnedUntil 05-11-26, heroFocal 10-11-26)", () => {
     assert.deepEqual([...HUB_LIVE_FIELD_KEYS], [...DERIVED_LIVE_FIELD_KEYS]);
-    assert.equal(HUB_LIVE_FIELD_KEYS.length, 16);
+    assert.equal(HUB_LIVE_FIELD_KEYS.length, 17);
+    // heroFocal is live-editable (focal only); the hero image itself stays locked.
+    assert.equal((HUB_LIVE_FIELD_KEYS as readonly string[]).indexOf("heroFocal"), (HUB_LIVE_FIELD_KEYS as readonly string[]).indexOf("sponsor") + 1);
   });
 });

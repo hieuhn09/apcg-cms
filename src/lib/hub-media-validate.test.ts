@@ -467,8 +467,14 @@ describe("validateMediaFile with direct-upload limits (opt-in only)", () => {
     const doc = { id: 1, alt: "a", credit: null, mimeType: "image/png", width: 1, height: 2, filesize: 3, url: "/u", secret: "x", sizes: { thumbnail: { url: "/t", width: 4, height: 5 }, card: { width: 9 } } };
     assert.deepEqual(m.mediaResponseBody(doc), {
       ok: true,
-      media: { id: 1, alt: "a", credit: null, mimeType: "image/png", width: 1, height: 2, filesize: 3, url: "/u", sizes: { thumbnail: { url: "/t", width: 4, height: 5 } } },
+      // focalX / focalY added 10-11-26 (hero focal point, P1.6): null when the doc has none.
+      media: { id: 1, alt: "a", credit: null, mimeType: "image/png", width: 1, height: 2, filesize: 3, url: "/u", focalX: null, focalY: null, sizes: { thumbnail: { url: "/t", width: 4, height: 5 } } },
     });
+    const withFocal = m.mediaResponseBody({ ...doc, focalX: 30, focalY: 70 }).media;
+    assert.deepEqual([withFocal.focalX, withFocal.focalY], [30, 70]);
+    assert.deepEqual(Object.keys(withFocal), ["id", "alt", "credit", "mimeType", "width", "height", "filesize", "url", "focalX", "focalY", "sizes"]);
+    const nonNum = m.mediaResponseBody({ ...doc, focalX: "30", focalY: Number.NaN }).media;
+    assert.deepEqual([nonNum.focalX, nonNum.focalY], [null, null]);
     assert.deepEqual(["image/jpeg", "image/png", "image/webp", "image/gif"].map((x) => m.storedExt(x as never)), ["jpg", "png", "webp", "png"]);
   });
 });
