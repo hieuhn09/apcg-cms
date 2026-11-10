@@ -9,12 +9,18 @@ import assert from "node:assert/strict";
 
 import {
   DERIVED_LIVE_FIELD_KEYS,
+  HUB_LIVE_EDITABLE_FLAGS,
   HUB_LIVE_FIELD_KEYS,
+  HUB_LIVE_WIDE_FIELD_KEYS,
+  HUB_LIVE_WIDE_FLAGS,
+  isLiveWideTenant,
   liveDiffKeys,
   liveEditTenants,
   liveGateReason,
+  liveLockedReason,
   livePostWriteCheck,
   liveValueEqual,
+  liveWideTenants,
   parseLiveBody,
 } from "./hub-author-live-pure";
 
@@ -23,6 +29,7 @@ type Doc = Record<string, unknown>;
 const MAIN: Doc = { id: 7, origin: "manual", workflowStatus: "published", _status: "published", version: 4, engineDraftId: null, tenant: 1 };
 const LATEST: Doc = { ...MAIN };
 const gate = (main: Doc | null, latest: Doc | null, isHubAuthored = true) => liveGateReason({ main, latest, isHubAuthored });
+const wideGate = (main: Doc | null, latest: Doc | null, isHubAuthored = false) => liveGateReason({ main, latest, isHubAuthored, wide: true });
 
 const ACTOR = { email: "ed@example.invalid", role: "editor" };
 const body = (fields: unknown, extra: Doc = {}) => ({ tenant: "gcv", expectedVersion: 4, actor: ACTOR, fields, ...extra });
@@ -56,10 +63,92 @@ test("live body with slug key is rejected with slug_locked", () => {
   const locked = { ok: false, status: 422, body: { ok: false, status: "not_live_editable", reason: "slug_locked" } };
   assert.deepEqual(parseLiveBody(body({ slug: "new-slug" })), locked);
   assert.deepEqual(parseLiveBody(body({ slug: "same-as-stored", title: "T" })), locked);
-  assert.deepEqual(parseLiveBody(body({ heroImageId: 3 })), { ok: false, status: 422, body: { ok: false, status: "not_live_editable", reason: "media_locked" } });
-  assert.deepEqual(parseLiveBody(body({ leadImageCaption: null })), { ok: false, status: 422, body: { ok: false, status: "not_live_editable", reason: "media_locked" } });
-  // slug wins over the media / flags locks
+  // slug wins over the media / flags keys (the media / flags locks moved after the tenant switch: liveLockedReason)
   assert.deepEqual(parseLiveBody(body({ heroImageId: 3, slug: "x", flags: { breaking: true } })), locked);
+});
+
+test("parseLiveBody no longer locks media or flags: heroImageId, leadImageCaption and the four wide flags parse", () => {
+  const ok = parseLiveBody(body({ heroImageId: 3, leadImageCaption: " Cap ", flags: { breaking: true, aiAssisted: false, sponsored: true, affiliate: false } }));
+  assert.equal(ok.ok, true);
+  if (ok.ok) {
+    assert.deepEqual([ok.value.heroImageId, ok.value.leadImageCaption], [3, "Cap"]);
+    assert.deepEqual(ok.value.flags, { breaking: true, aiAssisted: false, sponsored: true, affiliate: false });
+    assert.deepEqual(ok.value.present, ["heroImageId", "leadImageCaption", "flags"]);
+  }
+  const clear = parseLiveBody(body({ heroImageId: null, leadImageCaption: null }));
+  assert.equal(clear.ok && clear.value.heroImageId === null && clear.value.leadImageCaption === null, true);
+  // Value errors of the PATCH parser still apply to the media keys.
+  const bad = parseLiveBody(body({ heroImageId: "x" }));
+  assert.equal(!bad.ok && bad.status === 422 && (bad.body.fields as Doc).heroImageId !== undefined, true);
+});
+
+test("liveLockedReason locks media then flags unless the tenant is wide", () => {
+  assert.equal(liveLockedReason({ title: "T" }, false), null);
+  assert.equal(liveLockedReason({ heroImageId: 3 }, false), "media_locked");
+  assert.equal(liveLockedReason({ heroImageId: null }, false), "media_locked");
+  assert.equal(liveLockedReason({ leadImageCaption: null }, false), "media_locked");
+  // media wins over flags (the P5.4 order)
+  assert.equal(liveLockedReason({ heroImageId: 3, flags: { breaking: true } }, false), "media_locked");
+  for (const f of ["breaking", "aiAssisted", "sponsored", "affiliate"]) {
+    // present even with the stored value ⇒ locked
+    assert.equal(liveLockedReason({ flags: { [f]: false } }, false), "flags_locked", f);
+    assert.equal(liveLockedReason({ flags: { deepDive: true, [f]: true } }, false), "flags_locked", f);
+    assert.equal(liveLockedReason({ flags: { [f]: true } }, true), null, f);
+  }
+  assert.equal(liveLockedReason({ flags: { deepDive: true, longHaul: false, pinnedToLatest: true, exclusive: false } }, false), null);
+  assert.equal(liveLockedReason({ heroImageId: 3, leadImageCaption: "c" }, true), null);
+  assert.equal(liveLockedReason({}, true), null);
+  assert.deepEqual([...HUB_LIVE_WIDE_FIELD_KEYS], ["heroImageId", "leadImageCaption"]);
+  assert.deepEqual([...HUB_LIVE_WIDE_FLAGS], ["breaking", "aiAssisted", "sponsored", "affiliate"]);
+  assert.deepEqual([...HUB_LIVE_EDITABLE_FLAGS], ["deepDive", "longHaul", "pinnedToLatest", "exclusive"]);
+});
+
+test("wide live gate accepts engine and CMS hand-made articles and keeps every other reason", () => {
+  // engine article, published, not hub-authored, with an engineDraftId ⇒ editable when wide
+  const ENGINE = { ...MAIN, origin: "engine", engineDraftId: "content-engine:gcv:1" };
+  assert.equal(wideGate(ENGINE, { ...ENGINE }), null);
+  // CMS hand-made (lastEngine null ⇒ isHubAuthored false)
+  assert.equal(wideGate(MAIN, LATEST), null);
+  // hub-authored stays editable
+  assert.equal(wideGate(MAIN, LATEST, true), null);
+  // import is still refused (origin)
+  assert.equal(wideGate({ ...MAIN, origin: "import" }, LATEST), "origin");
+  assert.equal(wideGate(null, LATEST), "origin");
+  // scheduled / status / draft_diverged still win, in the D2 order
+  assert.equal(wideGate({ ...ENGINE, workflowStatus: "scheduled", _status: "draft" }, ENGINE), "scheduled");
+  assert.equal(wideGate(ENGINE, { ...ENGINE, workflowStatus: "scheduled" }), "scheduled");
+  assert.equal(wideGate({ ...ENGINE, workflowStatus: "hidden" }, ENGINE), "status");
+  assert.equal(wideGate({ ...ENGINE, _status: "draft" }, ENGINE), "status");
+  assert.equal(wideGate(ENGINE, { ...ENGINE, version: 5 }), "draft_diverged");
+  assert.equal(wideGate(ENGINE, null), "draft_diverged");
+  // not wide: unchanged P5.4 answers
+  assert.equal(gate(ENGINE, { ...ENGINE }), "origin");
+  assert.equal(liveGateReason({ main: ENGINE, latest: ENGINE, isHubAuthored: true, wide: false }), "origin");
+  assert.equal(gate(MAIN, LATEST, false), "not_hub_authored");
+});
+
+test("liveWideTenants matches exact CMS slugs only and is read on every call", () => {
+  const ok = (raw: string | undefined) => {
+    const env: Record<string, string | undefined> = raw === undefined ? {} : { HUB_LIVE_EDIT_WIDE_TENANTS: raw };
+    return isLiveWideTenant("world-travel-brief", liveWideTenants(env));
+  };
+  for (const raw of [undefined, "", " ", "wtb", "*", "WORLD-TRAVEL-BRIEF"]) assert.equal(ok(raw), false, String(raw));
+  assert.equal(ok("gcv,,world-travel-brief"), true);
+  assert.equal(ok("world-travel-brief ,gcv"), true);
+  // the narrow switch does not turn the wide one on
+  assert.deepEqual(liveWideTenants({ HUB_LIVE_EDIT_TENANTS: "gcv" }), []);
+  const prev = process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+  try {
+    process.env.HUB_LIVE_EDIT_WIDE_TENANTS = "gcv";
+    assert.deepEqual(liveWideTenants(), ["gcv"]);
+    process.env.HUB_LIVE_EDIT_WIDE_TENANTS = "dtw";
+    assert.deepEqual(liveWideTenants(), ["dtw"]);
+    delete process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+    assert.deepEqual(liveWideTenants(), []);
+  } finally {
+    if (prev === undefined) delete process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+    else process.env.HUB_LIVE_EDIT_WIDE_TENANTS = prev;
+  }
 });
 
 test("post-write full-field diff detects a slipped draft on a translation tenant where the version leg cannot", () => {
@@ -133,12 +222,7 @@ test("liveEditTenants matches exact CMS slugs only across the eight env vectors"
   }
 });
 
-test("flags.breaking, flags.aiAssisted, flags.sponsored or flags.affiliate present is rejected flags_locked even when equal to stored", () => {
-  const locked = { ok: false, status: 422, body: { ok: false, status: "not_live_editable", reason: "flags_locked" } };
-  for (const f of ["breaking", "aiAssisted", "sponsored", "affiliate"]) {
-    assert.deepEqual(parseLiveBody(body({ flags: { [f]: false } })), locked, f);
-    assert.deepEqual(parseLiveBody(body({ flags: { deepDive: true, [f]: true } })), locked, f);
-  }
+test("the four always-editable flags parse as before", () => {
   const ok = parseLiveBody(body({ flags: { deepDive: true, longHaul: false } }));
   assert.equal(ok.ok, true);
   if (ok.ok) assert.deepEqual(ok.value.flags, { deepDive: true, longHaul: false });
@@ -186,8 +270,9 @@ test("parseLiveBody rejects tenant, actor, expectedVersion, fields and __proto__
 });
 
 describe("HUB_LIVE_FIELD_KEYS (D4)", () => {
-  it("is HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption — exactly 16 keys (pinnedUntil added 05-11-26)", () => {
+  it("is HUB_DRAFT_FIELD_KEYS minus slug — exactly 18 keys (heroImageId / leadImageCaption parse; liveLockedReason locks them per tenant)", () => {
     assert.deepEqual([...HUB_LIVE_FIELD_KEYS], [...DERIVED_LIVE_FIELD_KEYS]);
-    assert.equal(HUB_LIVE_FIELD_KEYS.length, 16);
+    assert.equal(HUB_LIVE_FIELD_KEYS.length, 18);
+    assert.equal((HUB_LIVE_FIELD_KEYS as readonly string[]).includes("slug"), false);
   });
 });

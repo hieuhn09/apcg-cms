@@ -10884,9 +10884,10 @@ async function check9Unit(expect: (label: string, actual: unknown, wanted: unkno
   const input = await import("../src/lib/hub-author-input");
   const limits = await import("../src/lib/hub-author-limits");
   const core = await import("../src/lib/hub-author-live-core");
-  expect("U-1: HUB_LIVE_FIELD_KEYS = HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption (15)", [purem.HUB_LIVE_FIELD_KEYS.length, [...purem.HUB_LIVE_FIELD_KEYS]], [15, input.HUB_DRAFT_FIELD_KEYS.filter((k) => !["slug", "heroImageId", "leadImageCaption"].includes(k))]);
+  // Wide scope (hub-live-edit-widen 10-11-26): heroImageId / leadImageCaption parse; locked per tenant by liveLockedReason.
+  expect("U-1: HUB_LIVE_FIELD_KEYS = HUB_DRAFT_FIELD_KEYS minus slug (18)", [purem.HUB_LIVE_FIELD_KEYS.length, [...purem.HUB_LIVE_FIELD_KEYS]], [18, input.HUB_DRAFT_FIELD_KEYS.filter((k) => k !== "slug")]);
   expect("U-2: HUB_FIELD_CODES still 23 (no new code, hard stop 9)", limits.HUB_FIELD_CODES.length, 23);
-  expect("U-3: LIVE_KEY_COLUMNS covers exactly the 15 live keys", Object.keys(core.LIVE_KEY_COLUMNS).sort(), [...purem.HUB_LIVE_FIELD_KEYS].sort());
+  expect("U-3: LIVE_KEY_COLUMNS covers exactly the 18 live keys", Object.keys(core.LIVE_KEY_COLUMNS).sort(), [...purem.HUB_LIVE_FIELD_KEYS].sort());
   const env = (raw: string | undefined) => purem.liveEditTenants(raw === undefined ? {} : { HUB_LIVE_EDIT_TENANTS: raw }).includes("world-travel-brief");
   expect("U-4: liveEditTenants — 8 env vectors (unset, '', ' ', wtb, *, WORLD-TRAVEL-BRIEF, 'gcv,,world-travel-brief', 'world-travel-brief ,gcv')", [undefined, "", " ", "wtb", "*", "WORLD-TRAVEL-BRIEF", "gcv,,world-travel-brief", "world-travel-brief ,gcv"].map(env), [false, false, false, false, false, false, true, true]);
   const g = (main: Doc, latest: Doc, hub = true) => purem.liveGateReason({ main, latest, isHubAuthored: hub });
@@ -10895,13 +10896,22 @@ async function check9Unit(expect: (label: string, actual: unknown, wanted: unkno
     g(M, M), g({ ...M, origin: "engine" }, M), g({ ...M, workflowStatus: "scheduled" }, M), g(M, { ...M, workflowStatus: "scheduled" }), g({ ...M, workflowStatus: "hidden" }, M), g({ ...M, workflowStatus: "archived" }, M),
     g({ ...M, workflowStatus: "draft", _status: "draft" }, M), g(M, { ...M, version: 4 }), g(M, { ...M, _status: "draft" }), g(M, M, false), g({ ...M, engineDraftId: "x" }, M),
   ], [null, "origin", "scheduled", "scheduled", "status", "status", "status", "draft_diverged", "draft_diverged", "not_hub_authored", "not_hub_authored"]);
+  const gw = (main: Doc, latest: Doc) => purem.liveGateReason({ main, latest, isHubAuthored: false, wide: true });
+  const E = { ...M, origin: "engine", engineDraftId: "x" };
+  expect("U-5b: wide liveGateReason (engine ok, CMS-hand ok, import origin, scheduled, hidden, diverged)", [
+    gw(E, E), gw(M, M), gw({ ...M, origin: "import" }, M), gw(E, { ...E, workflowStatus: "scheduled" }), gw({ ...E, workflowStatus: "hidden" }, E), gw(E, { ...E, version: 4 }),
+  ], [null, null, "origin", "scheduled", "status", "draft_diverged"]);
   const pl = (fields: unknown) => {
     const r = purem.parseLiveBody({ tenant: "gcv", expectedVersion: 3, actor: { email: "a@b.co", role: "editor" }, fields });
     return r.ok ? "ok" : [r.status, r.body.status, (r.body as Doc).reason ?? (r.body as Doc).field ?? null];
   };
-  expect("U-6: parseLiveBody locks: slug / heroImageId / leadImageCaption / flags.breaking|aiAssisted|sponsored|affiliate; deepDive editable", [
+  expect("U-6: parseLiveBody locks slug only; heroImageId / leadImageCaption / the four wide flags / deepDive parse", [
     pl({ slug: "x" }), pl({ heroImageId: 1 }), pl({ leadImageCaption: "c" }), pl({ flags: { breaking: false } }), pl({ flags: { aiAssisted: true } }), pl({ flags: { sponsored: false } }), pl({ flags: { affiliate: false } }), pl({ flags: { deepDive: true } }),
-  ], [[422, "not_live_editable", "slug_locked"], [422, "not_live_editable", "media_locked"], [422, "not_live_editable", "media_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], [422, "not_live_editable", "flags_locked"], "ok"]);
+  ], [[422, "not_live_editable", "slug_locked"], "ok", "ok", "ok", "ok", "ok", "ok", "ok"]);
+  const lk = (fields: Doc, wide: boolean) => purem.liveLockedReason(fields, wide);
+  expect("U-6b: liveLockedReason (non-wide: media then flags; wide: none)", [
+    lk({ heroImageId: 1 }, false), lk({ leadImageCaption: "c" }, false), lk({ flags: { breaking: false } }, false), lk({ flags: { affiliate: true } }, false), lk({ flags: { deepDive: true } }, false), lk({ heroImageId: 1, flags: { breaking: true } }, true),
+  ], ["media_locked", "media_locked", "flags_locked", "flags_locked", null, null]);
   expect("U-7: parseLiveBody structure 400s (fields.tenant / fields.actor / fields.__proto__ / missing actor)", [
     pl({ tenant: "x" }), pl({ actor: {} }), pl(JSON.parse('{"__proto__":{"a":1}}')),
     (() => { const r = purem.parseLiveBody({ tenant: "gcv", expectedVersion: 3, fields: {} }); return r.ok ? "ok" : [r.status, (r.body as Doc).field]; })(),
@@ -11597,7 +11607,10 @@ async function check9() {
       expect("P17-3: the error branches above wrote 0 integration_error rows", (await interr()) - i0, 0);
     });
 
-    // ══ P18 — same codes as PATCH (parser), except the 7 locked keys ══════
+    // ══ P18 — same codes as PATCH (parser), except the locked keys ══════
+    // Wide scope (10-11-26): the media / flags locks run AFTER the PATCH parser and the tenant
+    // switches, so a MALFORMED value of a media key / wide flag now answers the PATCH code (422
+    // invalid); a well-formed one on a non-wide tenant still answers media_locked / flags_locked.
     await group("P18", async () => {
       const x = await mkPublished("gcv");
       const v = x.version;
@@ -11629,6 +11642,10 @@ async function check9() {
         if (exp.ok || want !== have) mismatches.push([name, want, have]);
       }
       expect("P18-1: (AC30) the PATCH parser vectors (javascript:, BiDi, C0, `![`, …) through /live ⇒ the SAME status + body as the PATCH parser", mismatches, []);
+      const patchCode = (f: Doc) => {
+        const exp = input.parseUpdateBody({ ...f, tenant: "gcv", expectedVersion: v, actor: P9_ACTOR });
+        return exp.ok ? "ok" : [exp.status, exp.body];
+      };
       const locked = [
         pair(await live(x.id, "gcv", v, { slug: "Bad Slug" })),
         pair(await live(x.id, "gcv", v, { heroImageId: "x" })),
@@ -11638,7 +11655,7 @@ async function check9() {
         pair(await live(x.id, "gcv", v, { flags: { sponsored: true } })),
         pair(await live(x.id, "gcv", v, { flags: { affiliate: true } })),
       ];
-      expect("P18-2: (CMS4-6) vectors touching the 7 locked keys ⇒ 422 not_live_editable (slug_locked / media_locked / flags_locked) instead of the PATCH code", locked, [NLE("slug_locked"), NLE("media_locked"), NLE("media_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked")]);
+      expect("P18-2: (CMS4-6, widened 10-11-26) slug ⇒ slug_locked; malformed media key / wide flag ⇒ the PATCH code; well-formed wide flags on a non-wide tenant ⇒ flags_locked", locked, [NLE("slug_locked"), patchCode({ heroImageId: "x" }), patchCode({ leadImageCaption: "a‮b" }), patchCode({ flags: { breaking: "x" } }), NLE("flags_locked"), NLE("flags_locked"), NLE("flags_locked")]);
       const miss = await Promise.all(["actor", "expectedVersion", "tenant"].map(async (k) => {
         const b: Doc = { tenant: "gcv", expectedVersion: v, actor: P9_ACTOR, fields: { dek: "x" } };
         delete b[k];
