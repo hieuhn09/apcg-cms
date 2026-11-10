@@ -37,6 +37,7 @@ import {
 } from "@/lib/hub-author-limits";
 import { hasBidi, hasForbiddenC0, hasLoneSurrogate, isWs, validateBodyPure } from "@/lib/hub-author-body";
 import { MEDIA_LEAD_CAPTION_MAX } from "@/lib/hub-author-refs";
+import { HERO_FOCAL_KEYS, parseHeroFocal, type HubHeroFocal } from "@/lib/hub-hero-focal-pure";
 
 export const HUB_FLAG_KEYS = ["aiAssisted", "breaking", "sponsored", "affiliate", "deepDive", "longHaul", "pinnedToLatest", "exclusive"] as const;
 export type HubFlagKey = (typeof HUB_FLAG_KEYS)[number];
@@ -62,6 +63,9 @@ export const HUB_DRAFT_FIELD_KEYS = [
   // APCGHub P5.3 (T5): hero image (media id of THIS tenant; null clears) + WTB lead caption.
   "heroImageId",
   "leadImageCaption",
+  // 10-11-26 (hero focal point, P1): {x, y} percent 0-100 on the hero MEDIA doc; null = centre (50/50).
+  // Kept next to the other image keys; HUB_LIVE_FIELD_KEYS keeps the same relative order.
+  "heroFocal",
   // 05-11-26: pin expiry (ISO UTC, future only; null clears). Meaningful while flags.pinnedToLatest.
   "pinnedUntil",
 ] as const;
@@ -105,6 +109,11 @@ export interface HubDraftFields {
   heroImageId?: number | null;
   /** P5.3 T5: hero caption (WTB), ≤ MEDIA_LEAD_CAPTION_MAX; null / "" = clear. */
   leadImageCaption?: string | null;
+  /**
+   * 10-11-26: the hero's focal point (written on the hero media doc AFTER the article save;
+   * never an article column, never in `changed`); null = back to the centre (50/50).
+   */
+  heroFocal?: HubHeroFocal | null;
   /** 05-11-26: `Articles.pinnedUntil` as ISO UTC (`…Z`), strictly in the future; null = clear (no expiry). */
   pinnedUntil?: string | null;
 }
@@ -149,6 +158,8 @@ function collectUnknownKeys(raw: Obj, allowed: readonly string[]): string[] {
     const v = raw[k];
     if (k === "flags" && isPlainObject(v)) {
       for (const fk of Object.keys(v)) if (!(HUB_FLAG_KEYS as readonly string[]).includes(fk)) out.push(`flags.${fk}`);
+    } else if (k === "heroFocal" && isPlainObject(v)) {
+      for (const hk of Object.keys(v)) if (!HERO_FOCAL_KEYS.includes(hk)) out.push(`heroFocal.${hk}`);
     } else if (k === "actor" && isPlainObject(v)) {
       for (const ak of Object.keys(v)) if (!HUB_ACTOR_KEYS.includes(ak)) out.push(`actor.${ak}`);
     } else if (k === "secondary" && Array.isArray(v)) {
@@ -493,6 +504,13 @@ function parseCommon(raw: unknown, mode: "create" | "update"): HubParseResult {
       if (r.ok) value.heroImageId = r.value;
       else fail("heroImageId", r.code);
     }
+  }
+
+  // heroFocal (10-11-26): {x, y} integers 0-100, or null (= centre). Codes: type / required / out_of_range.
+  if (has("heroFocal")) {
+    const r = parseHeroFocal(raw.heroFocal);
+    if (r.ok) value.heroFocal = r.value;
+    else fail("heroFocal", r.code);
   }
 
   // pinnedUntil (05-11-26): ISO UTC, must be in the future; null clears.

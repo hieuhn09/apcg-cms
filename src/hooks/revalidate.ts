@@ -40,7 +40,8 @@ export function tenantTag(tenantSlug: string, tag: string): string {
   return `${tenantSlug}:${tag}`;
 }
 
-async function postRevalidate(
+/** Exported 10-11-26 for the guarded Media focal hook (`src/hooks/media-focal-revalidate.ts`); unchanged. */
+export async function postRevalidate(
   payload: Payload,
   tenant: TenantDoc | null,
   body: Record<string, unknown>,

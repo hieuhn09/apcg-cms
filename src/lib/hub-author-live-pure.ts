@@ -16,7 +16,11 @@ import { lexicalTreesEqual } from "@/lib/hub-author-convert-core";
 
 type Doc = Record<string, unknown>;
 
-/** D4: the 15 keys a live edit may carry = HUB_DRAFT_FIELD_KEYS minus slug / heroImageId / leadImageCaption. */
+/**
+ * D4: the 17 keys a live edit may carry = HUB_DRAFT_FIELD_KEYS minus slug / heroImageId /
+ * leadImageCaption, in the SAME order (pinned against DERIVED_LIVE_FIELD_KEYS by test:hub-live).
+ * `heroFocal` (10-11-26) changes only the hero MEDIA doc's focal point, never the image itself.
+ */
 export const HUB_LIVE_FIELD_KEYS = [
   "title",
   "dek",
@@ -33,6 +37,7 @@ export const HUB_LIVE_FIELD_KEYS = [
   "coAuthorIds",
   "flags",
   "sponsor",
+  "heroFocal",
   "pinnedUntil",
 ] as const satisfies readonly HubDraftFieldKey[];
 export type HubLiveFieldKey = (typeof HUB_LIVE_FIELD_KEYS)[number];
