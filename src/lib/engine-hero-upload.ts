@@ -17,14 +17,19 @@
  *     header type must be allowed; the body is STREAMED through a counting reader and
  *     aborted at `maxBytes` (never buffered first; `content-length` is a hint only);
  *     magic bytes must match an allowed type; the sniffed type is what Media stores.
+ *     the decoded header must fit the per-type pixel cap (JPEG/PNG 50 MP, WebP 16.8 MP);
+ *     the DNS lookup is bounded by the same timeout; a generic header type
+ *     (`application/octet-stream` or none) is accepted when the sniff passes.
  *   Residual (accepted): DNS rebinding between the lookup and the connect.
  */
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import sharp from "sharp";
 import type { Payload } from "payload";
 import { scopedCreate } from "@/lib/scoped";
 import { buildHeroMediaData } from "@/lib/intake-hero-caption";
 import { isBlockedAddress, sniffImageType } from "@/lib/engine-hero-replace-pure";
+import { maxPixelsFor } from "@/lib/hub-direct-upload-pure";
 
 type Id = number | string;
 type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
@@ -33,6 +38,8 @@ export interface HeroUploadDeps {
   fetch?: FetchFn;
   /** Every address the host resolves to (default: `dns.lookup(host, {all:true})`). */
   resolveHost?: (host: string) => Promise<string[]>;
+  /** Decoded image size from the header (default: sharp `metadata()`); throws when undecodable. */
+  measure?: (data: Buffer) => Promise<{ width: number; height: number }>;
 }
 
 export interface HeroUploadOptions {
@@ -44,6 +51,12 @@ export interface HeroUploadOptions {
   allowLocal: boolean;
   /** Media filename from the sniffed extension (carries the `-r<token>` idempotency token). */
   filenameFor: (ext: string) => string;
+  /**
+   * Pixel cap per SNIFFED type (default `maxPixelsFor`: JPEG/PNG 50 MP, WebP 16.8 MP, the hub
+   * direct-upload caps). Checked on the decoded header before Media create, so a small file
+   * that decodes to a huge bitmap is refused (422 `hero_too_large`) instead of reaching sharp.
+   */
+  maxPixels?: (mime: string) => number;
 }
 
 export type HeroUploadCode = "invalid_hero_url" | "fetch_failed" | "hero_not_an_image" | "hero_too_large" | "upload_failed";
@@ -59,6 +72,25 @@ export interface HeroUploadArgs {
 }
 
 const defaultResolve = async (host: string): Promise<string[]> => (await lookup(host, { all: true })).map((a) => a.address);
+
+const defaultMeasure = async (data: Buffer): Promise<{ width: number; height: number }> => {
+  // `limitInputPixels: false`: only the header is read here; the cap is compared below.
+  const m = await sharp(data, { limitInputPixels: false, animated: false }).metadata();
+  if (!m.width || !m.height) throw new Error("no dimensions");
+  return { width: m.width, height: m.height };
+};
+
+/** Header types accepted when the magic-byte sniff decides the real type (L8). */
+const GENERIC_TYPES = new Set(["", "application/octet-stream"]);
+
+/** Reject after `ms` (the DNS lookup has no timeout of its own). */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timer = new Promise<never>((_, reject) => {
+    t = setTimeout(() => reject(new Error("timeout")), ms);
+  });
+  return Promise.race([p, timer]).finally(() => clearTimeout(t));
+}
 
 const fail = (code: HeroUploadCode, reason: string): HeroUploadResult => ({ ok: false, code, reason });
 
@@ -94,7 +126,7 @@ export async function uploadHeroMedia(payload: Payload, a: HeroUploadArgs, o: He
   if (!o.allowLocal) {
     let addrs: string[];
     try {
-      addrs = isIP(host) ? [host] : await (deps.resolveHost ?? defaultResolve)(host);
+      addrs = isIP(host) ? [host] : await withTimeout((deps.resolveHost ?? defaultResolve)(host), o.timeoutMs);
     } catch {
       return fail("fetch_failed", "host did not resolve");
     }
@@ -116,7 +148,7 @@ export async function uploadHeroMedia(payload: Payload, a: HeroUploadArgs, o: He
     return fail("fetch_failed", `hero fetch ${res.status}`);
   }
   const headerType = res.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
-  if (!o.allowedTypes.includes(headerType)) {
+  if (!o.allowedTypes.includes(headerType) && !(o.sniff && GENERIC_TYPES.has(headerType))) {
     await res.body?.cancel().catch(() => {});
     return fail("hero_not_an_image", `content type ${headerType || "missing"}`);
   }
@@ -138,6 +170,14 @@ export async function uploadHeroMedia(payload: Payload, a: HeroUploadArgs, o: He
     const sniffed = sniffImageType(buffer);
     if (!sniffed || !o.allowedTypes.includes(sniffed)) return fail("hero_not_an_image", "magic bytes do not match an allowed image type");
     mimetype = sniffed;
+    const cap = (o.maxPixels ?? maxPixelsFor)(sniffed);
+    let dims: { width: number; height: number };
+    try {
+      dims = await (deps.measure ?? defaultMeasure)(buffer);
+    } catch {
+      return fail("hero_not_an_image", "image could not be decoded");
+    }
+    if (dims.width * dims.height > cap) return fail("hero_too_large", `image over ${cap} pixels`);
   }
 
   const name = o.filenameFor(mimetype.split("/")[1] || "jpg");

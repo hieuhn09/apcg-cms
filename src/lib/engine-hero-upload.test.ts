@@ -4,13 +4,18 @@
  *
  *   npm run test:engine-hero
  */
-import { describe, it } from "node:test";
+import { before, describe, it } from "node:test";
+import sharp from "sharp";
 import assert from "node:assert/strict";
 import type { Payload } from "payload";
 
 import { uploadHeroLenient, uploadHeroMedia, type HeroUploadDeps } from "./engine-hero-upload";
 
-const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(60, 1)]);
+// A real (decodable) 1x1 JPEG: the strict path now reads the decoded header (M2).
+let JPEG: Buffer;
+before(async () => {
+  JPEG = await sharp({ create: { width: 1, height: 1, channels: 3, background: "#ffffff" } }).jpeg().toBuffer();
+});
 
 function fakePayload(opts: { createThrows?: boolean } = {}) {
   const creates: Array<Record<string, unknown>> = [];
@@ -140,6 +145,63 @@ describe("uploadHeroMedia (strict path)", () => {
   });
 });
 
+describe("uploadHeroMedia hardening (review M2 / L7 / L8)", () => {
+  const args = { tenantId: 3, url: "https://img.example/a.jpg", title: "T", slug: "s", credit: null, caption: null };
+  const dns = async () => ["93.184.216.34"];
+  it("decoded image over the per-type pixel cap -> hero_too_large, no Media", async () => {
+    const { payload, creates } = fakePayload();
+    const r = await uploadHeroMedia(payload, args, strictOpts, { fetch: (async () => res(JPEG)) as never, resolveHost: dns, measure: async () => ({ width: 10_000, height: 5_001 }) });
+    assert.ok(!r.ok && r.code === "hero_too_large", JSON.stringify(r));
+    assert.equal(creates.length, 0);
+  });
+  it("JPEG at exactly 50 MP passes; WebP over 16.8 MP fails (hub direct-upload caps)", async () => {
+    const { payload } = fakePayload();
+    const ok = await uploadHeroMedia(payload, args, strictOpts, { fetch: (async () => res(JPEG)) as never, resolveHost: dns, measure: async () => ({ width: 10_000, height: 5_000 }) });
+    assert.equal(ok.ok, true);
+    const webp = await sharp({ create: { width: 1, height: 1, channels: 3, background: "#fff" } }).webp().toBuffer();
+    const r = await uploadHeroMedia(payload, args, strictOpts, { fetch: (async () => res(webp, { type: "image/webp" })) as never, resolveHost: dns, measure: async () => ({ width: 5_000, height: 3_361 }) });
+    assert.ok(!r.ok && r.code === "hero_too_large");
+  });
+  it("real decode: a pixel-bomb PNG header is refused by the default measure", async () => {
+    const { payload, creates } = fakePayload();
+    const big = await sharp({ create: { width: 8_000, height: 7_000, channels: 3, background: "#000" } }).greyscale().png({ compressionLevel: 9, palette: true }).toBuffer();
+    const r = await uploadHeroMedia(payload, args, { ...strictOpts, maxBytes: 5_000_000 }, { fetch: (async () => res(big, { type: "image/png" })) as never, resolveHost: dns });
+    assert.ok(!r.ok && r.code === "hero_too_large", JSON.stringify(r));
+    assert.equal(creates.length, 0);
+  });
+  it("magic bytes right but undecodable -> hero_not_an_image", async () => {
+    const { payload } = fakePayload();
+    const junk = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(60, 1)]);
+    const r = await uploadHeroMedia(payload, args, strictOpts, { fetch: (async () => res(junk)) as never, resolveHost: dns });
+    assert.ok(!r.ok && r.code === "hero_not_an_image");
+  });
+  it("DNS lookup that never answers -> fetch_failed within the timeout, no fetch", async () => {
+    const { payload } = fakePayload();
+    let fetched = false;
+    const t0 = Date.now();
+    const r = await uploadHeroMedia(payload, args, { ...strictOpts, timeoutMs: 50 }, { fetch: (async () => ((fetched = true), res(JPEG))) as never, resolveHost: () => new Promise<string[]>(() => {}) });
+    assert.ok(!r.ok && r.code === "fetch_failed");
+    assert.equal(fetched, false);
+    assert.ok(Date.now() - t0 < 2_000);
+  });
+  for (const type of ["application/octet-stream", ""]) {
+    it(`header type ${JSON.stringify(type || "missing")} accepted when the sniff passes; stored type = sniffed`, async () => {
+      const { payload, creates } = fakePayload();
+      const body = type ? res(JPEG, { type }) : new Response(JPEG as unknown as BodyInit);
+      if (!type) body.headers.delete("content-type");
+      const r = await uploadHeroMedia(payload, args, strictOpts, { fetch: (async () => body) as never, resolveHost: dns });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal((creates[0] as { file: { mimetype: string } }).file.mimetype, "image/jpeg");
+    });
+  }
+  it("application/octet-stream with non-image bytes -> hero_not_an_image", async () => {
+    const { payload, creates } = fakePayload();
+    const r = await uploadHeroMedia(payload, args, strictOpts, { fetch: (async () => res("MZ\x90 not an image", { type: "application/octet-stream" })) as never, resolveHost: dns });
+    assert.ok(!r.ok && r.code === "hero_not_an_image");
+    assert.equal(creates.length, 0);
+  });
+});
+
 describe("uploadHeroLenient (intake create path, unchanged behaviour)", () => {
   it("fetch 404 -> undefined and the exact warn text; fetch called with the URL only", async () => {
     const { payload, warns, creates } = fakePayload();
@@ -166,7 +228,7 @@ describe("uploadHeroLenient (intake create path, unchanged behaviour)", () => {
   });
   it("no content-type header at all -> image/jpeg / .jpeg", async () => {
     const { payload, creates } = fakePayload();
-    const r = new Response(JPEG);
+    const r = new Response(JPEG as unknown as BodyInit);
     r.headers.delete("content-type");
     await uploadHeroLenient(payload, 3, "https://img.example/a", "T", "slug", null, "Cap", { fetch: (async () => r) as never });
     const c = creates[0] as { data: Record<string, unknown>; file: { name: string; mimetype: string } };
