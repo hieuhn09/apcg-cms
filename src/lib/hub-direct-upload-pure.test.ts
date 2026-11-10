@@ -339,8 +339,12 @@ describe("success bodies", () => {
     const b = (await created.json()) as { ok: boolean; deduped: boolean; media: Record<string, unknown> };
     assert.deepEqual(Object.keys(b), ["ok", "deduped", "media"]);
     assert.equal(b.deduped, false);
-    assert.deepEqual(Object.keys(b.media).sort(), ["alt", "caption", "credit", "filesize", "height", "id", "mimeType", "url", "width"]);
+    // 11 keys since 10-11-26: focalX / focalY (hero focal point, P1.6; null when the doc has none).
+    assert.deepEqual(Object.keys(b.media).sort(), ["alt", "caption", "credit", "filesize", "focalX", "focalY", "height", "id", "mimeType", "url", "width"]);
     assert.equal(b.media.caption, "Cap");
+    assert.deepEqual([b.media.focalX, b.media.focalY], [null, null]);
+    const deduped = (await registerResponse({ ...doc, focalX: 20, focalY: 80 }, true).json()) as { media: Record<string, unknown> };
+    assert.deepEqual([deduped.media.focalX, deduped.media.focalY], [20, 80]);
     assert.equal(registerResponse({ ...doc, caption: undefined }, true).status, 200);
     assert.equal(((await registerResponse({ ...doc, caption: undefined }, true).json()) as { media: { caption: unknown } }).media.caption, null);
   });

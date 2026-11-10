@@ -6,6 +6,7 @@ import {
   tenantKeyPrefix,
   verifyClientUpload,
 } from "@/lib/upload-integrity";
+import { mediaFocalRevalidate } from "@/hooks/media-focal-revalidate";
 
 /**
  * Media — per-tenant uploads. The `tenant` field is added by the multi-tenant
@@ -44,7 +45,9 @@ export const Media: CollectionConfig = {
   },
   hooks: {
     beforeChange: [rememberSignedFilename],
-    afterChange: [verifyClientUpload],
+    // mediaFocalRevalidate (10-11-26): refresh the reader ONLY on a real focal change of a tenant in
+    // HUB_FOCAL_TENANTS; never throws (see the hook file).
+    afterChange: [verifyClientUpload, mediaFocalRevalidate],
   },
   upload: {
     mimeTypes: ["image/*"],

@@ -34,6 +34,12 @@
  * `lastEngine` (= this engine — the hook stamps it only for engine writes),
  * `tenant`. `context.disableRevalidate` (a draft has no public cache to refresh).
  *
+ * Hero focal point (10-11-26): optional closed key `heroFocal` ({x, y} 0-100 | null). It is never an
+ * article column and never in `changed`; an object without a hero after the save ⇒ 422
+ * `fields.heroFocal: unknown_ref` (switch on); the media write runs AFTER the lock commits, only on
+ * 2xx (`hub-hero-focal-core.ts`); failure / switch `HUB_FOCAL_TENANTS` off ⇒ same answer +
+ * `warnings: ["hero_focal_not_applied"]`.
+ *
  * Logs: never `err.message`, body text or a token — an error NAME and CODE only.
  * The exported route wrappers take one / two arguments and NEVER pass `deps`; the
  * `…With(request, …, deps?)` functions exist for unit checks only.
@@ -75,6 +81,13 @@ import {
   type HubLockCtx,
   type HubLockResult,
 } from "@/lib/hub-article-lock";
+import {
+  applyHeroFocalAfterCommit,
+  finishWithHeroFocal,
+  focalEnabledFor,
+  heroFocalPrecheck,
+  type HubFocalDeps,
+} from "@/lib/hub-hero-focal-core";
 
 const SCOPE = "hub/articles/author";
 
@@ -91,6 +104,8 @@ export interface HubDraftDeps {
   getPayload?: () => Promise<Payload>;
   /** The CMS-A lock + transaction (default: `withHubArticleLock`); `--check6 --unit-only` passes a disabled one. */
   lock?: typeof withHubArticleLock;
+  /** Hero focal point (10-11-26): switch + request seams of the after-commit focal write. */
+  focal?: HubFocalDeps;
 }
 
 // ── Frozen response bodies ───────────────────────────────────────────────────
@@ -287,6 +302,10 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     if (!refsR.ok) return invalid(refsR.fields);
     const refs = refsR.refs;
 
+    // Hero focal point (N8): an object focal needs a hero after this save.
+    const focalErr = heroFocalPrecheck({ heroFocal: v.heroFocal, heroAfter: refs.heroImage ?? null, enabled: focalEnabledFor(tenant.slug, deps?.focal) });
+    if (focalErr) return invalid(focalErr);
+
     let lexical: unknown = undefined;
     if (v.bodyMarkdown) {
       const c = await (deps?.convert ?? defaultConvert)(payload, v.bodyMarkdown);
@@ -334,7 +353,12 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     if (v.pinnedUntil != null) data.pinnedUntil = v.pinnedUntil;
 
     // CMS-A (M5): the slug lock, the slug check again and the create run in ONE transaction.
-    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data }));
+    const res = await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data }));
+    // Hero focal point: AFTER the commit, only on 201, only when the request carried `heroFocal`.
+    if (v.heroFocal === undefined) return res;
+    return await finishWithHeroFocal(res, (b) =>
+      applyHeroFocalAfterCommit(payload, { tenant, articleId: b.id as Id, heroFocal: v.heroFocal, draft: true }, deps?.focal),
+    );
   } catch (err) {
     return logInternal(payload, engine.id, err);
   }
@@ -673,6 +697,10 @@ export async function buildDraftUpdateData(
           mark(k);
         }
         break;
+      case "heroFocal":
+        // 10-11-26: never an article column and never in `changed` (no version bump); the focal
+        // point is written on the hero media AFTER the lock commits (hub-hero-focal-core.ts).
+        break;
       case "pinnedUntil": {
         const cur = typeof latest.pinnedUntil === "string" && latest.pinnedUntil ? new Date(latest.pinnedUntil).toISOString() : null;
         if ((v.pinnedUntil ?? null) !== cur) {
@@ -726,17 +754,33 @@ export async function handleHubDraftUpdateWith(
     if (!built.ok) return built.response;
     const { data, changed } = built;
 
+    // Hero focal point (N8): the hero after this save = the request's checked id, else the latest version's.
+    const focalErr = heroFocalPrecheck({
+      heroFocal: v.heroFocal,
+      heroAfter: v.heroImageId !== undefined ? v.heroImageId : latest.heroImage,
+      enabled: focalEnabledFor(tenant.slug, deps?.focal),
+    });
+    if (focalErr) return invalid(focalErr);
+    // AFTER the commit (or the no-write 200), only on 2xx, only when the request carried `heroFocal`.
+    const withFocal = async (res: Response): Promise<Response> =>
+      v.heroFocal === undefined
+        ? res
+        : finishWithHeroFocal(res, () => applyHeroFocalAfterCommit(payload, { tenant, articleId, heroFocal: v.heroFocal, draft: true }, deps?.focal));
+
     if (data.slug !== undefined && (await findSlugConflict({ payload, tenantId: tenant.id, slug: v.slug as string, excludeId: articleId }))) {
       return slugConflictResponse(payload, tenant.id, v.slug, articleId);
     }
 
     if (changed.length === 0) {
-      return json({ ok: true, id: latest.id, tenant: tenant.slug, workflowStatus: "draft", version: currentVersion, changed: [] }, 200);
+      // A focal-only PATCH lands here: `changed: []`, version unchanged, no article write.
+      return await withFocal(json({ ok: true, id: latest.id, tenant: tenant.slug, workflowStatus: "draft", version: currentVersion, changed: [] }, 200));
     }
 
     // CMS-A (M1): re-read, re-check and update in ONE transaction under the article lock.
-    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id, articleId }, (lk) =>
-      updateInLock(lk, { v, tenant, articleId, data, changed, latest, currentVersion }),
+    return await withFocal(
+      await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id, articleId }, (lk) =>
+        updateInLock(lk, { v, tenant, articleId, data, changed, latest, currentVersion }),
+      ),
     );
   } catch (err) {
     return logInternal(payload, engine.id, err);

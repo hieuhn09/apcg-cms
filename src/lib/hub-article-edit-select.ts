@@ -137,7 +137,11 @@ export interface HubEditMedia {
 
 /** P5.3 T9: the keys attached AFTER `sanitizeHubArticleEdit` (editable branch only). */
 export interface HubArticleEditMedia {
-  hero: (HubEditMedia & { credit: string | null }) | null;
+  /**
+   * 10-11-26 (hero focal point, P1.6): the hero also carries its media `focalX` / `focalY`
+   * (percent 0-100; (50, 50) = not set, D13). Body media do not (focal is hero-only).
+   */
+  hero: (HubEditMedia & { credit: string | null; focalX: number | null; focalY: number | null }) | null;
   leadImageCaption: string | null;
   bodyMedia: HubEditMedia[];
 }
@@ -214,7 +218,7 @@ function editMedia(m: Doc): HubEditMedia {
  */
 export function hubEditMediaBlock(latest: Doc, tenantId: number | string): HubArticleEditMedia & { tooMany: boolean } {
   const h = ownMedia(latest.heroImage, tenantId);
-  const hero = h ? { ...editMedia(h), credit: str(h.credit) } : null;
+  const hero = h ? { ...editMedia(h), credit: str(h.credit), focalX: num(h.focalX), focalY: num(h.focalY) } : null;
   const seen = new Map<string, unknown>();
   const root = obj(obj(latest.body)?.root);
   const stack: unknown[] = root ? [root] : [];

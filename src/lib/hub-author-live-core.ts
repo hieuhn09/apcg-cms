@@ -42,6 +42,12 @@
  * `editedByHuman: true` (OD2), so an engine re-send of the same `engineDraftId` gets the
  * intake's 409 `human_edited_content_not_overwritten` instead of overwriting the edit.
  *
+ * Hero focal point (10-11-26): `fields.heroFocal` is a live key on EVERY live tenant (never
+ * media-locked); a focal-only edit takes the `changed: []` branch (no article write); the focal is
+ * written on the main row's hero media AFTER the commit, only on 2xx (`hub-hero-focal-core.ts`),
+ * i.e. on the hero as it is AFTER the save: on a wide tenant, a save that changes `heroImageId`
+ * and carries `heroFocal` sets the focal of the NEW hero (tenant + media===hero checks unchanged).
+ *
  * Logs: an error NAME / CODE and field NAMES only — never content or a token. The exported
  * route wrapper never passes `deps`; `handleHubLiveUpdateWith(…, deps)` is for unit checks.
  */
@@ -61,6 +67,13 @@ import { extractMediaIds, uploadIdsInTree } from "@/lib/hub-author-media-token";
 import type { HubDraftFieldKey, HubDraftInput } from "@/lib/hub-author-input";
 import { checkPublishable } from "@/lib/hub-author-publish-core";
 import { withHubArticleLock, type HubLockCtx, type HubLockResult } from "@/lib/hub-article-lock";
+import {
+  applyHeroFocalAfterCommit,
+  finishWithHeroFocal,
+  focalEnabledFor,
+  heroFocalPrecheck,
+  type HubFocalDeps,
+} from "@/lib/hub-hero-focal-core";
 import {
   buildDraftUpdateData,
   defaultFindMain,
@@ -123,6 +136,8 @@ export const LIVE_KEY_COLUMNS: Record<HubLiveFieldKey, readonly string[]> = {
   sponsor: ["sponsor"],
   heroImageId: ["heroImage"],
   leadImageCaption: ["leadImageCaption"],
+  // 10-11-26: the focal point is written on the hero MEDIA doc after the commit, never an article column.
+  heroFocal: [],
   pinnedUntil: ["pinnedUntil"],
 };
 
@@ -217,6 +232,8 @@ export interface HubLiveDeps {
   /** D15: called in the lock right before the write, after every read of gate 2. */
   beforeWrite?: () => Promise<void>;
   convert?: (payload: Payload, md: string) => Promise<ConvertResult>;
+  /** Hero focal point (10-11-26): switch + request seams of the after-commit focal write. */
+  focal?: HubFocalDeps;
 }
 
 const defaultGetPayload = () => getPayload({ config });
@@ -336,16 +353,35 @@ export async function handleHubLiveUpdateWith(
     // D5: no new image in a live body (kept for wide too; only the hero may be a new upload).
     if (v.bodyMarkdown !== undefined && !liveBodyMediaAllowed(v.bodyMarkdown, main.body)) return invalid({ bodyMarkdown: "unknown_ref" });
 
+    // Hero focal point (N8): the hero AFTER this save — the request's `heroImageId` when present
+    // (only a wide tenant gets here with it; `liveLockedReason` refused it above otherwise), else
+    // the main row's. The after-commit write re-reads the main row, so a wide save that changes
+    // the hero AND carries `heroFocal` sets the focal of the NEW hero.
+    const focalErr = heroFocalPrecheck({
+      heroFocal: v.heroFocal,
+      heroAfter: v.heroImageId !== undefined ? v.heroImageId : main.heroImage,
+      enabled: focalEnabledFor(tenant.slug, deps?.focal),
+    });
+    if (focalErr) return invalid(focalErr);
+    // AFTER the commit (or the no-write 200), only on 2xx, only when the request carried `heroFocal`.
+    const withFocal = async (res: Response): Promise<Response> =>
+      v.heroFocal === undefined
+        ? res
+        : finishWithHeroFocal(res, () => applyHeroFocalAfterCommit(payload, { tenant, articleId, heroFocal: v.heroFocal, draft: false }, deps?.focal));
+
     if (changed.length === 0) {
-      return json({ ok: true, id: articleId, tenant: tenant.slug, workflowStatus: "published", version: mainVersion, changed: [] }, 200);
+      // A focal-only live edit lands here: `changed: []`, version unchanged, no article write.
+      return await withFocal(json({ ok: true, id: articleId, tenant: tenant.slug, workflowStatus: "published", version: mainVersion, changed: [] }, 200));
     }
 
     // The publish rules on the merged result (P5.2 `checkPublishable`).
     const fields = await checkPublishable({ payload, tenant: { id: tenant.id, slug: tenant.slug }, latest: { ...latest, ...data } });
     if (Object.keys(fields).length) return invalid(fields);
 
-    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id, articleId }, (lk) =>
-      inLock(lk, { v, tenant, articleId, data, changed, wide }),
+    return await withFocal(
+      await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id, articleId }, (lk) =>
+        inLock(lk, { v, tenant, articleId, data, changed, wide }),
+      ),
     );
   } catch (err) {
     return logInternal(payload, engine.id, err);

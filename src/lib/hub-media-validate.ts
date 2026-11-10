@@ -449,7 +449,7 @@ const numOrNull = (v: unknown): number | null => (typeof v === "number" && Numbe
  * The 201 allowlist of `POST /api/hub/media` (T1), moved here verbatim from the
  * route so the direct-upload `register` builds the SAME body (plus its own keys).
  * Built by hand (`depth: 0`), never a spread of the document. Sizes the image was
- * too small for are absent.
+ * too small for are absent. `focalX` / `focalY` added 10-11-26 (null when absent).
  */
 export function mediaResponseBody(doc: MediaDoc): { ok: true; media: Record<string, unknown> } {
   const sizes: Record<string, { url: string; width: number | null; height: number | null }> = {};
@@ -470,6 +470,10 @@ export function mediaResponseBody(doc: MediaDoc): { ok: true; media: Record<stri
       height: numOrNull(doc.height),
       filesize: numOrNull(doc.filesize),
       url: strOrNull(doc.url),
+      // 10-11-26 (hero focal point, P1.6): the media's focal point, so the hub can pre-fill it on a
+      // deduped register ((50, 50) = not set, D13). Read-only here: neither route accepts it.
+      focalX: numOrNull(doc.focalX),
+      focalY: numOrNull(doc.focalY),
       ...(Object.keys(sizes).length ? { sizes } : {}),
     },
   };

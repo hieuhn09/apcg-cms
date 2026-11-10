@@ -24,9 +24,13 @@ import { lexicalTreesEqual } from "@/lib/hub-author-convert-core";
 type Doc = Record<string, unknown>;
 
 /**
- * D4 (widened 10-11-26): the 18 keys a live body may carry = HUB_DRAFT_FIELD_KEYS minus slug.
+ * D4 (widened 10-11-26): the 19 keys a live body may carry = HUB_DRAFT_FIELD_KEYS minus slug, in
+ * the SAME order (pinned against DERIVED_LIVE_FIELD_KEYS by test:hub-live).
  * `heroImageId` / `leadImageCaption` parse here but are locked (media_locked) unless the
- * tenant is wide — see `liveLockedReason`.
+ * tenant is wide — see `liveLockedReason`. `heroFocal` (10-11-26) is NOT locked on any
+ * tenant: it changes only the hero MEDIA doc's focal point, never the image itself, and is
+ * applied to the hero as it is AFTER the save (so a wide save that also changes
+ * `heroImageId` sets the focal of the NEW hero).
  */
 export const HUB_LIVE_FIELD_KEYS = [
   "title",
@@ -46,6 +50,7 @@ export const HUB_LIVE_FIELD_KEYS = [
   "sponsor",
   "heroImageId",
   "leadImageCaption",
+  "heroFocal",
   "pinnedUntil",
 ] as const satisfies readonly HubDraftFieldKey[];
 export type HubLiveFieldKey = (typeof HUB_LIVE_FIELD_KEYS)[number];
@@ -171,7 +176,7 @@ const ALLOWED_FIELD_KEYS: readonly string[] = [...HUB_LIVE_FIELD_KEYS, ...HUB_LI
  * `{tenant, expectedVersion, actor, fields}` → the PATCH parser on a FLAT copy. Fixed order:
  * (1) outer keys exactly the four (an extra key first, in insertion order, then a missing
  * one, in the order above) and `fields` a plain object ⇒ 400 `field:<key>`;
- * (2) every key of `fields` ∈ the 18 live keys ∪ `slug`, else 400
+ * (2) every key of `fields` ∈ the 19 live keys ∪ `slug`, else 400
  * `field:fields.<key>` (`tenant`, `actor`, `expectedVersion`, `fields`, `__proto__`,
  * `constructor` included); (3) `slug` PRESENT ⇒ 422 not_live_editable slug_locked;
  * (4) a SPREAD copy `{...fields, tenant, expectedVersion, actor}` (never Object.assign: a

@@ -413,6 +413,7 @@ independent verification, not from guessing.
 - **Cron auth:** `CRON_SECRET` (bearer for the three `/api/cron/*` routes; unset + production = the
   route fails closed with 503, never silently opens)
 - **Hub live edit (P5.4, branch-only until `apcg-cms#36` merges):** `HUB_LIVE_EDIT_TENANTS` — CSV of tenant slugs (exact match), default OFF/unset, read on every `PATCH /api/hub/articles/{id}/live` call; set ONLY by the owner on this repo's Vercel project; not in `.env.example`. A tenant not listed gets 403 `feature_disabled` before any article read.
+- **Hub hero focal point (branch `claude/hub-hero-focal-p1`, not merged):** `HUB_FOCAL_TENANTS` — CSV of tenant slugs, exact match, read on every call, default OFF; lets the hub's `heroFocal` key write the hero media's `focalX`/`focalY` and fires the Media focal revalidate hook. Owner-set; not in `.env.example`. See `integrations/all-integrations.md` §Hero focal point.
 - **Misc:** `PORT` (dev server port, `3508` in `.env.example`)
 
 **npm scripts (real, from `package.json` — no `npm test`; the scoped test scripts are `test:media-redirect`, `test:single-home`, and — added since 2026-10-15 and now on `main` — `test:hub-media`, `test:hub-direct-upload`, `test:hub-pressroom`, `test:hub-live`, `test:hub-p56`):**

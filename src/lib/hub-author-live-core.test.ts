@@ -408,7 +408,7 @@ test("computeEditLive returns feature_disabled without any DB read when the swit
 });
 
 test("view=edit live block carries populated values and cms-media tokens when live editable", async () => {
-  const media = (id: number, tenant = 1) => ({ id, tenant, url: `/api/media/file/m${id}.png`, alt: `alt ${id}`, width: 10, height: 8, credit: id === 50 ? "Cr" : null });
+  const media = (id: number, tenant = 1) => ({ id, tenant, url: `/api/media/file/m${id}.png`, alt: `alt ${id}`, width: 10, height: 8, credit: id === 50 ? "Cr" : null, focalX: id === 50 ? 30 : 50, focalY: id === 50 ? 70 : 50 });
   const display: Doc = {
     pillar: { id: 11, slug: "p-main" }, subSection: { id: 21, slug: "s-a" }, tags: [{ id: 1, slug: "t-a" }], countries: [{ id: 2, slug: "vietnam" }], cities: [],
     author: { id: 3 }, coAuthors: [{ id: 4 }], heroImage: media(50), leadImageCaption: "Cap", sponsor: null, deepDive: true,
@@ -430,6 +430,10 @@ test("view=edit live block carries populated values and cms-media tokens when li
   assert.deepEqual(y.secondary, [{ pillarSlug: "p-other", subSectionSlug: null }]);
   assert.equal((y.flags as Doc).deepDive, true);
   assert.deepEqual([(y.hero as Doc).id, (y.hero as Doc).credit, (y.bodyMedia as Doc[]).map((m) => m.id)], [50, "Cr", [51]]);
+  // Hero focal point (10-11-26, N4): the hero carries focalX / focalY; body media do not.
+  assert.deepEqual([(y.hero as Doc).focalX, (y.hero as Doc).focalY], [30, 70]);
+  assert.deepEqual(Object.keys(y.hero as Doc), ["id", "url", "alt", "width", "height", "credit", "focalX", "focalY"]);
+  assert.deepEqual(Object.keys((y.bodyMedia as Doc[])[0]!), ["id", "url", "alt", "width", "height"]);
   // The display read is ONE non-draft read with the edit select (gate reads: full main + latest).
   const shown = articleReads(w).filter((r) => r.depth === 2);
   assert.deepEqual([shown.length, "draft" in shown[0]!, shown[0]!.locale, shown[0]!.select === sel.HUB_ARTICLE_EDIT_SELECT], [1, false, "en", true]);

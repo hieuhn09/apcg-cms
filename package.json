@@ -20,6 +20,7 @@
     "test:hub-pressroom": "tsx --test src/lib/hub-pressroom.test.ts src/lib/hub-pin-exclusive.test.ts",
     "test:hub-delete": "tsx --test src/lib/hub-author-delete-core.test.ts",
     "test:hub-live": "tsx --test src/lib/hub-author-live-pure.test.ts src/lib/hub-author-live-core.test.ts src/hooks/caption-translation-outdated.test.ts",
+    "test:hub-focal": "tsx --test src/lib/hub-hero-focal-pure.test.ts src/lib/hub-hero-focal-core.test.ts",
     "test:hub-p56": "tsx --test src/lib/hub-author-preview-pure.test.ts src/lib/hub-author-preview-core.test.ts src/lib/hub-taxonomy-create-pure.test.ts src/lib/hub-taxonomy-create-core.test.ts",
     "audit:add-gtp-taxonomy": "tsx scripts/audit/add-gtp-taxonomy.ts",
     "audit:add-vowasia-taxonomy": "tsx scripts/audit/add-vowasia-taxonomy.ts",

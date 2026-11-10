@@ -270,9 +270,14 @@ test("parseLiveBody rejects tenant, actor, expectedVersion, fields and __proto__
 });
 
 describe("HUB_LIVE_FIELD_KEYS (D4)", () => {
-  it("is HUB_DRAFT_FIELD_KEYS minus slug — exactly 18 keys (heroImageId / leadImageCaption parse; liveLockedReason locks them per tenant)", () => {
+  it("is HUB_DRAFT_FIELD_KEYS minus slug — exactly 19 keys (heroImageId / leadImageCaption parse; liveLockedReason locks them per tenant; heroFocal 10-11-26)", () => {
     assert.deepEqual([...HUB_LIVE_FIELD_KEYS], [...DERIVED_LIVE_FIELD_KEYS]);
-    assert.equal(HUB_LIVE_FIELD_KEYS.length, 18);
+    assert.equal(HUB_LIVE_FIELD_KEYS.length, 19);
     assert.equal((HUB_LIVE_FIELD_KEYS as readonly string[]).includes("slug"), false);
+    // heroFocal sits right after the image keys (draft order) and is never media-locked.
+    const keys = HUB_LIVE_FIELD_KEYS as readonly string[];
+    assert.equal(keys.indexOf("heroFocal"), keys.indexOf("leadImageCaption") + 1);
+    assert.equal((HUB_LIVE_WIDE_FIELD_KEYS as readonly string[]).includes("heroFocal"), false);
+    assert.equal(liveLockedReason({ heroFocal: { x: 10, y: 20 } }, false), null);
   });
 });
