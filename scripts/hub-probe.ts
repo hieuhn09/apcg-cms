@@ -11534,7 +11534,7 @@ async function check9() {
       const ed = async (k: P9Article) => (await getEdit(A[k].id, A[k].tenant)).body;
       const a = await ed("a");
       const al = ((a.edit as Doc).live ?? {}) as Doc;
-      expect("P15-1: (a) ⇒ live.editable true, EXACTLY the 18 wire keys", [al.editable, al.reason, Object.keys(al)], [true, "ok", ["editable", "reason", "version", "bodyEditable", "pillarSlug", "subSectionSlug", "secondary", "tagSlugs", "countrySlugs", "citySlugs", "authorId", "coAuthorIds", "flags", "sponsor", "pinnedUntil", "hero", "leadImageCaption", "bodyMedia"]]);
+      expect("P15-1: (a) ⇒ live.editable true, EXACTLY the 19 wire keys (scope added 10-11-26; hub on a non-wide tenant)", [al.editable, al.reason, al.scope, Object.keys(al)], [true, "ok", "hub", ["editable", "reason", "version", "bodyEditable", "pillarSlug", "subSectionSlug", "secondary", "tagSlugs", "countrySlugs", "citySlugs", "authorId", "coAuthorIds", "flags", "sponsor", "pinnedUntil", "hero", "leadImageCaption", "bodyMedia", "scope"]]);
       const b = await getEdit(A.b.id, "gcv");
       expect("P15-2: (b) ⇒ live {editable false, reason draft_diverged, version}; no draft content in the response", [((b.body.edit as Doc).live as Doc), b.text.includes("SECRET")], [{ editable: false, reason: "draft_diverged", version: await vOf(A.b.id) }, false]);
       const f = await ed("f");

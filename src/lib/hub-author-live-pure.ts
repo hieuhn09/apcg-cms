@@ -2,8 +2,8 @@
  * Hub LIVE edit — pure helpers (APCGHub P5.4, "Sửa bài đã đăng"; content-engine plan
  * process/features/apcg-hub/active/apcg-hub-p5-4-edit-published_PLAN_30-09-26.md, D2–D4,
  * D11, D12). No I/O, no Payload, no `@payload-config`: imported ONE WAY by
- * `hub-author-live-core.ts` and `hub-article-edit-select.ts` (this file imports neither
- * of them nor `hub-author-handlers.ts`).
+ * `hub-author-live-core.ts`, `hub-article-edit-select.ts` and (wide live edit, the media
+ * gate) `hub-author-handlers.ts` (this file imports none of them).
  *
  *   liveEditTenants   — the CMS switch `HUB_LIVE_EDIT_TENANTS` (D11), read on EVERY call
  *   liveWideTenants   — the WIDE switch `HUB_LIVE_EDIT_WIDE_TENANTS`, read on EVERY call

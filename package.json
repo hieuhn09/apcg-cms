@@ -15,7 +15,7 @@
     "test:media-redirect": "tsx --test src/lib/media-redirect.test.ts",
     "test:intake-caption": "tsx --test src/lib/intake-hero-caption.test.ts",
     "test:engine-hero": "tsx --test src/lib/engine-hero-replace-pure.test.ts src/lib/engine-hero-upload.test.ts src/hooks/hero-swap-bookkeeping.test.ts src/lib/scoped-update.test.ts src/lib/engine-hero-replace-core.test.ts",
-    "test:hub-media": "tsx --test src/lib/hub-media-validate.test.ts src/lib/media-create.test.ts src/lib/hub-author-media-token.test.ts",
+    "test:hub-media": "tsx --test src/lib/hub-media-validate.test.ts src/lib/media-create.test.ts src/lib/hub-author-media-token.test.ts src/lib/hub-media-article.test.ts",
     "test:hub-direct-upload": "tsx --test src/lib/hub-direct-upload-pure.test.ts src/lib/hub-direct-upload-core.test.ts src/lib/hub-taxonomy-blocks.test.ts src/lib/hub-tags-usage.test.ts scripts/lib/r2-cors-rules.test.ts",
     "test:hub-pressroom": "tsx --test src/lib/hub-pressroom.test.ts src/lib/hub-pin-exclusive.test.ts",
     "test:hub-live": "tsx --test src/lib/hub-author-live-pure.test.ts src/lib/hub-author-live-core.test.ts src/hooks/caption-translation-outdated.test.ts",
