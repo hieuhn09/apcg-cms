@@ -38,6 +38,8 @@ Content-Type: application/json
   "byline": "Mei Lin Tan",
   "contentType": "article",
   "heroImageUrl": "https://example.com/image.jpg",
+  "imageCredit": "Photo by Jane Doe on Pexels",
+  "imageCaption": "Illustrative image",
   "sections": ["finance"],
   "countries": ["sg", "vn"],
   "sourceProvenance": { "url": "https://source", "name": "Source Publisher", "accessedAt": "2026-06-28T02:00:00Z" },
@@ -50,6 +52,14 @@ Content-Type: application/json
   tenant; otherwise it defaults to the engine's single allowed tenant.
 - `engineDraftId` is the idempotency key (per tenant). If omitted, `sourceProvenance.url`
   is used.
+- `imageCredit` and `imageCaption` are optional and apply to the hero image only
+  (ignored without `heroImageUrl`). Both are written when the hero Media doc is
+  created; a refresh never changes the hero Media, so an editor's later edit is
+  never overwritten. `imageCredit` is plain text (trimmed; no link). `imageCaption`
+  is trimmed, internal whitespace/newlines collapsed to single spaces, capped at
+  200 characters, and written to the Media `caption` in the default locale (like
+  `alt`); an absent, empty or non-string value writes no caption at all. Central
+  stores the text it is sent and applies no label policy of its own.
 - Drafts are created in **`pending_review`** — the engine does NOT publish. An
   editor reviews and publishes.
 

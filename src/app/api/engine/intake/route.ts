@@ -46,6 +46,7 @@ import { markdownToLexical } from "@/lib/markdown";
 import { logActivity } from "@/lib/activity";
 import { json, slugify, isNonEmptyString } from "@/lib/http";
 import { checkIntakeSingleHome, isSingleHomeRuleError, humanErrorMessage } from "@/lib/single-home-pillars";
+import { buildHeroMediaData, parseImageCaption } from "@/lib/intake-hero-caption";
 
 const WORDS_PER_MINUTE = 220;
 const DEFAULT_READ_MIN = 5;
@@ -69,6 +70,8 @@ interface IntakeBody {
   takeaways?: unknown;
   heroImageUrl?: unknown;
   imageCredit?: unknown;
+  /** Optional hero caption, create-only, default locale (see intake-hero-caption.ts). */
+  imageCaption?: unknown;
   byline?: unknown;
   contentType?: unknown;
   slug?: unknown;
@@ -146,6 +149,7 @@ export async function POST(request: Request): Promise<Response> {
     : undefined;
   const heroImageUrl = isNonEmptyString(body.heroImageUrl) ? body.heroImageUrl : null;
   const imageCredit = isNonEmptyString(body.imageCredit) ? body.imageCredit.trim() : null;
+  const imageCaption = parseImageCaption(body.imageCaption);
   const provenance = body.sourceProvenance ?? {};
   const sourceUrl = isNonEmptyString(provenance.url) ? provenance.url : null;
   const sourceName = isNonEmptyString(provenance.name) ? provenance.name : null;
@@ -217,7 +221,7 @@ export async function POST(request: Request): Promise<Response> {
 
     let heroImageId: number | string | undefined;
     // Never fall back to the source publication's name as a photo credit (GCV audit item 1).
-    if (heroImageUrl) heroImageId = await uploadHero(payload, tenant.id, heroImageUrl, titleStr, slug, imageCredit);
+    if (heroImageUrl) heroImageId = await uploadHero(payload, tenant.id, heroImageUrl, titleStr, slug, imageCredit, imageCaption);
 
     const lexicalBody = await markdownToLexical(payload, bodyMarkdownStr);
 
@@ -536,6 +540,7 @@ async function uploadHero(
   title: string,
   slug: string,
   credit: string | null,
+  caption: string | null,
 ): Promise<number | string | undefined> {
   try {
     const res = await fetch(url);
@@ -547,7 +552,7 @@ async function uploadHero(
       payload,
       collection: "media",
       tenantId,
-      data: { alt: title, credit: credit ?? undefined },
+      data: buildHeroMediaData({ title, credit, caption }),
       file: { data: buffer, mimetype, name: `${slug}.${ext}`, size: buffer.length },
     });
     return (media as { id: number | string }).id;
