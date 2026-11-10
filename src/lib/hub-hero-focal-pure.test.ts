@@ -16,7 +16,7 @@ import {
   parseHeroFocal,
 } from "./hub-hero-focal-pure";
 import { HUB_DRAFT_FIELD_KEYS, parseCreateBody, parseUpdateBody } from "./hub-author-input";
-import { HUB_LIVE_FIELD_KEYS, HUB_LIVE_LOCKED_FIELD_KEYS, parseLiveBody } from "./hub-author-live-pure";
+import { HUB_LIVE_FIELD_KEYS, HUB_LIVE_LOCKED_FIELD_KEYS, liveLockedReason, parseLiveBody } from "./hub-author-live-pure";
 
 type Doc = Record<string, unknown>;
 const ACTOR = { email: "ed@example.invalid", role: "editor" };
@@ -129,14 +129,22 @@ describe("heroFocal in the draft parsers (closed key)", () => {
 });
 
 describe("heroFocal in the live parser", () => {
-  it("is a live key, NOT locked; heroImageId stays locked (422 media_locked)", () => {
+  it("is a live key, NOT locked on any tenant; heroImageId is media_locked unless the tenant is wide", () => {
     assert.ok((HUB_LIVE_FIELD_KEYS as readonly string[]).includes("heroFocal"));
     assert.equal((HUB_LIVE_LOCKED_FIELD_KEYS as readonly string[]).includes("heroFocal"), false);
     const ok = parseLiveBody({ tenant: "gtp", expectedVersion: 4, actor: ACTOR, fields: { heroFocal: { x: 10, y: 90 } } });
     assert.equal(ok.ok, true);
     if (ok.ok) assert.deepEqual([ok.value.heroFocal, ok.value.present], [{ x: 10, y: 90 }, ["heroFocal"]]);
-    const locked = parseLiveBody({ tenant: "gtp", expectedVersion: 4, actor: ACTOR, fields: { heroFocal: { x: 10, y: 90 }, heroImageId: 5 } });
-    assert.deepEqual(locked.ok ? null : [locked.status, locked.body.reason], [422, "media_locked"]);
+    // Since the wide live edit (main 10-11-26) the media lock runs AFTER the tenant is known
+    // (`liveLockedReason`), not in the parser: heroFocal alone is never locked, heroImageId is
+    // locked on a non-wide tenant and allowed on a wide one.
+    assert.equal(liveLockedReason({ heroFocal: { x: 10, y: 90 } }, false), null);
+    const both = parseLiveBody({ tenant: "gtp", expectedVersion: 4, actor: ACTOR, fields: { heroFocal: { x: 10, y: 90 }, heroImageId: 5 } });
+    assert.equal(both.ok, true);
+    if (both.ok) {
+      assert.equal(liveLockedReason(both.value as unknown as Doc, false), "media_locked");
+      assert.equal(liveLockedReason(both.value as unknown as Doc, true), null);
+    }
     const bad = parseLiveBody({ tenant: "gtp", expectedVersion: 4, actor: ACTOR, fields: { heroFocal: { x: -1, y: 0 } } });
     assert.deepEqual(bad.ok ? null : [bad.status, (bad.body.fields as Doc).heroFocal], [422, "out_of_range"]);
   });

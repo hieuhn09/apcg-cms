@@ -10885,9 +10885,9 @@ async function check9Unit(expect: (label: string, actual: unknown, wanted: unkno
   const limits = await import("../src/lib/hub-author-limits");
   const core = await import("../src/lib/hub-author-live-core");
   // Wide scope (hub-live-edit-widen 10-11-26): heroImageId / leadImageCaption parse; locked per tenant by liveLockedReason.
-  expect("U-1: HUB_LIVE_FIELD_KEYS = HUB_DRAFT_FIELD_KEYS minus slug (18)", [purem.HUB_LIVE_FIELD_KEYS.length, [...purem.HUB_LIVE_FIELD_KEYS]], [18, input.HUB_DRAFT_FIELD_KEYS.filter((k) => k !== "slug")]);
+  expect("U-1: HUB_LIVE_FIELD_KEYS = HUB_DRAFT_FIELD_KEYS minus slug (19, heroFocal 10-11-26)", [purem.HUB_LIVE_FIELD_KEYS.length, [...purem.HUB_LIVE_FIELD_KEYS]], [19, input.HUB_DRAFT_FIELD_KEYS.filter((k) => k !== "slug")]);
   expect("U-2: HUB_FIELD_CODES still 23 (no new code, hard stop 9)", limits.HUB_FIELD_CODES.length, 23);
-  expect("U-3: LIVE_KEY_COLUMNS covers exactly the 18 live keys", Object.keys(core.LIVE_KEY_COLUMNS).sort(), [...purem.HUB_LIVE_FIELD_KEYS].sort());
+  expect("U-3: LIVE_KEY_COLUMNS covers exactly the 19 live keys", Object.keys(core.LIVE_KEY_COLUMNS).sort(), [...purem.HUB_LIVE_FIELD_KEYS].sort());
   const env = (raw: string | undefined) => purem.liveEditTenants(raw === undefined ? {} : { HUB_LIVE_EDIT_TENANTS: raw }).includes("world-travel-brief");
   expect("U-4: liveEditTenants — 8 env vectors (unset, '', ' ', wtb, *, WORLD-TRAVEL-BRIEF, 'gcv,,world-travel-brief', 'world-travel-brief ,gcv')", [undefined, "", " ", "wtb", "*", "WORLD-TRAVEL-BRIEF", "gcv,,world-travel-brief", "world-travel-brief ,gcv"].map(env), [false, false, false, false, false, false, true, true]);
   const g = (main: Doc, latest: Doc, hub = true) => purem.liveGateReason({ main, latest, isHubAuthored: hub });

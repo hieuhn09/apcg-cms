@@ -349,13 +349,45 @@ describe("PATCH /api/hub/articles/{id}/live with heroFocal", () => {
     assert.deepEqual(w.log.events, ["media-update"]);
     assert.equal(w.articles.get("5")!.main.heroImage, 100, "the hero image itself never changes");
   });
-  it("title + focal ⇒ lock → update → commit → media write; heroImageId stays 422 not_live_editable", async () => {
+  it("title + focal ⇒ lock → update → commit → media write; heroImageId stays 422 not_live_editable on a NON-wide tenant", async () => {
     const w = world({ state: "published" });
     const r = await livePatch(w, { title: "Live new", heroFocal: { x: 40, y: 60 } });
     assert.deepEqual([r.status, r.body.changed, r.body.version], [200, ["title"], 4]);
     assert.deepEqual(w.log.events, ["lock", "article-update", "commit", "media-update"]);
     const locked = await livePatch(world({ state: "published" }), { heroImageId: 101, heroFocal: { x: 1, y: 1 } });
     assert.deepEqual([locked.status, locked.body.status, locked.body.reason], [422, "not_live_editable", "media_locked"]);
+  });
+  // Wide live edit (main 10-11-26, HUB_LIVE_EDIT_WIDE_TENANTS): the hero itself may change in the
+  // same live save; the focal applies to the hero AS IT IS AFTER the save (the main row re-read
+  // after the commit), with the same tenant + media===hero checks.
+  it("wide: heroImageId + heroFocal in ONE live save ⇒ the article write commits first, then the focal lands on the NEW hero", async () => {
+    const w = world({ state: "published" });
+    const r = await livePatch(w, { heroImageId: 101, heroFocal: { x: 15, y: 85 } }, { wideTenants: ["gtp"] });
+    assert.deepEqual([r.status, r.body.changed, r.body.version, "warnings" in r.body], [200, ["heroImageId"], 4, false]);
+    assert.deepEqual(w.log.events, ["lock", "article-update", "commit", "media-update"]);
+    assert.equal(w.articles.get("5")!.main.heroImage, 101);
+    assert.deepEqual(w.log.mediaUpdates.map((u) => [u.id, (u.data as Doc).focalX, (u.data as Doc).focalY]), [[101, 15, 85]]);
+    assert.deepEqual([w.media.get("100")!.focalX, w.media.get("100")!.focalY], [50, 50], "the OLD hero is never touched");
+    assert.equal(w.log.mediaUpdates[0]!.req, FRESH_REQ, "fresh req, never the lock's");
+  });
+  it("wide: an article WITHOUT a hero gets one + a focal in the same save (N8 checks the hero after the save)", async () => {
+    const w = world({ state: "published", article: { heroImage: null } });
+    const r = await livePatch(w, { heroImageId: 101, heroFocal: { x: 30, y: 70 } }, { wideTenants: ["gtp"] });
+    assert.deepEqual([r.status, r.body.changed, "warnings" in r.body], [200, ["heroImageId"], false]);
+    assert.deepEqual(w.log.mediaUpdates.map((u) => u.id), [101]);
+  });
+  it("wide: hero removed + object focal ⇒ 422 unknown_ref BEFORE the lock; nothing written", async () => {
+    const w = world({ state: "published" });
+    const r = await livePatch(w, { heroImageId: null, heroFocal: { x: 5, y: 95 } }, { wideTenants: ["gtp"] });
+    assert.deepEqual([r.status, (r.body.fields as Doc).heroFocal], [422, "unknown_ref"]);
+    assert.deepEqual(w.log.events, []);
+  });
+  it("wide: a hero of ANOTHER tenant is refused by the ref check; neither the article nor any media is written", async () => {
+    const w = world({ state: "published" });
+    const r = await livePatch(w, { heroImageId: 200, heroFocal: { x: 5, y: 95 } }, { wideTenants: ["gtp"] });
+    assert.deepEqual([r.status, (r.body.fields as Doc).heroImageId], [422, "unknown_ref"]);
+    assert.deepEqual([w.log.articleUpdates.length, w.log.mediaUpdates.length], [0, 0]);
+    assert.equal(w.articles.get("5")!.main.heroImage, 100);
   });
   it("live switch on but focal switch off ⇒ 200 + warning, media untouched", async () => {
     const w = world({ state: "published" });
