@@ -104,6 +104,24 @@ async function postRevalidate(
 }
 
 /**
+ * The same signed webhook the `afterChange` hook sends, for a caller that wrote with
+ * `context.disableRevalidate` inside a transaction and must notify only AFTER commit
+ * (engine hero replace). Best-effort: never throws.
+ */
+export async function revalidateAfterCommit(
+  payload: Payload,
+  tenantId: number | string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const tenant = await findTenantById(payload, tenantId);
+    await postRevalidate(payload, tenant, body);
+  } catch (err) {
+    payload.logger.warn(`[revalidate] after-commit webhook skipped: ${(err as Error).message}`);
+  }
+}
+
+/**
  * Build afterChange/afterDelete hooks for a collection. `tags` are the logical
  * cache tags (without tenant prefix) the frontend uses for this collection.
  */

@@ -46,7 +46,8 @@ import { markdownToLexical } from "@/lib/markdown";
 import { logActivity } from "@/lib/activity";
 import { json, slugify, isNonEmptyString } from "@/lib/http";
 import { checkIntakeSingleHome, isSingleHomeRuleError, humanErrorMessage } from "@/lib/single-home-pillars";
-import { buildHeroMediaData, parseImageCaption } from "@/lib/intake-hero-caption";
+import { parseImageCaption } from "@/lib/intake-hero-caption";
+import { uploadHeroLenient } from "@/lib/engine-hero-upload";
 
 const WORDS_PER_MINUTE = 220;
 const DEFAULT_READ_MIN = 5;
@@ -221,7 +222,7 @@ export async function POST(request: Request): Promise<Response> {
 
     let heroImageId: number | string | undefined;
     // Never fall back to the source publication's name as a photo credit (GCV audit item 1).
-    if (heroImageUrl) heroImageId = await uploadHero(payload, tenant.id, heroImageUrl, titleStr, slug, imageCredit, imageCaption);
+    if (heroImageUrl) heroImageId = await uploadHeroLenient(payload, tenant.id, heroImageUrl, titleStr, slug, imageCredit, imageCaption);
 
     const lexicalBody = await markdownToLexical(payload, bodyMarkdownStr);
 
@@ -531,33 +532,4 @@ async function resolveOrCreateAuthor(
     data: { name: byline, role: DEFAULT_AUTHOR_ROLE, city: timezone?.split("/")[1]?.replace(/_/g, " ") ?? "" },
   });
   return (created as { id: number | string }).id;
-}
-
-async function uploadHero(
-  payload: Awaited<ReturnType<typeof getPayload>>,
-  tenantId: number | string,
-  url: string,
-  title: string,
-  slug: string,
-  credit: string | null,
-  caption: string | null,
-): Promise<number | string | undefined> {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`hero fetch ${res.status}`);
-    const buffer = Buffer.from(await res.arrayBuffer());
-    const mimetype = res.headers.get("content-type")?.split(";")[0]?.trim() || "image/jpeg";
-    const ext = mimetype.split("/")[1] || "jpg";
-    const media = await scopedCreate({
-      payload,
-      collection: "media",
-      tenantId,
-      data: buildHeroMediaData({ title, credit, caption }),
-      file: { data: buffer, mimetype, name: `${slug}.${ext}`, size: buffer.length },
-    });
-    return (media as { id: number | string }).id;
-  } catch (err) {
-    payload.logger.warn(`[intake] hero upload failed (${(err as Error).message}) — publishing without hero`);
-    return undefined;
-  }
 }

@@ -10,7 +10,7 @@
  * / `payload.update` directly. Use scopedFind / scopedCreate / scopedUpdate.
  */
 
-import type { Payload, Where } from "payload";
+import type { Payload, PayloadRequest, Where } from "payload";
 
 type CollectionSlug = Parameters<Payload["find"]>[0]["collection"];
 
@@ -100,6 +100,10 @@ export interface ScopedUpdateArgs {
   data: Record<string, unknown>;
   locale?: string;
   context?: Record<string, unknown>;
+  /** Optional: run inside a caller's transaction (e.g. `withHubArticleLock`'s `req`). */
+  req?: PayloadRequest;
+  /** Optional: population depth of the returned doc. */
+  depth?: number;
 }
 
 /**
