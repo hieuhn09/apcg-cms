@@ -39,6 +39,9 @@ interface EngineContext {
   /** Set only by the hub AUTHOR routes (POST / PATCH /api/hub/articles, APCGHub
    *  P5.1): hub-asserted operator + action; `fields` = request keys that changed. */
   hubAuthor?: { actor: { email: string; role: string; id?: number | string }; action: "create" | "update"; fields?: string[] };
+  /** Set only by the engine hero-replace route (POST /api/engine/articles/hero):
+   *  a heroImage-only swap. See the exemption in `articleBookkeeping`. */
+  heroSwap?: boolean;
 }
 
 function engineCtx(context: unknown): EngineContext {
@@ -196,6 +199,11 @@ export const articleBookkeeping: CollectionBeforeChangeHook = ({
   // would make enqueueTranslations treat up-to-date translations as stale and
   // re-queue them on republish, with no word of the article changed.
   if ((req.context as { hubWrite?: unknown })?.hubWrite) return data;
+  // Engine hero swaps (POST /api/engine/articles/hero) change only heroImage: same
+  // exemption, for the same reason. A bump would make enqueueTranslations re-queue
+  // every up-to-date locale. The route logs its own activity row with the engine id,
+  // so skipping the `lastEngine` stamp loses no audit data.
+  if ((req.context as { heroSwap?: unknown })?.heroSwap === true) return data;
 
   const ctx = engineCtx(req.context);
   const isHuman = Boolean(req.user);
