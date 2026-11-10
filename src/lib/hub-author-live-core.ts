@@ -13,8 +13,12 @@
  *   → tenant ∈ grant + `features.articles` (403, `resolveTenant`)
  *   → tenant ∈ `HUB_LIVE_EDIT_TENANTS` (403 feature_disabled "live edit disabled for
  *     tenant", BEFORE any article read — D11)
+ *   → wide = tenant ∈ `HUB_LIVE_EDIT_WIDE_TENANTS`; NOT wide and a media key / wide flag
+ *     present ⇒ 422 not_live_editable media_locked | flags_locked (`liveLockedReason`,
+ *     still before any article read)
  *   → id shape + int4 (404) → gate 1 (D2: latest + FULL main of THAT tenant, 404; 422
- *     not_live_editable origin | scheduled | status | not_hub_authored; 409 draft_diverged)
+ *     not_live_editable origin | scheduled | status | not_hub_authored; 409 draft_diverged;
+ *     wide: engine + CMS-hand-made articles pass, `import` stays `origin`)
  *     → `expectedVersion` === main.version (409 version_conflict)
  *   → `buildDraftUpdateData` (the PATCH pipeline: round-trip ⇒ 422 body_not_editable,
  *     refs, merge rules, conversion + body media, the field map) → D5 (body images ⊆ the
@@ -34,6 +38,9 @@
  * `context.hubWrite`): `articleBookkeeping` bumps `version`, marks translations outdated
  * and leaves `lastEngine` / `editedByHuman` / `origin` alone; `articleActivity` writes one
  * `human_edit` row; the revalidate webhook fires (no `disableRevalidate`).
+ * Wide + an `engine` article not yet `editedByHuman` ⇒ the write also sets
+ * `editedByHuman: true` (OD2), so an engine re-send of the same `engineDraftId` gets the
+ * intake's 409 `human_edited_content_not_overwritten` instead of overwriting the edit.
  *
  * Logs: an error NAME / CODE and field NAMES only — never content or a token. The exported
  * route wrapper never passes `deps`; `handleHubLiveUpdateWith(…, deps)` is for unit checks.
@@ -69,10 +76,14 @@ import {
 import {
   HUB_LIVE_EDITABLE_FLAGS,
   HUB_LIVE_FIELD_KEYS,
+  HUB_LIVE_WIDE_FLAGS,
   isLiveFieldKey,
+  isLiveWideTenant,
   liveEditTenants,
   liveGateReason,
+  liveLockedReason,
   livePostWriteCheck,
+  liveWideTenants,
   parseLiveBody,
   type HubLiveFieldKey,
   type HubLiveGateReason,
@@ -85,11 +96,14 @@ const SCOPE = "hub/articles/live";
 type Doc = Record<string, unknown>;
 type Id = number | string;
 
+/** Every flag column a live write may carry (the wide ones only reach `data` on a wide tenant). */
+const LIVE_FLAG_COLUMNS: readonly string[] = [...HUB_LIVE_EDITABLE_FLAGS, ...HUB_LIVE_WIDE_FLAGS];
+
 /**
  * D12 (CMS3-1): the stored column(s) of every live key — the columns `buildDraftUpdateData`
- * writes for it. `flags` lists the two editable flag columns; only the flag columns actually
- * WRITTEN (present in the update data — sent AND different from the stored value) are left out
- * of the post-write comparison, so an unchanged sent flag is still compared.
+ * writes for it. `flags` lists every flag column a live write may carry; only the flag columns
+ * actually WRITTEN (present in the update data — sent AND different from the stored value) are
+ * left out of the post-write comparison, so an unchanged sent flag is still compared.
  */
 export const LIVE_KEY_COLUMNS: Record<HubLiveFieldKey, readonly string[]> = {
   title: ["title"],
@@ -105,28 +119,43 @@ export const LIVE_KEY_COLUMNS: Record<HubLiveFieldKey, readonly string[]> = {
   citySlugs: ["cities"],
   authorId: ["author"],
   coAuthorIds: ["coAuthors"],
-  flags: HUB_LIVE_EDITABLE_FLAGS,
+  flags: LIVE_FLAG_COLUMNS,
   sponsor: ["sponsor"],
+  heroImageId: ["heroImage"],
+  leadImageCaption: ["leadImageCaption"],
   pinnedUntil: ["pinnedUntil"],
 };
 
-/** The columns left out of D12 (1) for this write: the mapped columns of every CHANGED key. */
+/**
+ * The columns left out of D12 (1) for this write: the mapped columns of every CHANGED key,
+ * plus `editedByHuman` when the write itself sets it (OD2, wide + engine article).
+ */
 export function liveChangedColumns(changed: readonly HubDraftFieldKey[], data: Record<string, unknown>): string[] {
   const out: string[] = [];
   for (const k of changed) {
     if (!isLiveFieldKey(k)) continue;
     if (k === "flags") {
-      for (const f of HUB_LIVE_EDITABLE_FLAGS) if (Object.prototype.hasOwnProperty.call(data, f)) out.push(f);
+      for (const f of LIVE_FLAG_COLUMNS) if (Object.prototype.hasOwnProperty.call(data, f)) out.push(f);
       continue;
     }
     out.push(...LIVE_KEY_COLUMNS[k]);
   }
+  if (Object.prototype.hasOwnProperty.call(data, "editedByHuman")) out.push("editedByHuman");
   return out;
+}
+
+/**
+ * OD2: the extra column a wide live write of an `engine` article carries — `editedByHuman:
+ * true` when the row (read in the lock) is not human-edited yet. Not wide, a `manual`
+ * article, or already true ⇒ `{}` (the P5.4 write, unchanged).
+ */
+export function liveHumanEditData(main: Doc, wide: boolean): { editedByHuman?: true } {
+  return wide && main.origin === "engine" && main.editedByHuman !== true ? { editedByHuman: true } : {};
 }
 
 // ── Response bodies (T2) ─────────────────────────────────────────────────────
 
-const notLiveEditable = (reason: HubLiveGateReason) => json({ ok: false, status: "not_live_editable", reason }, 422);
+const notLiveEditable = (reason: HubLiveGateReason | "media_locked" | "flags_locked") => json({ ok: false, status: "not_live_editable", reason }, 422);
 const draftDiverged = () => json({ ok: false, status: "draft_diverged", reason: "article has unpublished changes" }, 409);
 const liveFeatureDisabled = () => json({ ok: false, status: "feature_disabled", reason: "live edit disabled for tenant" }, 403);
 const authorKeyRefused = () => json({ ok: false, status: "forbidden", reason: "author key cannot live-edit" }, 403);
@@ -183,6 +212,8 @@ export interface HubLiveDeps {
   lockRow?: (payload: Payload, id: Id, req: PayloadRequest | undefined) => Promise<void>;
   /** D11 (default: `liveEditTenants()` read from the env on this call). */
   liveTenants?: readonly string[];
+  /** Wide scope (default: `liveWideTenants()` read from the env on this call). */
+  wideTenants?: readonly string[];
   /** D15: called in the lock right before the write, after every read of gate 2. */
   beforeWrite?: () => Promise<void>;
   convert?: (payload: Payload, md: string) => Promise<ConvertResult>;
@@ -199,12 +230,14 @@ type GateFail = { ok: false; response: Response };
  * latest (draft) + FULL main of THIS tenant (404) → `liveGateReason`. `req` = the transaction (gate 2) or none (gate 1).
  * Gate 2 reads `main` via `findMain` OUTSIDE the transaction; that is correct ONLY because the
  * row lock (D16) is already held when gate 2 runs. Do not "fix" this by reading before the lock.
+ * `wide`: the gate ignores hub authorship, so the `content-engines` lookup is skipped.
  */
 async function readGate(
   payload: Payload,
   articleId: number,
   tenant: { id: Id },
   findMain: (payload: Payload, id: Id) => Promise<Doc | null>,
+  wide: boolean,
   req?: PayloadRequest,
 ): Promise<GateOk | GateFail> {
   const latest = (await payload.findByID({
@@ -220,7 +253,7 @@ async function readGate(
   if (!latest || String(toId(latest.tenant)) !== String(tenant.id)) return { ok: false, response: notFound() };
   const main = await findMain(payload, articleId);
   if (!main || String(toId(main.tenant)) !== String(tenant.id)) return { ok: false, response: notFound() };
-  const reason = liveGateReason({ main, latest, isHubAuthored: await isHubAuthoredDoc(payload, latest) });
+  const reason = liveGateReason({ main, latest, wide, isHubAuthored: wide ? false : await isHubAuthoredDoc(payload, latest) });
   if (reason === "draft_diverged") return { ok: false, response: draftDiverged() };
   if (reason) return { ok: false, response: notLiveEditable(reason) };
   return { ok: true, main, latest };
@@ -274,12 +307,16 @@ export async function handleHubLiveUpdateWith(
     // D11: the CMS switch, before the first article read.
     const liveTenants = deps?.liveTenants ?? liveEditTenants();
     if (!liveTenants.includes(tenant.slug)) return liveFeatureDisabled();
+    // Wide scope, also before the first article read: a non-wide tenant keeps the P5.4 locks.
+    const wide = isLiveWideTenant(tenant.slug, deps?.wideTenants ?? liveWideTenants());
+    const locked = liveLockedReason(v as unknown as Doc, wide);
+    if (locked) return notLiveEditable(locked);
 
     if (!isHubArticleId(id)) return notFound();
     const articleId = Number(id);
 
     // Gate 1 (D2) + expectedVersion.
-    const g1 = await readGate(payload, articleId, tenant, findMain);
+    const g1 = await readGate(payload, articleId, tenant, findMain, wide);
     if (!g1.ok) return g1.response;
     const { main, latest } = g1;
     const mainVersion = versionOf(main);
@@ -296,7 +333,7 @@ export async function handleHubLiveUpdateWith(
     if (!built.ok) return built.response;
     const { data, changed } = built;
 
-    // D5: no new image on a live article.
+    // D5: no new image in a live body (kept for wide too; only the hero may be a new upload).
     if (v.bodyMarkdown !== undefined && !liveBodyMediaAllowed(v.bodyMarkdown, main.body)) return invalid({ bodyMarkdown: "unknown_ref" });
 
     if (changed.length === 0) {
@@ -308,7 +345,7 @@ export async function handleHubLiveUpdateWith(
     if (Object.keys(fields).length) return invalid(fields);
 
     return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id, articleId }, (lk) =>
-      inLock(lk, { v, tenant, articleId, data, changed }),
+      inLock(lk, { v, tenant, articleId, data, changed, wide }),
     );
   } catch (err) {
     return logInternal(payload, engine.id, err);
@@ -316,16 +353,18 @@ export async function handleHubLiveUpdateWith(
 
   async function inLock(
     lk: HubLockCtx,
-    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubDraftFieldKey[] },
+    s: { v: HubDraftInput; tenant: TenantDoc; articleId: number; data: Doc; changed: HubDraftFieldKey[]; wide: boolean },
   ): Promise<HubLockResult> {
-    const { v, tenant, articleId, data, changed } = s;
+    const { v, tenant, articleId, changed, wide } = s;
     const fail = (value: Response): HubLockResult => ({ ok: false, value });
     // D16: the row lock BEFORE any read of gate 2.
     await (deps?.lockRow ?? defaultLockRow)(payload, articleId, lk.req);
-    const g2 = await readGate(payload, articleId, tenant, findMain, lk.req);
+    const g2 = await readGate(payload, articleId, tenant, findMain, wide, lk.req);
     if (!g2.ok) return fail(g2.response);
     const currentVersion = versionOf(g2.main);
     if (v.expectedVersion !== currentVersion) return fail(versionConflict(currentVersion));
+    // OD2: decided on the row read under the lock.
+    const data: Doc = { ...s.data, ...liveHumanEditData(g2.main, wide) };
 
     // D12: `pre`, right after gate 2, before the seam and the write.
     const pre = await readMainAll(payload, articleId, lk.req, findMainTx);

@@ -65,6 +65,7 @@ import {
   type HubParseResult,
 } from "@/lib/hub-author-input";
 import { convertBody, isRoundTripSafeBody, lexicalTreesEqual, type ConvertResult, type HubEditorConfig } from "@/lib/hub-author-body";
+import { isLiveEditTenant, isLiveWideTenant, liveEditTenants, liveGateReason, liveWideTenants } from "@/lib/hub-author-live-pure";
 import { bodyMediaIdsMatch, findSlugConflict, resolveDraftRefs, type ResolvedRefs } from "@/lib/hub-author-refs";
 import {
   busyResponse,
@@ -457,6 +458,52 @@ export async function loadHubEditableArticle(
   if (reason) return { ok: false, response: notEditable(reason) };
   if (!(await isHubAuthoredDoc(payload, latest))) return { ok: false, response: notEditable("not_hub_authored") };
   return { ok: true, articleId, latest, main };
+}
+
+/** Seams of `loadHubMediaArticle` (unit checks only; production never passes them). */
+export interface HubMediaArticleDeps {
+  /** `HUB_LIVE_EDIT_TENANTS` (default: read from the env on this call). */
+  liveTenants?: readonly string[];
+  /** `HUB_LIVE_EDIT_WIDE_TENANTS` (default: read from the env on this call). */
+  wideTenants?: readonly string[];
+}
+
+/**
+ * The article gate of `POST /api/hub/media` (wide live edit, content-engine plan
+ * hub-live-edit-widen_PLAN_10-11-26.md, step 2.3): `loadHubEditableArticle` first (a
+ * hub-authored manual draft — unchanged, PATCH keeps using it directly). Only when that
+ * answers 422 not_editable AND the tenant is in BOTH live switches, the article may instead
+ * be a PUBLISHED one that passes the WIDE live gate (`liveGateReason` with `wide`: manual or
+ * engine, not scheduled, published on both statuses, no unpublished draft) — so a new hero
+ * can be uploaded for a live edit. Otherwise the draft gate's own response is returned, so a
+ * non-wide tenant sees exactly the old 404 / 422 not_editable.
+ */
+export async function loadHubMediaArticle(
+  payload: Payload,
+  tenant: { id: Id; slug: string },
+  id: string,
+  deps?: HubMediaArticleDeps,
+): Promise<{ ok: true; articleId: number } | { ok: false; response: Response }> {
+  const draft = await loadHubEditableArticle(payload, tenant, id);
+  if (draft.ok) return { ok: true, articleId: draft.articleId };
+  if (draft.response.status !== 422) return draft;
+  const wide =
+    isLiveEditTenant(tenant.slug, deps?.liveTenants ?? liveEditTenants()) &&
+    isLiveWideTenant(tenant.slug, deps?.wideTenants ?? liveWideTenants());
+  if (!wide) return draft;
+  const articleId = Number(id);
+  const latest = (await payload.findByID({
+    collection: "articles",
+    id: articleId,
+    draft: true,
+    depth: 0,
+    overrideAccess: true,
+    disableErrors: true,
+  })) as unknown as Doc | null;
+  const main = await defaultFindMain(payload, articleId);
+  if (!latest || !main || String(toId(latest.tenant)) !== String(tenant.id) || String(toId(main.tenant)) !== String(tenant.id)) return draft;
+  if (liveGateReason({ main, latest, isHubAuthored: false, wide: true }) !== null) return draft;
+  return { ok: true, articleId };
 }
 
 /** The result of `buildDraftUpdateData`: the update `data` + the changed REQUEST keys, or the frozen error Response. */

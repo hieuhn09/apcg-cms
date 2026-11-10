@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { HUB_DRAFT_FIELD_KEYS, HUB_FLAG_KEYS, parseCreateBody, parseUpdateBody } from "./hub-author-input";
-import { HUB_LIVE_EDITABLE_FLAGS, HUB_LIVE_FIELD_KEYS, HUB_LIVE_LOCKED_FLAGS, parseLiveBody } from "./hub-author-live-pure";
+import { HUB_LIVE_EDITABLE_FLAGS, HUB_LIVE_FIELD_KEYS, HUB_LIVE_WIDE_FLAGS, parseLiveBody } from "./hub-author-live-pure";
 
 const actor = { email: "e@x.test", role: "editor" };
 
@@ -16,7 +16,7 @@ describe("hub pin + exclusive flags", () => {
     for (const f of ["pinnedToLatest", "exclusive"] as const) {
       assert.ok((HUB_FLAG_KEYS as readonly string[]).includes(f));
       assert.ok((HUB_LIVE_EDITABLE_FLAGS as readonly string[]).includes(f));
-      assert.ok(!(HUB_LIVE_LOCKED_FLAGS as readonly string[]).includes(f));
+      assert.ok(!(HUB_LIVE_WIDE_FLAGS as readonly string[]).includes(f));
     }
   });
   it("draft PATCH accepts them as booleans", () => {

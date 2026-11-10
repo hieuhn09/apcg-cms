@@ -422,8 +422,9 @@ test("view=edit live block carries populated values and cms-media tokens when li
     return a.collection === "articles" && a.depth === 2 ? { ...d, ...display } : d;
   };
   const live = await sel.computeEditLive({ payload: w.payload, mainDoc: { ...w.st.main }, tenantId: 1, tenantSlug: "gcv", liveTenants: ["gcv"] });
-  assert.deepEqual(Object.keys(live), ["editable", "reason", "version", "bodyEditable", "pillarSlug", "subSectionSlug", "secondary", "tagSlugs", "countrySlugs", "citySlugs", "authorId", "coAuthorIds", "flags", "sponsor", "pinnedUntil", "hero", "leadImageCaption", "bodyMedia"]);
-  assert.equal(Object.keys(live).length, 18);
+  assert.deepEqual(Object.keys(live), ["editable", "reason", "version", "bodyEditable", "pillarSlug", "subSectionSlug", "secondary", "tagSlugs", "countrySlugs", "citySlugs", "authorId", "coAuthorIds", "flags", "sponsor", "pinnedUntil", "hero", "leadImageCaption", "bodyMedia", "scope"]);
+  assert.equal(Object.keys(live).length, 19);
+  assert.equal((live as unknown as Doc).scope, "hub");
   const y = live as unknown as Doc;
   assert.deepEqual([y.editable, y.reason, y.version, y.bodyEditable, y.pillarSlug, y.subSectionSlug, y.tagSlugs, y.countrySlugs, y.authorId, y.coAuthorIds, y.leadImageCaption], [true, "ok", 4, true, "p-main", "s-a", ["t-a"], ["vietnam"], 3, [4], "Cap"]);
   assert.deepEqual(y.secondary, [{ pillarSlug: "p-other", subSectionSlug: null }]);
@@ -535,4 +536,224 @@ test("live takes a FOR NO KEY UPDATE row lock on the article through the transac
   const r2 = await call(w2, { title: "T11" });
   assert.deepEqual([r2.status, r2.body], [500, { ok: false, status: "internal_error" }]);
   assert.equal(w2.log.updates.length, 0);
+});
+
+// ── Wide scope (content-engine plan hub-live-edit-widen_PLAN_10-11-26.md, Phase 1) ──────────────
+
+const ENGINE_MAIN: Doc = { origin: "engine", engineDraftId: "content-engine:gcv:abc", editedByHuman: false, lastEngine: 9 };
+const contentEngineReads = (w: World) => w.log.reads.filter((r) => r.collection === "content-engines");
+
+test("non-wide tenant keeps the P5.4 media and flags locks, now after the tenant switches and before any article read", async () => {
+  const media = { ok: false, status: "not_live_editable", reason: "media_locked" };
+  const flags = { ok: false, status: "not_live_editable", reason: "flags_locked" };
+  for (const fields of [{ heroImageId: 77 }, { leadImageCaption: "Cap" }, { heroImageId: null }, { heroImageId: 77, flags: { breaking: true } }]) {
+    const w = world({ media: [77] });
+    const r = await call(w, fields, { wideTenants: [] });
+    assert.deepEqual([r.status, r.body], [422, media], JSON.stringify(fields));
+    assert.equal(articleReads(w).length, 0);
+  }
+  for (const f of ["breaking", "aiAssisted", "sponsored", "affiliate"]) {
+    const w = world();
+    const r = await call(w, { flags: { [f]: false } }, { wideTenants: ["dtw"] });
+    assert.deepEqual([r.status, r.body], [422, flags], f);
+    assert.equal(articleReads(w).length, 0);
+  }
+  // The tenant switch still answers first: a tenant outside HUB_LIVE_EDIT_TENANTS is 403 even with media keys and even when wide.
+  const w0 = world({ media: [77] });
+  const r0 = await call(w0, { heroImageId: 77 }, { liveTenants: ["dtw"], wideTenants: ["gcv"] });
+  assert.deepEqual([r0.status, r0.body.status], [403, "feature_disabled"]);
+  assert.equal(articleReads(w0).length, 0);
+  // slug is still refused at the parse step, wide or not.
+  const ws = world();
+  const rs = await call(ws, { slug: "new" }, { wideTenants: ["gcv"] });
+  assert.deepEqual([rs.status, rs.body.reason], [422, "slug_locked"]);
+  // Non-wide engine article: the P5.4 gate answers origin; CMS hand-made: not_hub_authored.
+  assert.deepEqual((await call(world({ main: ENGINE_MAIN }), { dek: "D" }, { wideTenants: [] })).body.reason, "origin");
+  assert.deepEqual((await call(world({ hubAuthorLookup: false }), { dek: "D" }, { wideTenants: [] })).body.reason, "not_hub_authored");
+});
+
+test("wide tenant: engine article live edit sets editedByHuman once and D12 does not report it", async () => {
+  const w = world({ main: ENGINE_MAIN });
+  const r = await call(w, { dek: "Human dek" }, { wideTenants: ["gcv"] });
+  assert.deepEqual([r.status, r.body.changed, r.body.version], [200, ["dek"], 5]);
+  const u = w.log.updates[0]!;
+  assert.deepEqual(u.data, { dek: "Human dek", editedByHuman: true });
+  assert.deepEqual(u.context, { hubAuthor: { actor: ACTOR, action: "update", fields: ["dek"] }, engineId: 60 });
+  assert.deepEqual([w.st.main.editedByHuman, w.st.main.origin, w.st.main.engineDraftId, w.st.main.lastEngine], [true, "engine", "content-engine:gcv:abc", 9]);
+  // the gate never looked up hub authorship
+  assert.equal(contentEngineReads(w).length, 0);
+  // A second save: already human-edited ⇒ the column is not written again.
+  const r2 = await call(w, { dek: "Human dek 2" }, { wideTenants: ["gcv"] }, { expectedVersion: 5 });
+  assert.equal(r2.status, 200);
+  assert.deepEqual(w.log.updates[1]!.data, { dek: "Human dek 2" });
+  // A no-op save writes nothing at all (no editedByHuman-only write).
+  const wn = world({ main: ENGINE_MAIN });
+  const rn = await call(wn, { dek: null }, { wideTenants: ["gcv"] });
+  assert.deepEqual([rn.status, rn.body.changed, wn.log.updates.length], [200, [], 0]);
+  // CMS hand-made manual article: editable when wide, editedByHuman left alone.
+  const wm = world({ hubAuthorLookup: false });
+  const rm = await call(wm, { dek: "D" }, { wideTenants: ["gcv"] });
+  assert.equal(rm.status, 200);
+  assert.deepEqual(wm.log.updates[0]!.data, { dek: "D" });
+  // import stays refused; scheduled / hidden / draft_diverged keep their answers.
+  assert.deepEqual((await call(world({ main: { origin: "import" } }), { dek: "D" }, { wideTenants: ["gcv"] })).body.reason, "origin");
+  assert.deepEqual((await call(world({ main: { ...ENGINE_MAIN, workflowStatus: "hidden" } }), { dek: "D" }, { wideTenants: ["gcv"] })).body.reason, "status");
+  assert.deepEqual((await call(world({ main: ENGINE_MAIN, latest: { workflowStatus: "scheduled" } }), { dek: "D" }, { wideTenants: ["gcv"] })).body.reason, "scheduled");
+  const rd = await call(world({ main: ENGINE_MAIN, latest: { _status: "draft", version: 5 } }), { dek: "D" }, { wideTenants: ["gcv"] });
+  assert.deepEqual([rd.status, rd.body.status], [409, "draft_diverged"]);
+});
+
+test("wide tenant: hero, lead caption and the four wide flags are written and D12 leaves exactly their columns out", async () => {
+  const w = world({ main: ENGINE_MAIN, media: [77] });
+  const r = await call(w, { heroImageId: 77, leadImageCaption: "New caption", flags: { breaking: true, aiAssisted: true, sponsored: true, affiliate: true }, sponsor: "Acme" }, { wideTenants: ["gcv"] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.changed, ["heroImageId", "leadImageCaption", "flags", "sponsor"]);
+  const data = w.log.updates[0]!.data as Doc;
+  assert.deepEqual(data, { heroImage: 77, leadImageCaption: "New caption", breaking: true, aiAssisted: true, sponsored: true, affiliate: true, sponsor: "Acme", editedByHuman: true });
+  assert.deepEqual(
+    core.liveChangedColumns(["heroImageId", "leadImageCaption", "flags", "sponsor"], data).sort(),
+    ["affiliate", "aiAssisted", "breaking", "editedByHuman", "heroImage", "leadImageCaption", "sponsor", "sponsored"],
+  );
+  assert.deepEqual([w.st.main.heroImage, w.st.main.leadImageCaption, w.st.main.workflowStatus, w.st.main.version], [77, "New caption", "published", 5]);
+  // Turning a disclosure flag on without a sponsor ⇒ 422 sponsor required (merge rules), nothing written.
+  const ws = world({ main: ENGINE_MAIN });
+  const rs = await call(ws, { flags: { sponsored: true } }, { wideTenants: ["gcv"] });
+  assert.deepEqual([rs.status, (rs.body.fields as Doc)?.sponsor, ws.log.updates.length], [422, "required", 0]);
+  // A hero that is not media of this tenant ⇒ 422, nothing written.
+  const wx = world({ main: ENGINE_MAIN, media: [] });
+  const rx = await call(wx, { heroImageId: 78 }, { wideTenants: ["gcv"] });
+  assert.deepEqual([rx.status, rx.body.status, wx.log.updates.length], [422, "invalid", 0]);
+  // Clearing the caption and the hero on a CMS hand-made article.
+  const wc = world({ hubAuthorLookup: false, main: { heroImage: 77, leadImageCaption: "Old" }, media: [77] });
+  const rc = await call(wc, { heroImageId: null, leadImageCaption: null }, { wideTenants: ["gcv"] });
+  assert.deepEqual([rc.status, wc.log.updates[0]!.data], [200, { heroImage: null, leadImageCaption: null }]);
+  // Video article: removing the hero ⇒ 422 heroImage required (checkPublishable).
+  const wv = world({ hubAuthorLookup: false, main: { heroImage: 77, video: 5, videoDescription: "V" }, media: [77] });
+  const rv = await call(wv, { heroImageId: null }, { wideTenants: ["gcv"] });
+  assert.deepEqual([rv.status, (rv.body.fields as Doc)?.heroImage, wv.log.updates.length], [422, "required", 0]);
+});
+
+test("wide D12 still catches an interleaved write on a wide column the request did not change", async () => {
+  // breaking sent equal to stored (not written) + an interleaved draft flips it ⇒ 409.
+  const w = world({ main: ENGINE_MAIN });
+  const r = await call(w, { dek: "D", flags: { breaking: false } }, {
+    wideTenants: ["gcv"],
+    lockRow: async () => {},
+    beforeWrite: async () => {
+      w.st.latest = { ...w.st.latest, breaking: true };
+    },
+  });
+  assert.deepEqual([r.status, r.body.status, w.log.events.at(-1)], [409, "draft_diverged", "kill"]);
+  // An interleaved write of editedByHuman itself on a manual article (not written by us) ⇒ 409.
+  const wm = world({ hubAuthorLookup: false });
+  const rm = await call(wm, { dek: "D" }, {
+    wideTenants: ["gcv"],
+    lockRow: async () => {},
+    beforeWrite: async () => {
+      wm.st.latest = { ...wm.st.latest, editedByHuman: true };
+    },
+  });
+  assert.deepEqual([rm.status, rm.body.status], [409, "draft_diverged"]);
+});
+
+test("wide switch defaults to the env on every call and needs HUB_LIVE_EDIT_TENANTS too", async () => {
+  const prev = process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+  try {
+    for (const [raw, want] of [[undefined, 422], ["", 422], ["GCV", 422], ["*", 422], ["dtw", 422], ["dtw, gcv", 200]] as const) {
+      if (raw === undefined) delete process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+      else process.env.HUB_LIVE_EDIT_WIDE_TENANTS = raw;
+      const w = world({ media: [77] });
+      const res = await core.handleHubLiveUpdateWith(request({ heroImageId: 77 }), ctx, deps(w) as never);
+      assert.equal(res.status, want, String(raw));
+    }
+    // wide env on, narrow switch off ⇒ 403 feature_disabled
+    process.env.HUB_LIVE_EDIT_WIDE_TENANTS = "gcv";
+    const w = world({ media: [77] });
+    const res = await core.handleHubLiveUpdateWith(request({ heroImageId: 77 }), ctx, deps(w, { liveTenants: [] }) as never);
+    assert.deepEqual([res.status, ((await res.json()) as Doc).status], [403, "feature_disabled"]);
+  } finally {
+    if (prev === undefined) delete process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+    else process.env.HUB_LIVE_EDIT_WIDE_TENANTS = prev;
+  }
+});
+
+test("LIVE_KEY_COLUMNS maps the wide keys and liveHumanEditData only marks a wide engine row", () => {
+  assert.deepEqual([core.LIVE_KEY_COLUMNS.heroImageId, core.LIVE_KEY_COLUMNS.leadImageCaption], [["heroImage"], ["leadImageCaption"]]);
+  assert.deepEqual([...core.LIVE_KEY_COLUMNS.flags], ["deepDive", "longHaul", "pinnedToLatest", "exclusive", "breaking", "aiAssisted", "sponsored", "affiliate"]);
+  assert.deepEqual(core.liveHumanEditData({ origin: "engine", editedByHuman: false }, true), { editedByHuman: true });
+  assert.deepEqual(core.liveHumanEditData({ origin: "engine" }, true), { editedByHuman: true });
+  assert.deepEqual(core.liveHumanEditData({ origin: "engine", editedByHuman: true }, true), {});
+  assert.deepEqual(core.liveHumanEditData({ origin: "engine", editedByHuman: false }, false), {});
+  assert.deepEqual(core.liveHumanEditData({ origin: "manual", editedByHuman: false }, true), {});
+  assert.deepEqual(core.liveChangedColumns(["dek"], { dek: "x" }), ["dek"]);
+  assert.deepEqual(core.liveChangedColumns(["dek"], { dek: "x", editedByHuman: true }), ["dek", "editedByHuman"]);
+});
+
+// ── Wide scope, Phase 2: `edit.live.scope` ─────────────────────────────────────
+
+test("computeEditLive: non-wide tenant answers scope hub for hub-authored and status for engine; wide answers scope wide for engine and CMS hand-made", async () => {
+  const live = (w: World, wideTenants: readonly string[]) =>
+    sel.computeEditLive({ payload: w.payload, mainDoc: { ...w.st.main }, tenantId: 1, tenantSlug: "gcv", liveTenants: ["gcv"], wideTenants }) as Promise<unknown> as Promise<Doc>;
+  // not wide
+  const wh = world();
+  const h = await live(wh, []);
+  assert.deepEqual([h.editable, h.reason, h.scope], [true, "ok", "hub"]);
+  assert.deepEqual(await live(world({ main: ENGINE_MAIN }), ["dtw"]), { editable: false, reason: "status", version: 4 });
+  assert.deepEqual(await live(world({ hubAuthorLookup: false }), []), { editable: false, reason: "not_hub_authored", version: 4 });
+  // wide: engine + CMS hand-made editable, scope wide, no content-engines lookup
+  const we = world({ main: ENGINE_MAIN });
+  const e = await live(we, ["gcv"]);
+  assert.deepEqual([e.editable, e.reason, e.scope, e.version], [true, "ok", "wide", 4]);
+  assert.equal(contentEngineReads(we).length, 0);
+  const m = await live(world({ hubAuthorLookup: false }), ["gcv"]);
+  assert.deepEqual([m.editable, m.scope], [true, "wide"]);
+  // wide keeps the other reasons
+  assert.deepEqual(await live(world({ main: { origin: "import" } }), ["gcv"]), { editable: false, reason: "status", version: 4 });
+  assert.deepEqual(await live(world({ main: ENGINE_MAIN, latest: { _status: "draft", version: 5 } }), ["gcv"]), { editable: false, reason: "draft_diverged", version: 4 });
+  // the narrow switch still answers first, with no read
+  const wo = world({ main: ENGINE_MAIN });
+  assert.deepEqual(await sel.computeEditLive({ payload: wo.payload, mainDoc: { ...wo.st.main }, tenantId: 1, tenantSlug: "gcv", liveTenants: [], wideTenants: ["gcv"] }), { editable: false, reason: "feature_disabled", version: null });
+  assert.equal(wo.log.reads.length, 0);
+});
+
+test("loadHubArticleEdit: a published engine article gets a live block (editableReason status) only on a wide tenant", async () => {
+  const load = (w: World, liveTenants: readonly string[], wideTenants: readonly string[]) =>
+    sel.loadHubArticleEdit({ payload: w.payload, mainDoc: { ...w.st.main }, tenantId: 1, tenantSlug: "gcv", liveTenants, wideTenants });
+  // not wide (or wide without the narrow switch): unchanged P5.1 / P5.4 origin answer, no read
+  for (const [lt, wt] of [[["gcv"], []], [["gcv"], ["dtw"]], [[], ["gcv"]]] as const) {
+    const w = world({ main: ENGINE_MAIN });
+    assert.deepEqual(await load(w, lt, wt), { edit: { editable: false, editableReason: "origin" }, latest: null }, JSON.stringify([lt, wt]));
+    assert.equal(articleReads(w).length, 0);
+  }
+  // wide: the live block, editable, scope wide
+  const w = world({ main: ENGINE_MAIN });
+  const r = await load(w, ["gcv"], ["gcv"]);
+  const e = r.edit as unknown as Doc;
+  assert.deepEqual([e.editable, e.editableReason, (e.live as Doc).editable, (e.live as Doc).scope, r.latest], [false, "status", true, "wide", null]);
+  // an engine article that is not published (hidden) stays on the origin branch even when wide
+  const wh = world({ main: { ...ENGINE_MAIN, workflowStatus: "hidden" } });
+  assert.deepEqual(await load(wh, ["gcv"], ["gcv"]), { edit: { editable: false, editableReason: "origin" }, latest: null });
+  // an import article stays on the origin branch
+  const wi = world({ main: { origin: "import" } });
+  assert.deepEqual(await load(wi, ["gcv"], ["gcv"]), { edit: { editable: false, editableReason: "origin" }, latest: null });
+  // CMS hand-made published (status branch): wide ⇒ editable live, not wide ⇒ not_hub_authored
+  const wm = world({ hubAuthorLookup: false });
+  assert.equal(((await load(wm, ["gcv"], ["gcv"])).edit as unknown as { live: Doc }).live.scope, "wide");
+  const wm2 = world({ hubAuthorLookup: false });
+  assert.deepEqual(((await load(wm2, ["gcv"], [])).edit as unknown as { live: Doc }).live, { editable: false, reason: "not_hub_authored", version: 4 });
+  // default: the wide switch is read from the env on this call
+  const prev = process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+  try {
+    process.env.HUB_LIVE_EDIT_WIDE_TENANTS = "gcv";
+    const wd = world({ main: ENGINE_MAIN });
+    const rd = await sel.loadHubArticleEdit({ payload: wd.payload, mainDoc: { ...wd.st.main }, tenantId: 1, tenantSlug: "gcv", liveTenants: ["gcv"] });
+    assert.equal(((rd.edit as unknown as { live?: Doc }).live ?? {}).scope, "wide");
+    delete process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+    const wd2 = world({ main: ENGINE_MAIN });
+    const rd2 = await sel.loadHubArticleEdit({ payload: wd2.payload, mainDoc: { ...wd2.st.main }, tenantId: 1, tenantSlug: "gcv", liveTenants: ["gcv"] });
+    assert.deepEqual(rd2.edit, { editable: false, editableReason: "origin" });
+  } finally {
+    if (prev === undefined) delete process.env.HUB_LIVE_EDIT_WIDE_TENANTS;
+    else process.env.HUB_LIVE_EDIT_WIDE_TENANTS = prev;
+  }
 });

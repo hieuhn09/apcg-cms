@@ -7,7 +7,9 @@
  *
  *   multipart/form-data, closed field set, each name at most once:
  *     file (required) · alt (required, 1–300 after trim) · credit (optional, ≤ 300)
- *     articleId (required; a hub-authored manual draft of THIS tenant)
+ *     articleId (required; a hub-authored manual draft of THIS tenant, or — wide live
+ *       edit, 10-11-26 — a published article passing the WIDE live gate on a tenant in
+ *       both HUB_LIVE_EDIT_TENANTS and HUB_LIVE_EDIT_WIDE_TENANTS)
  *     actorRole (admin|editor|marketer) · actorId (optional)   — never an email (D1)
  *
  * Check order (first failure wins): auth (401/403) → `tenant` present (400) →
@@ -17,7 +19,9 @@
  * mime allowlist + magic bytes (415) → header size, JPEG SOS ≤ 64 (415) → edge ≤ 4096
  * and ≤ 16.8 MP (422 media_dimensions) → alt (422 alt_required / 400) → credit (400)
  * → articleId: shape / tenant (404), manual draft + hub-authored (422 not_editable)
- * — the SAME helper as PATCH → re-encode with sharp + create (`createTenantMedia`;
+ * — the SAME helper as PATCH, wrapped by `loadHubMediaArticle` (wide live edit: a
+ * published article on a wide tenant; anything else keeps the PATCH helper's answer)
+ * → re-encode with sharp + create (`createTenantMedia`;
  * 415 / 422 / 413 by error class) → ActivityLog `media_uploaded` → 201.
  *
  * Every error body is frozen (`HUB_MEDIA_ERROR_TABLE`). The 201 body (`mediaResponseBody`, in
@@ -32,7 +36,7 @@ import config from "@payload-config";
 import { json } from "@/lib/http";
 import { logActivity } from "@/lib/activity";
 import { authenticateHubAuthorEngine } from "@/lib/hub-author-auth";
-import { loadHubEditableArticle, logInternal, resolveTenant } from "@/lib/hub-author-handlers";
+import { loadHubMediaArticle, logInternal, resolveTenant } from "@/lib/hub-author-handlers";
 import {
   checkContentLength,
   hubMediaFileName,
@@ -79,7 +83,7 @@ export async function POST(request: Request): Promise<Response> {
     const v = await validateMediaFile(f.file, f.alt, f.credit);
     if (!v.ok) return v.code === "too_large" ? mediaTooLarge() : mediaError(v.code);
 
-    const article = await loadHubEditableArticle(payload, tenant, f.articleId);
+    const article = await loadHubMediaArticle(payload, tenant, f.articleId);
     if (!article.ok) return article.response;
 
     let doc: Doc;
