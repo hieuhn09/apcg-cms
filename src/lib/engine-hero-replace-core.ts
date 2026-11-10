@@ -55,6 +55,7 @@ import {
   validateHeroFetchUrl,
 } from "@/lib/engine-hero-replace-pure";
 import { uploadHeroMedia, type HeroUploadDeps } from "@/lib/engine-hero-upload";
+import { revalidateAfterCommit } from "@/hooks/revalidate";
 
 type Doc = Record<string, unknown>;
 type Id = number | string;
@@ -72,6 +73,12 @@ export interface HeroReplaceDeps {
   env?: Env;
   fetch?: HeroUploadDeps["fetch"];
   resolveHost?: HeroUploadDeps["resolveHost"];
+  /**
+   * The tenant frontend webhook, sent ONCE after the locked write committed (the write itself
+   * runs with `context.disableRevalidate`, so the hook never posts while the row and the
+   * advisory lock are held). Default `revalidateAfterCommit`; best-effort.
+   */
+  revalidate?: (payload: Payload, tenantId: Id, body: Doc) => Promise<void>;
   /** Test / probe seam: runs in the lock right before the write, after gate 2. */
   beforeWrite?: () => Promise<void>;
 }
@@ -153,7 +160,14 @@ export async function handleHeroReplace(request: Request, deps: HeroReplaceDeps)
   }
 
   // 5. The CMS switch, before any article read.
-  if (!isHeroReplaceTenant(String(tenant.slug), env)) return err(403, "feature_disabled", "hero replace disabled for tenant");
+  const disabled = async (reason: string) => {
+    await logActivity({ payload, eventType: "engine_action_denied", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { action: "replace_hero", reason } });
+    return err(403, "feature_disabled", reason);
+  };
+  if (!isHeroReplaceTenant(String(tenant.slug), env)) return disabled("hero replace disabled for tenant");
+  // 5b. Fail closed: an enabled tenant with no host allowlist would fetch from any public host.
+  const allowLocal = heroReplaceAllowLocal(env);
+  if (!allowLocal && heroReplaceUrlHosts(env).length === 0) return disabled("hero replace url hosts not configured");
 
   // 6. Feature gate.
   if (!featureEnabled(tenant, "articles")) {
@@ -215,9 +229,13 @@ export async function handleHeroReplace(request: Request, deps: HeroReplaceDeps)
     if (currentId !== v.expectedHeroMediaId) return heroChanged(currentId);
 
     // 11. Source URL guard, then fetch + sniff + Media create OUTSIDE the lock.
-    const allowLocal = heroReplaceAllowLocal(env);
     const urlCheck = validateHeroFetchUrl(v.heroImageUrl as string, { allowLocal, hosts: heroReplaceUrlHosts(env) });
-    if (!urlCheck.ok) return err(422, "unprocessable", `invalid_hero_url: ${urlCheck.reason}`);
+    // L5: the guard reason only, never the URL.
+    const badUrl = async (reason: string) => {
+      await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, targetCollection: "articles", targetId: articleId, detail: { route: ROUTE, reason: `invalid_hero_url: ${reason}` } });
+      return err(422, "unprocessable", `invalid_hero_url: ${reason}`);
+    };
+    if (!urlCheck.ok) return badUrl(urlCheck.reason);
     const up = await uploadHeroMedia(
       payload,
       { tenantId: tenant.id, url: urlCheck.url.toString(), title, slug, credit: v.imageCredit, caption: v.imageCaption },
@@ -233,6 +251,7 @@ export async function handleHeroReplace(request: Request, deps: HeroReplaceDeps)
     );
     if (!up.ok) {
       if (up.code === "fetch_failed" || up.code === "upload_failed") return err(502, "hero_upload_failed", up.reason);
+      if (up.code === "invalid_hero_url") return badUrl(up.reason);
       return err(422, "unprocessable", `${up.code}: ${up.reason}`);
     }
     const newId = up.id;
@@ -265,7 +284,8 @@ export async function handleHeroReplace(request: Request, deps: HeroReplaceDeps)
           locale: "en",
           req: lk.req,
           depth: 0,
-          context: { engineWrite: true, engineId: engine.id, heroSwap: true },
+          // `disableRevalidate`: the webhook is sent after commit (step 13), not from the hook.
+          context: { engineWrite: true, engineId: engine.id, heroSwap: true, disableRevalidate: true },
         });
       } catch (e) {
         if (isSingleHomeRuleError(e)) return fail(err(422, "unprocessable", humanErrorMessage(e)));
@@ -281,6 +301,11 @@ export async function handleHeroReplace(request: Request, deps: HeroReplaceDeps)
       const check = heroPostWriteCheck({ pre, post, latestAfter });
       if (!check.ok) {
         payload.logger.warn(`[${ROUTE}] post-write check failed: article=${articleId} tenant=${tenant.slug} leg=${check.reason} keys=${check.detail.join(",")}`);
+        return fail(draftDiverged());
+      }
+      // L4: the row must now point at the Media this call created.
+      if (mediaIdOf(post?.heroImage) !== mediaIdOf(newId)) {
+        payload.logger.warn(`[${ROUTE}] post-write check failed: article=${articleId} tenant=${tenant.slug} leg=hero keys=heroImage`);
         return fail(draftDiverged());
       }
       accepted = { oldId: cur2, version: versionOf(post as Doc) };
@@ -303,6 +328,12 @@ export async function handleHeroReplace(request: Request, deps: HeroReplaceDeps)
       targetId: articleId,
       detail: { action: "replace_hero", reason: v.reason, replacementKey: key, oldMediaId: done.oldId, newMediaId: newId },
     });
+    // Committed: notify the tenant frontend once (best-effort, never fails the request).
+    try {
+      await (deps.revalidate ?? revalidateAfterCommit)(payload, tenant.id, { tags: ["articles:all"], slug: asString(back?.slug) || slug });
+    } catch {
+      /* best-effort */
+    }
     return json({ ok: true, status: "replaced", articleId, oldMediaId: done.oldId, newMediaId: newId, heroUrl, version: done.version }, 200);
   } catch (e) {
     await logActivity({ payload, eventType: "integration_error", tenantId: tenant.id, actorType: "engine", actorEngineId: engine.id, detail: { route: ROUTE, message: (e as Error)?.message ?? String(e) } });

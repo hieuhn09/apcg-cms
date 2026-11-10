@@ -6,7 +6,8 @@
  *
  *   npm run test:engine-hero
  */
-import { beforeEach, describe, it } from "node:test";
+import { before, beforeEach, describe, it } from "node:test";
+import sharp from "sharp";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -19,7 +20,12 @@ import { sha256Hex } from "./crypto";
 type Doc = Record<string, unknown>;
 
 const TOKEN = "engine-token-abc";
-const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100, 7)]);
+// A real (decodable) JPEG: the strict upload reads the decoded header for the pixel cap.
+let JPEG: Buffer;
+before(async () => {
+  JPEG = await sharp({ create: { width: 2, height: 2, channels: 3, background: "#808080" } }).jpeg().toBuffer();
+});
+const HOSTS = "x.supabase.co";
 const KEY = "replace:42:11:12";
 
 interface World {
@@ -164,20 +170,24 @@ function fakePayload(): Payload {
 
 const REQ = { transactionID: 1 } as unknown as PayloadRequest;
 
-function deps(over: Partial<HeroReplaceDeps> = {}): HeroReplaceDeps & { fetched: string[]; lockCalls: number } {
-  const state = { fetched: [] as string[], lockCalls: 0 };
+function deps(over: Partial<HeroReplaceDeps> = {}): HeroReplaceDeps & { fetched: string[]; lockCalls: number; revalidated: Doc[] } {
+  const state = { fetched: [] as string[], lockCalls: 0, revalidated: [] as Doc[], inLock: false };
   const d: HeroReplaceDeps = {
     getPayload: async () => fakePayload(),
-    env: { ENGINE_HERO_REPLACE_TENANTS: "vowasia" },
+    env: { ENGINE_HERO_REPLACE_TENANTS: "vowasia", ENGINE_HERO_REPLACE_URL_HOSTS: HOSTS },
+    revalidate: async (_p, tenantId, body) => {
+      state.revalidated.push({ tenantId, body, inLock: state.inLock });
+    },
     fetch: (async (u: string) => {
       state.fetched.push(u);
-      return new Response(JPEG, { headers: { "content-type": "image/jpeg" } });
+      return new Response(JPEG as unknown as BodyInit, { headers: { "content-type": "image/jpeg" } });
     }) as never,
     resolveHost: async () => ["93.184.216.34"],
     lock: async (_args, fn) => {
       state.lockCalls += 1;
       const snap = { main: clone([...w.main]), latest: clone([...w.latest]) };
-      const r = await fn({ req: REQ, lockSlug: async () => {} });
+      state.inLock = true;
+      const r = await fn({ req: REQ, lockSlug: async () => {} }).finally(() => void (state.inLock = false));
       if (!r.ok) {
         w.main = new Map(snap.main);
         w.latest = new Map(snap.latest);
@@ -188,8 +198,9 @@ function deps(over: Partial<HeroReplaceDeps> = {}): HeroReplaceDeps & { fetched:
     readMainAll: async (p, id, req) => (await p.findByID({ collection: "articles", id, req, depth: 0, locale: "all" as never, overrideAccess: true, disableErrors: true })) as unknown as Doc,
     ...over,
   };
-  const out = d as HeroReplaceDeps & { fetched: string[]; lockCalls: number };
+  const out = d as HeroReplaceDeps & { fetched: string[]; lockCalls: number; revalidated: Doc[] };
   out.fetched = state.fetched;
+  out.revalidated = state.revalidated;
   Object.defineProperty(out, "lockCalls", { get: () => state.lockCalls });
   return out;
 }
@@ -354,7 +365,7 @@ describe("replaced", () => {
     const u = w.updates[0]!;
     assert.deepEqual(Object.keys(u.data as Doc).sort(), ["heroImage", "tenant"]);
     assert.deepEqual(u.data, { heroImage: newId, tenant: 4 });
-    assert.deepEqual(u.context, { engineWrite: true, engineId: 5, heroSwap: true });
+    assert.deepEqual(u.context, { engineWrite: true, engineId: 5, heroSwap: true, disableRevalidate: true });
     assert.equal(u.req, REQ);
     assert.equal(u.locale, "en");
     // media
@@ -567,7 +578,7 @@ describe("hardening (P15)", () => {
     const on = await call(local, deps({ env: { ENGINE_HERO_REPLACE_TENANTS: "vowasia", ENGINE_HERO_REPLACE_ALLOW_LOCAL: "true" }, resolveHost: async () => ["127.0.0.1"] }));
     assert.equal(on.status, 200);
     reset();
-    const prod = await call(local, deps({ env: { ENGINE_HERO_REPLACE_TENANTS: "vowasia", ENGINE_HERO_REPLACE_ALLOW_LOCAL: "true", NODE_ENV: "production" } }));
+    const prod = await call(local, deps({ env: { ENGINE_HERO_REPLACE_TENANTS: "vowasia", ENGINE_HERO_REPLACE_URL_HOSTS: "127.0.0.1", ENGINE_HERO_REPLACE_ALLOW_LOCAL: "true", NODE_ENV: "production" } }));
     assert.equal(prod.status, 422);
   });
   it("route exports maxDuration = 60 and only POST", () => {
@@ -579,5 +590,81 @@ describe("hardening (P15)", () => {
   it("the core has no static @payload-config import", () => {
     const src = readFileSync(path.join(process.cwd(), "src/lib/engine-hero-replace-core.ts"), "utf8");
     assert.equal(/from\s+["']@payload-config["']/.test(src), false);
+  });
+});
+
+describe("review fixes (M1, M3, L4, L5)", () => {
+  it("M1: the webhook is sent once, after the lock returned, only on replaced", async () => {
+    const r = await call(good);
+    assert.equal(r.body.status, "replaced");
+    assert.equal(r.d.revalidated.length, 1);
+    assert.deepEqual(r.d.revalidated[0], { tenantId: 4, body: { tags: ["articles:all"], slug: "a-wedding-in-hue" }, inLock: false });
+  });
+  it("M1: no webhook on noop, 409, rollback or dry run", async () => {
+    await call(good);
+    const noop = await call(good);
+    assert.equal(noop.body.status, "noop");
+    assert.equal(noop.d.revalidated.length, 0);
+    reset();
+    const changed = await call({ ...good, expectedHeroMediaId: 99 });
+    assert.equal(changed.d.revalidated.length, 0);
+    reset();
+    w.mutateOnUpdate = (d) => void (d.version = 6);
+    const rolled = await call(good);
+    assert.equal(rolled.status, 409);
+    assert.equal(rolled.d.revalidated.length, 0);
+    reset();
+    const dry = await call({ ...good, dryRun: true });
+    assert.equal(dry.d.revalidated.length, 0);
+  });
+  it("M1: a throwing webhook never fails the request", async () => {
+    const r = await call(good, deps({ revalidate: async () => { throw new Error("frontend down"); } }));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.status, "replaced");
+  });
+  it("M3: tenant enabled but ENGINE_HERO_REPLACE_URL_HOSTS empty -> 403 feature_disabled, no article read, no fetch", async () => {
+    for (const hosts of [undefined, "", " , "]) {
+      reset();
+      const r = await call(good, deps({ env: { ENGINE_HERO_REPLACE_TENANTS: "vowasia", ENGINE_HERO_REPLACE_URL_HOSTS: hosts } }));
+      assert.equal(r.status, 403);
+      assert.equal(r.body.status, "feature_disabled");
+      assert.equal(r.body.reason, "hero replace url hosts not configured");
+      assert.equal(w.articleFinds, 0);
+      assert.equal(r.d.fetched.length, 0);
+    }
+  });
+  it("M3: the local probe (ALLOW_LOCAL) may run without a host list", async () => {
+    const r = await call({ ...good, heroImageUrl: "http://127.0.0.1:4555/a.jpg" }, deps({ env: { ENGINE_HERO_REPLACE_TENANTS: "vowasia", ENGINE_HERO_REPLACE_ALLOW_LOCAL: "true" } }));
+    assert.equal(r.status, 200);
+  });
+  it("L4: post-write row pointing at another Media -> rollback + 409 draft_diverged", async () => {
+    w.mutateOnUpdate = (d) => void (d.heroImage = 999);
+    const r = await call(good);
+    assert.equal(r.status, 409);
+    assert.equal(r.body.status, "draft_diverged");
+    assert.equal(w.main.get(42)!.heroImage, 11);
+    assert.equal(w.activity.filter((a) => a.eventType === "engine_write_accepted").length, 0);
+    assert.equal(r.d.revalidated.length, 0);
+  });
+  it("L5: feature_disabled logs engine_action_denied with the reason", async () => {
+    await call(good, deps({ env: { ENGINE_HERO_REPLACE_TENANTS: "gtp" } }));
+    const rows = w.activity.filter((a) => a.eventType === "engine_action_denied");
+    assert.equal(rows.length, 1);
+    assert.deepEqual(rows[0]!.detail, { action: "replace_hero", reason: "hero replace disabled for tenant" });
+  });
+  it("L5: invalid_hero_url logs integration_error with the guard reason and never the URL", async () => {
+    const url = "https://169.254.169.254/secret-path.jpg";
+    await call({ ...good, heroImageUrl: url }, deps({ env: { ENGINE_HERO_REPLACE_TENANTS: "vowasia", ENGINE_HERO_REPLACE_URL_HOSTS: "169.254.169.254" } }));
+    const rows = w.activity.filter((a) => a.eventType === "integration_error");
+    assert.equal(rows.length, 1);
+    assert.match(String((rows[0]!.detail as Doc).reason), /^invalid_hero_url: /);
+    assert.equal(JSON.stringify(rows[0]).includes("secret-path"), false);
+    assert.equal(JSON.stringify(rows[0]).includes("169.254"), false);
+  });
+  it("L5: a DNS-level refusal is logged the same way", async () => {
+    await call(good, deps({ resolveHost: async () => ["10.1.2.3"] }));
+    const rows = w.activity.filter((a) => a.eventType === "integration_error");
+    assert.equal(rows.length, 1);
+    assert.equal(JSON.stringify(rows[0]).includes("supabase"), false);
   });
 });
