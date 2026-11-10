@@ -230,6 +230,84 @@ POST {CMS_URL}/api/engine/translation
 Approved/locked translations are never overwritten (409). See
 [10-translation.md](10-translation.md).
 
+## Hero replace
+
+`POST {CMS_URL}/api/engine/articles/hero` swaps ONLY `heroImage` on one article of one
+tenant (rights takedown or editorial fix of an engine pool image). It is used by the
+content-engine `npm run media:replace` CLI (media-gtp-vowasia phase 5). Code:
+`src/app/api/engine/articles/hero/route.ts` (binding) and
+`src/lib/engine-hero-replace-core.ts` (logic; the header lists the check order).
+
+**Off by default.** Two gates on top of the engine bearer:
+
+- the engine must hold BOTH `update_article` and `upload_media` (missing one: 403
+  `forbidden`, `reason: action not allowed: <action>`, plus an `engine_action_denied`
+  activity row); no new engine action exists;
+- the tenant slug must be listed in `ENGINE_HERO_REPLACE_TENANTS` (CSV, exact match,
+  read on every call; unset/empty = OFF). Not listed: 403 `feature_disabled` before any
+  article is read.
+
+Request (`Content-Type: application/json`, body at most 16 KB measured on the text):
+
+| Field | Required | Notes |
+|---|---|---|
+| `publicationId` | yes when the engine has several tenants | tenant slug |
+| `engineDraftId` | yes | the intake key (`content-engine:<pub>:<articles.id>`); lookup is tenant-scoped, another tenant's id is a 404 |
+| `expectedHeroMediaId` | yes (may be `null`) | the Central Media id the caller believes is current; `null` = "expects no hero" |
+| `heroImageUrl` | yes unless `dryRun` | https only; see "URL rules" |
+| `imageCredit` | no | trimmed plain text; empty = Media credit unset |
+| `imageCaption` | no | same rules as intake (trim, collapse, 200-char cap) |
+| `replacementKey` | yes unless `dryRun` | 1-120 chars; the CLI sends `replace:<articles.id>:<old asset>:<new asset>` |
+| `reason` | yes unless `dryRun` | 1-200 chars, stored in the activity detail |
+| `dryRun` | no | `true` = inspect only |
+
+Responses (error envelope as intake: `{ok:false, status, reason}`):
+
+| HTTP | `status` | When |
+|---|---|---|
+| 200 | `replaced` | `{ok, articleId, oldMediaId, newMediaId, heroUrl, version}` |
+| 200 | `noop` | the `replacementKey` token is already in the current hero filename (`{articleId, currentHeroMediaId, heroUrl}`) |
+| 200 | `dry_run` | `{articleId, currentHeroMediaId, currentHeroCredit, currentHeroFilename, version, workflowStatus, draftDiverged}`; never fetches, writes or logs |
+| 400 | `bad_request` | invalid JSON or fields (`reason` names them) |
+| 401 | `unauthorized` | unknown / inactive bearer |
+| 403 | `forbidden` / `feature_disabled` | missing action, tenant not allowed, or tenant not in the env switch |
+| 404 | `not_found` | no such `engineDraftId` in THIS tenant |
+| 409 | `hero_changed` | current hero differs from `expectedHeroMediaId` (`currentHeroMediaId` in the body) |
+| 409 | `draft_diverged` | the article has a pending draft / newer version, or the post-write check refused (`reason: article has unpublished changes`) |
+| 413 | `too_large` | body over 16 KB |
+| 422 | `unprocessable` | `articles` feature off; `reason` starts with `invalid_hero_url`, `hero_not_an_image`, `hero_too_large` or `article_invalid`; or a single-home rule message |
+| 500 | `error` | `reason: internal error` only (detail goes to an `integration_error` activity row) |
+| 502 | `hero_upload_failed` | fetch or Media create failed; the article is untouched |
+| 503 | `busy` | article lock busy; retry once after a few seconds |
+
+What the write does: a NEW Media doc (the old one is kept for audit; filename
+`<slug>-r<first 8 hex of sha256(replacementKey)>.<ext>`, `alt` = the article's
+default-locale title), then a non-draft update of `heroImage` only, inside the hub
+article lock plus a `FOR NO KEY UPDATE` row lock, with the draft gate re-run inside the
+lock and a post-write check (only `heroImage`/`updatedAt` may move; `version`,
+`_status`, `workflowStatus`, `publishedAt` must stay equal; a violation rolls back with
+409). The update carries `context.heroSwap`, so `version` is NOT bumped and
+translations are not re-queued. `editedByHuman` is not checked (an editor's own swap
+is protected by `expectedHeroMediaId`); any `workflowStatus` is accepted. The legacy
+imported shape (`_status: draft` + `workflowStatus: published`) keeps both values. The
+revalidate webhook fires as for any article save. Exactly one `engine_write_accepted`
+row is logged with `detail: {action: "replace_hero", reason, replacementKey,
+oldMediaId, newMediaId}`.
+
+URL rules (`validateHeroFetchUrl` + the upload helper): https only, no userinfo, no
+literal private/loopback/link-local/metadata address or internal name, every DNS
+answer must be public, no redirects (`redirect: manual`, 3xx = 422), 15 s timeout,
+response type `image/jpeg|png|webp` AND matching magic bytes, body streamed and cut at
+15 MB. `ENGINE_HERO_REPLACE_URL_HOSTS` (CSV of exact hosts, empty = any public host)
+pins the source host; set it to the engine's Supabase storage host BEFORE enabling a
+tenant. `ENGINE_HERO_REPLACE_ALLOW_LOCAL=true` relaxes http + loopback for the local
+probe only and is ignored when `VERCEL_ENV` is set or `NODE_ENV=production`. Residual:
+DNS rebinding between the lookup and the connect.
+
+Checks: `npm run test:engine-hero` (unit, no DB) and `npm run probe:hero-replace`
+(disposable local Postgres + `next dev`, cases HP1-HP11). Enable / rollback:
+[11-operations.md](11-operations.md) "Engine hero replace".
+
 ## Check activity
 
 Admin → **Activity Log** filters by tenant + event type (engine_write_accepted /

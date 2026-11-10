@@ -328,6 +328,37 @@ and status.
   site still publishes). Author bios, newsletters, contacts and the tag set are PENDING OWNER
   wording.
 
+## Engine hero replace
+
+`POST /api/engine/articles/hero` (contract: [08-content-engine-integration.md](08-content-engine-integration.md)
+"Hero replace") ships OFF. Owner steps, in this order:
+
+1. Set `ENGINE_HERO_REPLACE_URL_HOSTS` to the engine's Supabase storage host on this
+   project's Vercel env (Production). This is a security control: while it is empty any
+   public https host passes, so a stolen engine bearer could publish an arbitrary public
+   image as a hero. Set it BEFORE step 2.
+2. Set `ENGINE_HERO_REPLACE_TENANTS=vowasia` (CSV of tenant slugs, exact match) and
+   Redeploy.
+3. In /admin → Content Engines, give the `content-engine-vowasia` record BOTH
+   `update_article` and `upload_media`, allowed on tenant `vowasia` only.
+4. First production use: a dry run from the engine side (`media:replace` without
+   `--apply`, no Central write), then one approved rehearsal.
+
+Never set `ENGINE_HERO_REPLACE_ALLOW_LOCAL` on Vercel (it is ignored there anyway).
+
+**Rollback:** unset or empty `ENGINE_HERO_REPLACE_TENANTS` and Redeploy: every call
+answers 403 `feature_disabled`, nothing else changes (rehearsed on a local server
+10-11-26). Code rollback = revert the PR (no migration). A bad swap is undone in /admin
+by pointing the article's Hero Image back at the old Media (it is kept; the ids are in
+the `engine_write_accepted` activity row `detail`). Old image bytes stay reachable
+(the old Media row is public) until someone deletes them by hand.
+
+**Runbook — a replace call fails:** `hero_changed` (an editor swapped the hero) or
+`draft_diverged` (pending draft or newer version) are expected skips: resolve in
+/admin, then rerun. `busy` (503) is transient. `hero_upload_failed` (502): check the
+source URL is reachable from Vercel and on the host allowlist. `internal error` (500):
+read the `integration_error` activity row for the detail.
+
 ## Token rotation
 
 `tsx scripts/mint-token.ts read --tenant <slug>` / `engine --engine "<name>"`.
