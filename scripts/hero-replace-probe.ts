@@ -1,6 +1,6 @@
 /**
  * hero-replace-probe.ts — local-only empirical probe for `POST /api/engine/articles/hero`
- * (media-gtp-vowasia phase 5, cases HP1-HP11 of the content-engine plan
+ * (media-gtp-vowasia phase 5, cases HP1-HP11 of (plus HP12, review M3, in-process) the content-engine plan
  * `phase-5-hero-replace_PLAN_06-11-26.md`).
  *
  * LOCAL ONLY. First statements: refuse any non-local DATABASE_URL
@@ -432,6 +432,26 @@ async function main(): Promise<void> {
       if (r11.status === 200) check(`HP11 ${variant}: hero swapped`, relId(a11after.heroImage) === r11.json.newMediaId);
       else check(`HP11 ${variant}: hero untouched after the rollback`, relId(a11after.heroImage) === m11.id);
       info(`HP11 ${variant}: ${r11.status} ${String(r11.json.status)}`);
+    }
+
+    /* HP12 fail closed without a host list (review M3), in-process on the real DB + real auth */
+    console.log("\n[HP12] tenant enabled, ENGINE_HERO_REPLACE_URL_HOSTS empty, not the local probe");
+    {
+      const { handleHeroReplace } = await import("../src/lib/engine-hero-replace-core");
+      const m12 = await mkMedia(T.id, 0);
+      const a12 = await mkArticle(T.id, pillarT.id, authorT.id, m12.id);
+      const never = async (): Promise<never> => {
+        throw new Error("HP12: must not reach the lock / article reads");
+      };
+      const res12 = await handleHeroReplace(
+        new Request(`${BASE}/api/engine/articles/hero`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${tokA}` }, body: JSON.stringify(body(a12, m12.id, 2)) }),
+        { getPayload: async () => payload, lock: never, lockRow: never, readMainAll: never, env: { ENGINE_HERO_REPLACE_TENANTS: "dtw", ENGINE_HERO_REPLACE_URL_HOSTS: "" } },
+      );
+      const j12 = (await res12.json()) as Doc;
+      check("HP12 403 feature_disabled (url hosts not configured)", res12.status === 403 && j12.status === "feature_disabled" && j12.reason === "hero replace url hosts not configured", `${res12.status} ${JSON.stringify(j12)}`);
+      check("HP12 article untouched", relId((await readMain(a12.id)).heroImage) === m12.id);
+      const denied12 = (await pFind(payload, "activityLog", { where: { and: [{ eventType: { equals: "engine_action_denied" } }, { actorEngine: { equals: engA.id } }] }, limit: 50 })).docs as unknown as Doc[];
+      check("HP12 engine_action_denied row with the reason", denied12.some((d) => (d.detail as Doc | undefined)?.reason === "hero replace url hosts not configured"), `${denied12.length} row(s)`);
     }
   } finally {
     console.log("\n[cleanup]");
