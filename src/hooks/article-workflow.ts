@@ -224,12 +224,19 @@ export const articleBookkeeping: CollectionBeforeChangeHook = ({
 
   // translation stale-on-source-change: if a content field changed, flag every
   // non-protected target translation as outdated (best-effort; the translation
-  // engine re-checks state before writing).
+  // engine re-checks state before writing). `leadImageCaption` is localized content
+  // too (hub live edit widen, 10-11-26): compared only when the key is in `data`,
+  // with null / "" / missing all meaning "no caption".
+  const caption = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+  const captionChanged =
+    Object.prototype.hasOwnProperty.call(data, "leadImageCaption") &&
+    caption(data.leadImageCaption) !== caption(originalDoc?.leadImageCaption);
   const contentChanged =
     operation === "update" &&
     (data.title !== originalDoc?.title ||
       data.dek !== originalDoc?.dek ||
-      JSON.stringify(data.body) !== JSON.stringify(originalDoc?.body));
+      JSON.stringify(data.body) !== JSON.stringify(originalDoc?.body) ||
+      captionChanged);
   if (contentChanged && Array.isArray(data.translationStatus)) {
     data.translationStatus = (data.translationStatus as Array<Record<string, unknown>>).map(
       (row) => {
