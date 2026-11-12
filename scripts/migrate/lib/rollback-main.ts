@@ -95,6 +95,7 @@ async function main(): Promise<number> {
     mediaKeptAdopted: 0,
     mediaAlreadyGone: 0,
     tagsDeleted: 0,
+    tagsAlreadyGone: 0,
     errors: [] as string[],
   };
 
@@ -194,6 +195,11 @@ async function main(): Promise<number> {
       }
     }
     for (const t of state?.tagsCreated ?? []) {
+      const tagExists = ((await pFind(payload, "tags", { where: { and: [{ tenant: { equals: tenantId } }, { id: { equals: t.id } }] }, limit: 1 })) as unknown as { docs: Doc[] }).docs[0];
+      if (!tagExists) {
+        rep.tagsAlreadyGone++;
+        continue;
+      }
       const used = await findAll(payload, "articles", { and: [{ tenant: { equals: tenantId } }, { tags: { contains: t.id } }] }, { draft: true });
       if (used.length) continue;
       try {
@@ -206,7 +212,7 @@ async function main(): Promise<number> {
   }
   run.writeJson(`rollback-report${a.apply ? "" : "-dry"}.json`, rep);
   console.log(
-    `[rollback] ${rep.mode.toUpperCase()} run ${runId}: entries ${rep.entries}; ${a.apply ? "deleted" : "would delete"} ${a.apply ? rep.deleted : rep.toDelete.length}; kept edited ${rep.keptEdited.length}; kept not-marker ${rep.keptNotMarker.length}; already gone ${rep.alreadyGone.length}; orphans ${rep.orphans.length}${a.apply ? ` (deleted ${rep.orphansDeleted})` : ""}; media ${a.apply ? `deleted ${rep.mediaDeleted}` : `would delete ${mediaToDelete.length}`}, kept referenced ${rep.mediaKeptReferenced}, kept adopted ${rep.mediaKeptAdopted}; tags deleted ${rep.tagsDeleted}; archived fallback ${rep.archivedFallback.length}; errors ${rep.errors.length}`,
+    `[rollback] ${rep.mode.toUpperCase()} run ${runId}: entries ${rep.entries}; ${a.apply ? "deleted" : "would delete"} ${a.apply ? rep.deleted : rep.toDelete.length}; kept edited ${rep.keptEdited.length}; kept not-marker ${rep.keptNotMarker.length}; already gone ${rep.alreadyGone.length}; orphans ${rep.orphans.length}${a.apply ? ` (deleted ${rep.orphansDeleted})` : ""}; media ${a.apply ? `deleted ${rep.mediaDeleted}` : `would delete ${mediaToDelete.length}`}, kept referenced ${rep.mediaKeptReferenced}, kept adopted ${rep.mediaKeptAdopted}; tags deleted ${rep.tagsDeleted}, already gone ${rep.tagsAlreadyGone}; archived fallback ${rep.archivedFallback.length}; errors ${rep.errors.length}`,
   );
   if (onlyStatus) {
     console.log(`[rollback] --only-status ${[...onlyStatus].join(",")}: selected by status ${JSON.stringify(rep.toDeleteByStatus)}; kept (other status) ${rep.keptOtherStatus}`);
