@@ -70,7 +70,9 @@ function tool(script: string, args: string[], env: Record<string, string> = {}):
 }
 const T = (n: string) => `scripts/migrate/${n}`;
 const OV = ["--mapping-overlay", OVERLAY];
-const RH = [...OV, "--rehearsal", "--out", OUT];
+// The fixture rehearsal pins the full archived/draft pipeline (old behaviour); the published-only
+// default (owner 10-11-26) is covered by scripts/migrate/lib/gtp-status-policy.test.ts and gtp-redirects.test.ts.
+const RH = [...OV, "--rehearsal", "--include-archived-drafts", "--out", OUT];
 // The committed mapping is final; provisional-path checks run against a clone carrying one marker.
 const PROV_MAPPING = path.join(OUT, "legacy-mapping.provisional.json");
 function writeProvisionalMapping(): string {

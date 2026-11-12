@@ -184,6 +184,24 @@ article and industry-calendar listing is credited to one of the 5 web authors
 Nothing is credited to "GTP Newsroom"; that Central author row stays unused and
 can be deleted by the owner later. Details: `scripts/migrate/GTP-LEGACY.md`.
 
+Published-only (owner decision 10-11-26, supersedes OD-8): old-site archived
+(~411) and draft (~68) articles are dropped. They are not kept in Central and
+get no redirect (their old URLs 404). The importer skips them by default
+(counted, listed in `rejects.ndjson`), the redirect builder emits no rule for
+them, and parity expects 0 archived/draft rows in tenant gtp. Owner steps
+before DNS cutover, for each run id that already imported them:
+
+1. Dry run: `npm run migrate:gtp:rollback -- --run-id <id> --only-status archived,draft`
+   (prints counts per status and sample slugs; nothing is written).
+2. Apply: same command plus `--apply --confirm-host=<Neon direct host>`. Only
+   untouched import rows of that run whose journaled status and current Central
+   `workflowStatus` are archived/draft are deleted; published and editor-edited
+   rows are kept (`--include-edited` overrides the edit check, as in a full rollback).
+3. Delta/final import with a NEW run id (archived/draft skipped), then redirects
+   and parity on it.
+
+Details: `scripts/migrate/GTP-LEGACY.md` "Published-only".
+
 Second run (Amendment 5, 16-10-26): when the old site gets new articles after
 the first import, run the importer again with a NEW run id (never `--resume`
 the old one) and the SAME `--out` directory. It is create-only: items already

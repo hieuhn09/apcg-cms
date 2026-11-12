@@ -21,7 +21,7 @@ test("C6/G35: published -> /article/<slug>, identity dropped, archived -> NEW se
     E("3", "c", "archived", "/news/c", "news", "destination-marketing", "business-of-travel", "destination-marketing"),
     E("4", "d", "published", "/business-of-travel/d", "business-of-travel", "travel-tech", "news", "travel-tech"),
     E("5", "e", "draft", "/news/e", "news", "aviation"),
-  ], M, KR);
+  ], M, KR, { dropArchived: false });
   assert.deepEqual(b.errors, []);
   const by = Object.fromEntries(b.rules.map((r) => [r.from, r.to]));
   assert.equal(by["/news/a"], "/article/a");
@@ -34,7 +34,7 @@ test("C6/G35: published -> /article/<slug>, identity dropped, archived -> NEW se
   assert.equal(by["/about-us"], "/about");
   const { map, rules } = gtpWebFiles(b);
   assert.deepEqual(validateGtpWebRedirectFiles(map, rules, KR), []);
-  const g410 = buildRedirects([E("3", "c", "archived", "/news/c", "news", "aviation")], { ...M, archivedAs: "410" }, KR);
+  const g410 = buildRedirects([E("3", "c", "archived", "/news/c", "news", "aviation")], { ...M, archivedAs: "410" }, KR, { dropArchived: false });
   assert.deepEqual(gtpWebFiles(g410).map["/news/c"], { status: 410 });
 });
 
@@ -66,4 +66,22 @@ test("Amendment 4: urls.gonePaths yield one 410 rule each, {status:410} in the g
   assert.equal(coverage(["https://www.globaltravelpost.com/studio", "https://www.globaltravelpost.com/visa-tracker"], b).matched, 2);
   // Builds without gonePaths keep working (no 410 rules, counter 0).
   assert.equal(buildRedirects([], M, KR).counts.gone, 0);
+});
+
+test("published-only (gtp default, owner 10-11-26): archived and draft legacy URLs get no rule at all (no 301, no 410); published unchanged", () => {
+  for (const archivedAs of ["section", "410"] as const) {
+    const b = buildRedirects([
+      E("1", "a", "published", "/news/a", "news", "aviation"),
+      E("3", "c", "archived", "/news/c", "news", "aviation"),
+      E("5", "e", "draft", "/news/e", "news", "aviation"),
+    ], { ...M, archivedAs }, KR);
+    assert.deepEqual(b.errors, []);
+    const by = Object.fromEntries(b.rules.map((r) => [r.from, r]));
+    assert.equal(by["/news/a"]?.to, "/article/a");
+    assert.equal(by["/news/c"], undefined);
+    assert.equal(by["/news/e"], undefined);
+    assert.equal(b.counts.archivedNoRule, 1);
+    assert.equal(b.counts.archived ?? 0, 0);
+    assert.equal(gtpWebFiles(b).map["/news/c"], undefined);
+  }
 });

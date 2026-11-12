@@ -26,7 +26,7 @@ import { writeFileSafe } from "./out-dir";
 import { applyRewrittenLinks } from "./verify-parity-links";
 import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId } from "./run-dir";
 import type { SlugPlanEntry } from "./slug-plan";
-import { profile } from "./network-profile";
+import { isGtp, profile } from "./network-profile";
 
 type Doc = Record<string, unknown>;
 type P = Awaited<ReturnType<typeof getPayload>>;
@@ -82,7 +82,9 @@ async function main(): Promise<number> {
   const eventsSrc: Doc[] = [];
   if (v.mapping.events.enabled) for await (const p of reader.pages("events", "all", batch)) eventsSrc.push(...p);
   await reader.close();
-  const exp = expectedFromSource(src, m);
+  // Owner decision 10-11-26 (supersedes OD-8): gtp expects 0 archived/draft rows (and 0 inactive events) in Central.
+  const publishedOnly = isGtp() && !a.has("include-archived-drafts");
+  const exp = expectedFromSource(src, m, { publishedOnly });
 
   const payload = await getPayload({ config });
   const tenant = ((await pFind(payload, "tenants", { where: { slug: { equals: tenantSlug } }, limit: 1 })) as unknown as { docs: Doc[] }).docs[0];
@@ -123,7 +125,8 @@ async function main(): Promise<number> {
   }
   // 3 slug set diff
   {
-    const expSlugs = new Set(plan.filter((p) => p.kind === "article").map((p) => p.slug));
+    const droppedSlugs = new Set(publishedOnly ? slugMap.filter((e) => e.kind === "article" && e.status !== "published").map((e) => e.slug) : []);
+    const expSlugs = new Set(plan.filter((p) => p.kind === "article" && !droppedSlugs.has(p.slug)).map((p) => p.slug));
     const fails: string[] = [];
     for (const s of expSlugs) if (!bySlug.has(s)) fails.push(`missing in Central: ${s}`);
     for (const s of bySlug.keys()) if (!expSlugs.has(s)) fails.push(`unexpected in Central: ${s}`);
@@ -284,9 +287,10 @@ async function main(): Promise<number> {
     const ed = planEvents(eventsSrc.map(toLegacyEvent), calendar, m.events.nearMatchThreshold);
     const fails: string[] = [];
     if (m.events.enabled) {
-      if (ev.length !== ed.imports.length) fails.push(`events expected ${ed.imports.length} (= ${eventsSrc.length} - ${ed.duplicates.length} duplicates - ${ed.near.length} near), Central ${ev.length}`);
+      const expEv = publishedOnly ? ed.imports.filter((e) => e.active) : ed.imports;
+      if (ev.length !== expEv.length) fails.push(`events expected ${expEv.length} (= ${eventsSrc.length} - ${ed.duplicates.length} duplicates - ${ed.near.length} near${publishedOnly ? ` - ${ed.imports.length - expEv.length} inactive (published-only)` : ""}), Central ${ev.length}`);
       const arch = ev.filter((d) => d.workflowStatus === "archived").length;
-      const expArch = ed.imports.filter((e) => !e.active).length;
+      const expArch = expEv.filter((e) => !e.active).length;
       if (arch !== expArch) fails.push(`archived events ${arch} expected ${expArch}`);
       for (const d of ev) {
         const b = Array.isArray(d.briefs) ? (d.briefs as Doc[]) : [];

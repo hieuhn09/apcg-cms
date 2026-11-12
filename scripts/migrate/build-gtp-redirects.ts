@@ -7,7 +7,7 @@
  * urls.articlePathTemplate or archivedAs can never drive a production map).
  *
  *   npm run migrate:gtp:redirects -- --run-id <id> --known-routes <known-routes.json> [--mapping-overlay <overlay>]
- *     [--emit-gtp-web <dir>] [--sitemap-urls <file>] [--min-coverage <pct>] [--rehearsal] [--require-final] [--mapping path] [--out dir]
+ *     [--emit-gtp-web <dir>] [--include-archived-drafts] [--sitemap-urls <file>] [--min-coverage <pct>] [--rehearsal] [--require-final] [--mapping path] [--out dir]
  *
  * Exit 3 = hard check failed (chains, loops, dangling targets, uncovered published rows,
  * hand-off contract); exit 2 = refusal (provisional values, coverage below --min-coverage).
@@ -36,7 +36,9 @@ async function main(): Promise<number> {
   if (!run.exists()) throw new RunDirError(RUN_MESSAGES.missing);
   const knownRoutes = JSON.parse(readFileSync(resolvePath(kr), "utf8")) as KnownRoutes;
   const entries = run.slugMap();
-  const b = buildRedirects(entries, v.mapping, knownRoutes);
+  // Owner decision 10-11-26 (supersedes OD-8): gtp emits no rule for archived/draft legacy URLs (they 404).
+  // --include-archived-drafts restores the archivedAs rule (rehearsal of the old behaviour only).
+  const b = buildRedirects(entries, v.mapping, knownRoutes, a.has("include-archived-drafts") ? { dropArchived: false } : {});
   const files = gtpWebFiles(b);
   const contract = validateGtpWebRedirectFiles(files.map, files.rules, knownRoutes);
   const urls = a.get("sitemap-urls") ? readFileSync(resolvePath(a.get("sitemap-urls") as string), "utf8").split("\n") : [];
