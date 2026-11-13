@@ -139,7 +139,7 @@ async function keysetCheck(db: string, kind: "uuid" | "integer", siteV: string, 
     await reader.loadCatalog();
     const got: string[] = [];
     for await (const page of reader.pages("articles", ["id", "title"], size)) for (const r of page) got.push(String(r.id));
-    reader.close();
+    await reader.close();
     assert.deepEqual(got, expected, `${kind} pageSize ${size}: order/completeness`);
     assert.equal(new Set(got).size, got.length, `${kind} pageSize ${size}: no duplicate`);
     assert.equal(reader.duplicatesSkipped, 0);

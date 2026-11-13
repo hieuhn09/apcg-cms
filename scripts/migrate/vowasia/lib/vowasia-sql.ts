@@ -447,10 +447,21 @@ export function normaliseRow(row: Record<string, unknown>): Record<string, unkno
   return out;
 }
 
+/**
+ * ONE connection per run (incident 12-11-26: a fresh connection per batch
+ * overloaded the shared network legacy DB; same fix as apcg-cms#74 for
+ * LegacyReadOnlyDb). The connection is opened lazily on the first batch and
+ * kept until close(); every batch is its own short BEGIN READ ONLY .. COMMIT
+ * on it. At most one open connection per instance. On a reconnect-class error
+ * the dead connection is dropped and the batch retried on a new one after an
+ * exponential backoff (default 2 retries, base 2 s); any other error drops the
+ * connection and rethrows. Callers must close() in a finally.
+ */
 export class VowasiaReadOnlyDb {
   readonly log: QueryLogEntry[] = [];
   /** Event order for tests: "BEGIN" | "COMMIT" | "QUERY". */
   readonly events: string[] = [];
+  private client: MinimalPgClient | null = null;
   constructor(
     readonly registry: SqlRegistry,
     private readonly makeClient: () => MinimalPgClient,
@@ -459,22 +470,41 @@ export class VowasiaReadOnlyDb {
     assertRegistry(registry);
   }
 
-  /** Run a group of SafeQueries in ONE short read-only transaction on a fresh connection. */
+  private async conn(): Promise<MinimalPgClient> {
+    if (this.client) return this.client;
+    const client = this.makeClient();
+    try {
+      await client.connect();
+    } catch (err) {
+      await client.end().catch(() => {});
+      throw err;
+    }
+    try {
+      await client.query("SET default_transaction_read_only = on"); // advisory; SELECT-only grants are the fence
+    } catch {
+      /* transaction-mode pooler may refuse session SET */
+    }
+    this.client = client;
+    return client;
+  }
+
+  /** Drop the current connection (if any). Idempotent. */
+  async close(): Promise<void> {
+    const c = this.client;
+    this.client = null;
+    if (c) await c.end().catch(() => {});
+  }
+
+  /** Run a group of SafeQueries in ONE short read-only transaction on the run's single connection. */
   async batch(queries: SafeQuery[]): Promise<Record<string, unknown>[][]> {
     for (const sq of queries) {
       if (issuedBy.get(sq) !== this.registry) throw new VowasiaSqlError(SQL_MESSAGES.notBranded);
       assertSafeQuery(sq, this.registry);
     }
-    const retries = this.opts.retries ?? 4;
+    const retries = this.opts.retries ?? 2;
     for (let attempt = 0; ; attempt++) {
-      const client = this.makeClient();
       try {
-        await client.connect();
-        try {
-          await client.query("SET default_transaction_read_only = on"); // advisory; SELECT-only grants are the fence
-        } catch {
-          /* transaction-mode pooler may refuse session SET */
-        }
+        const client = await this.conn();
         this.events.push("BEGIN");
         await client.query("BEGIN READ ONLY");
         try {
@@ -493,14 +523,14 @@ export class VowasiaReadOnlyDb {
         this.events.push("COMMIT");
         return out;
       } catch (err) {
+        // The transaction state is unknown: never reuse this connection.
+        await this.close();
         const code = (err as { code?: string }).code ?? "";
         if (attempt < retries && RECONNECT_CODES.has(code)) {
-          await new Promise((r) => setTimeout(r, (this.opts.backoffMs ?? 500) * 2 ** attempt));
+          await new Promise((r) => setTimeout(r, (this.opts.backoffMs ?? 2000) * 2 ** attempt));
           continue;
         }
         throw err;
-      } finally {
-        await client.end().catch(() => {});
       }
     }
   }

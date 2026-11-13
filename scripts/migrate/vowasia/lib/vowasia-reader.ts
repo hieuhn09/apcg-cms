@@ -126,8 +126,10 @@ export class LiveVowasiaReader {
     }
   }
 
-  close(): void {
+  /** Forget the catalog and close the run's one DB connection. Idempotent. */
+  async close(): Promise<void> {
     setCatalog(this.registry, undefined);
+    await this.db.close();
   }
 }
 

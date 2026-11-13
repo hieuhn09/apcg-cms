@@ -588,3 +588,12 @@ REHEARSE_MODE=native npm run rehearse:vowasia
 ```
 
 Rehearsal chạy MỘT mình, nền, trên Linux có PG16 native (cổng 54346, 54347, 3518, 3519), với Central cục bộ tạm và ảnh lưu ổ đĩa cục bộ. Nó không chứng minh upload R2 thật, dấu nhắc TTY trên macOS hay banner `neondb` trên host thật (đó là OB5-OB10).
+
+## Tải lên DB cũ / Load on the legacy DB
+
+Sự cố 12-11-26: DB mạng cũ (Supabase Micro, dùng chung với các site đang chạy) quá tải vì công cụ di chuyển mở một kết nối MỚI cho mỗi lô truy vấn và thử lại tới 4 lần. Từ nay (cùng bản sửa apcg-cms#74 cho bộ đọc chung, nay áp cho `VowasiaReadOnlyDb`):
+
+- Mỗi lượt chạy (`discover`, `snapshot`) dùng **đúng MỘT kết nối** (mở khi cần lần đầu, đóng ở cuối lượt trong `finally`, kể cả khi lỗi). Mỗi lô là một giao dịch `BEGIN READ ONLY … COMMIT` ngắn trên kết nối đó. Lỗi mất kết nối: bỏ kết nối hỏng, chờ (2 s rồi 4 s), mở lại, tối đa 2 lần; lỗi khác: đóng kết nối và báo lỗi ngay.
+- Chạy **MỘT tựa một lúc**, giờ thấp điểm; **báo người vận hành DB mạng trước mỗi lượt**; **không bao giờ** chạy song song với lượt của tựa khác (kể cả discover/snapshot).
+
+One connection per run (opened lazily, closed in a `finally`), each batch a short read-only transaction on it; reconnect at most twice with 2 s/4 s backoff, any other error closes the connection and rethrows. Run one title at a time, off-peak, after telling the network DB operator, never in parallel with another title's run.

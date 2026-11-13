@@ -375,7 +375,7 @@ async function readStep(cfg: SourceConfig, outArg: string, deps: SnapshotDeps): 
     deps.log("[snapshot] next: remove the role now (sql/03e), then run the image step with --download-images --snapshot <this dir> (no database needed).");
     return 0;
   } finally {
-    reader.close();
+    await reader.close();
   }
 }
 
