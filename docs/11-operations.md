@@ -77,7 +77,7 @@ and status.
   no secondary sections, no sub-section, no `exclusive` flag; no article may add GCV
   Pressroom as a secondary section; the pillar can have no sub-sections; author is
   optional; the content engine gets 422 `pillar not writable by engine: pressroom` on
-  create and refresh. WAD's `pressroom` is unaffected. Steps: (1) the violator query below
+  create and refresh. Steps: (1) the violator query below
   is OPTIONAL when the tenant has no Pressroom articles (true for GCV at merge); otherwise,
   BEFORE deploying the CMS, the owner runs it READ-ONLY (never by agents against prod)
   and fixes or accepts the hits — existing violators are grandfathered until their
@@ -88,6 +88,67 @@ and status.
 
   ```sql
   WITH t AS (SELECT id FROM tenants WHERE slug='gcv'),
+  p AS (SELECT id FROM pillars WHERE slug='pressroom' AND tenant_id=(SELECT id FROM t))
+  SELECT 'secondary_on_pressroom_article' k, count(*) FROM articles_secondary_sections s JOIN articles a ON a.id=s._parent_id WHERE a.pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'subsection_on_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND sub_section_id IS NOT NULL
+  UNION ALL SELECT 'exclusive_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND exclusive
+  UNION ALL SELECT 'pressroom_as_secondary_elsewhere (V3)', count(*) FROM articles_secondary_sections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'subsections_under_pressroom', count(*) FROM subsections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_secondary_on_pressroom', count(*) FROM _articles_v_version_secondary_sections s JOIN _articles_v v ON v.id=s._parent_id WHERE v.version_pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_pressroom_as_secondary', count(*) FROM _articles_v_version_secondary_sections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_subsection', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_sub_section_id IS NOT NULL
+  UNION ALL SELECT 'v_exclusive', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_exclusive;
+  ```
+
+- **Enabling WAD Pressroom (single-home pillar, WAD Pressroom parity, owner decision
+  20-10-26):** the WAD `pressroom` pillar row already exists in production, so there is
+  NO `audit:add-pressroom` step. The rule ships in code (`wad` entries in
+  `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS`), with exactly the GCV rules above:
+  no secondary sections, no sub-section, no `exclusive` flag on WAD Pressroom articles; no
+  article may add WAD Pressroom as a secondary section; the pillar can have no
+  sub-sections; author optional for WAD Pressroom only (every other WAD pillar still needs
+  one); the content engine gets 422 `pillar not writable by engine: pressroom` on create
+  and refresh (hub authoring gets `blocked_pillar`). Steps: (1) BEFORE deploying the CMS
+  the owner runs the violator query below READ-ONLY (never by agents against prod) — it
+  is NOT optional for WAD, which likely has Pressroom articles — and fixes or accepts each
+  non-zero row; existing violators are grandfathered until their taxonomy is next saved,
+  when the hook rejects the save; `v_*` rows are history only; (2) deploy the CMS and
+  wad-web (any order; the wad-web "Distributed by" byline is harmless before the CMS
+  change). Rollback: remove the two `wad` `pressroom` entries from the constants and
+  redeploy (re-run the query before re-enabling).
+
+  ```sql
+  WITH t AS (SELECT id FROM tenants WHERE slug='wad'),
+  p AS (SELECT id FROM pillars WHERE slug='pressroom' AND tenant_id=(SELECT id FROM t))
+  SELECT 'secondary_on_pressroom_article' k, count(*) FROM articles_secondary_sections s JOIN articles a ON a.id=s._parent_id WHERE a.pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'subsection_on_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND sub_section_id IS NOT NULL
+  UNION ALL SELECT 'exclusive_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND exclusive
+  UNION ALL SELECT 'pressroom_as_secondary_elsewhere (V3)', count(*) FROM articles_secondary_sections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'subsections_under_pressroom', count(*) FROM subsections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_secondary_on_pressroom', count(*) FROM _articles_v_version_secondary_sections s JOIN _articles_v v ON v.id=s._parent_id WHERE v.version_pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_pressroom_as_secondary', count(*) FROM _articles_v_version_secondary_sections WHERE pillar_id IN (SELECT id FROM p)
+  UNION ALL SELECT 'v_subsection', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_sub_section_id IS NOT NULL
+  UNION ALL SELECT 'v_exclusive', count(*) FROM _articles_v WHERE version_pillar_id IN (SELECT id FROM p) AND version_exclusive;
+  ```
+
+- **Enabling DTW Pressroom (Opentechwire, tenant `dtw`; single-home pillar, owner decision
+  04-11-26):** the rule ships in code (`dtw` `pressroom` entries in `SINGLE_HOME_PILLARS`
+  and `ENGINE_BLOCKED_PILLARS`) with exactly the WAD rules above: no secondary sections,
+  no sub-section, no `exclusive` flag on DTW Pressroom articles; no article may add DTW
+  Pressroom as a secondary section; the pillar can have no sub-sections; author optional
+  for DTW Pressroom only (every other dtw pillar still needs one); the content engine gets
+  422 `pillar not writable by engine: pressroom` on create and refresh (hub authoring gets
+  `blocked_pillar`). Unlike WAD, the dtw `pressroom` pillar row does NOT exist yet (the
+  seed does not create one either). Steps: (1) BEFORE deploying the CMS the owner runs the
+  violator query below READ-ONLY (never by agents against prod); with no row yet every
+  count is 0, which is the expected state; (2) deploy the CMS, then dtw-web (the dtw-web
+  nav link stays hidden until the row exists); (3) the owner creates the pillar by hand in
+  /admin AFTER both deploys: tenant `dtw`, slug exactly `pressroom`. Rollback: remove the
+  two `dtw` `pressroom` entries from the constants and redeploy (hide on the reader side by
+  deleting/unpublishing the row; the nav link auto-hides).
+
+  ```sql
+  WITH t AS (SELECT id FROM tenants WHERE slug='dtw'),
   p AS (SELECT id FROM pillars WHERE slug='pressroom' AND tenant_id=(SELECT id FROM t))
   SELECT 'secondary_on_pressroom_article' k, count(*) FROM articles_secondary_sections s JOIN articles a ON a.id=s._parent_id WHERE a.pillar_id IN (SELECT id FROM p)
   UNION ALL SELECT 'subsection_on_pressroom_article', count(*) FROM articles WHERE pillar_id IN (SELECT id FROM p) AND sub_section_id IS NOT NULL
@@ -159,6 +220,145 @@ and status.
   gtp script. The six author names are confirmed by the owner (13-10-26); roles and short
   bios are in the fixture (no city), editable later; fix names BEFORE `--apply` (renaming later touches every
   mirror, see the playbook).
+- **Asia Economic Review rollout (owner-run; tenant `aer`):** the rule ships in code
+  (`ENGINE_BLOCKED_PILLARS.aer = ["long-view", "interviews", "in-focus"]`; NO
+  `SINGLE_HOME_PILLARS` entry) and is inert until the tenant exists. No migration.
+  **Status 19-10-26: code only, nothing applied.** Steps: (1) merge + deploy; (2) create the
+  tenant by hand in /admin from `AER_TENANT_FIELDS` (`docs/07-website-management.md`;
+  slug `aer`, `autoPublishEngineDrafts` off, frontend URL empty); (3) print host and
+  database name: `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-aer-taxonomy -- --confirm-host=<hostname>` (6 pillars, 12 sub-sections,
+  1 newsletter, 4 authors, 6 tags = 29 rows, all `create`); (5) apply from an interactive
+  terminal: `npm run audit:add-aer-taxonomy -- --apply --confirm-host=<hostname>`;
+  (6) re-run the dry run: all 29 rows must read `exists`; (7) read token:
+  `npx tsx scripts/mint-token.ts read --tenant aer --label frontend-preview`; (8) engine
+  record `content-engine-aer` in Console `/console/engines/new`: writer, allowed tenant only
+  `aer`, actions only `create_article` + `update_article`, hub flags off; (9) add the aer-web
+  origin to `PUBLIC_API_ALLOWED_ORIGINS`. Same guards, never-overwrite and refuse
+  behaviour as the vowasia script. Author bios and the tag set are PENDING OWNER wording.
+- **AsiaGolfReview rollout (owner-run; tenant `agr`):** the rule ships in code
+  (`ENGINE_BLOCKED_PILLARS.agr = ["course-reviews", "rankings", "press-room"]`;
+  `SINGLE_HOME_PILLARS.agr = ["press-room"]`) and is inert until the tenant exists. No
+  migration. **Status 23-10-26: code only, nothing applied.** Steps: (1) merge (after the AER
+  PR, this branch is stacked on it) + deploy; (2) create the tenant by hand in /admin from
+  `AGR_TENANT_FIELDS` (`docs/07-website-management.md`; slug `agr`,
+  `autoPublishEngineDrafts` off, frontend URL empty); (3) print host and database name:
+  `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-agr-taxonomy -- --confirm-host=<hostname>` (7 pillars, 29 sub-sections,
+  2 newsletters, 5 authors, 7 tags = 50 rows, all `create`); (5) apply from an interactive
+  terminal: `npm run audit:add-agr-taxonomy -- --apply --confirm-host=<hostname>`;
+  (6) re-run the dry run: all 50 rows must read `exists`; (7) read token:
+  `npx tsx scripts/mint-token.ts read --tenant agr --label frontend-preview`; (8) engine
+  record `content-engine-agr` in Console `/console/engines/new`: writer, allowed tenant only
+  `agr`, actions only `create_article` + `update_article`, hub flags off; (9) add the agr-web
+  origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import: `scripts/migrate/network/NETWORK-LEGACY.md`
+  "AsiaGolfReview" (mapping still provisional). Author bios, contacts and the tag set are
+  PENDING OWNER wording. Steps 4 to 6 were rehearsed on a disposable local Postgres
+  (23-10-26: 50 create, then 50 created, then 50 exists).
+
+- **AsiaBeautyBrief rollout (owner-run; tenant `abb`):** code adds `abb: ["pressroom"]` to
+  `SINGLE_HOME_PILLARS` and `ENGINE_BLOCKED_PILLARS`, the `exhibition` feature and the
+  `booths` collection. **This one HAS a migration** (`20261022_000000_add_booths_exhibition`:
+  creates `booths`, `booths_capabilities`, `booths_rels`, two enums and indexes; adds
+  `tenants.features_exhibition boolean DEFAULT false` and
+  `payload_locked_documents_rels.booths_id`; nothing dropped/altered otherwise). It runs at
+  the production build once merged (`payload migrate` reads the folder); Preview shares the
+  DB and does not migrate, so a Preview of the branch errors on tenant reads until then.
+  **Status 22-10-26: code only, nothing applied.** Steps: (1) owner approves the migration
+  SQL verbatim, merge + deploy; (2) create tenant `abb` by hand in /admin
+  (`docs/07-website-management.md`: `autoPublishEngineDrafts` OFF, features Articles +
+  Newsletters + Corrections + Exhibition); (3) print host + database name (must be
+  `/neondb`); (4) dry run `npm run audit:add-abb-taxonomy -- --confirm-host=<hostname>`
+  (expect 93 `create`); (5) `--apply` from a TTY; (6) re-run dry run, expect 93 `exists`;
+  (7) mint a read token, create the engine record in the Console, add the abb-web origin
+  to `PUBLIC_API_ALLOWED_ORIGINS`. Same guards, never-overwrite and refuse behaviour as
+  the vowasia script. Rollback of the schema: revert the PR AND run the migration `down`
+  (drops the three booths tables, enums and the two columns) only after the owner agrees.
+  Since 27-10-26 the collection also serves amb (see "AsiaMaterialsBrief rollout"):
+  running the 20261022 `down` would drop amb booths too.
+
+- **AsiaMaterialsBrief rollout (owner-run; tenant `amb`):** the rule ships in code
+  (`ENGINE_BLOCKED_PILLARS.amb = ["press-room"]`; `SINGLE_HOME_PILLARS.amb = ["press-room"]`)
+  and is inert until the tenant exists. The Exhibition reuses the abb `booths` collection;
+  **this one HAS a migration** (`20261027_000000_add_amb_booth_halls`: four
+  `ALTER TYPE "enum_booths_hall" ADD VALUE IF NOT EXISTS` (`brands`, `design-studios`,
+  `distributors-showrooms`, `country-pavilions`), nothing else; `down` is a documented
+  no-op because Postgres cannot drop enum values). Like every migration it runs at the
+  production build once merged (`vercel-build` -> `scripts/migrate-prod.mjs`, production
+  only); Preview shares the DB and does not migrate, so until then saving an amb booth with
+  a new hall fails at the DB (abb is unaffected). **Status 27-10-26: code only, nothing
+  applied.** Steps: (1) owner approves the migration SQL verbatim, merge + deploy;
+  (2) create the tenant by hand in /admin from `AMB_TENANT_FIELDS`
+  (`docs/07-website-management.md`; slug `amb`, `autoPublishEngineDrafts` off, features
+  Articles + Newsletters + Corrections + Exhibition, frontend URL empty); (3) print host and
+  database name: `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-amb-taxonomy -- --confirm-host=<hostname>` (6 pillars, 18 sub-sections,
+  3 newsletters, 6 authors, 6 tags = 39 rows, all `create`); (5) apply from an interactive
+  terminal: `npm run audit:add-amb-taxonomy -- --apply --confirm-host=<hostname>`;
+  (6) re-run the dry run: all 39 rows must read `exists`; (7) read token:
+  `npx tsx scripts/mint-token.ts read --tenant amb --label frontend-preview`; (8) engine
+  record `content-engine-amb` in Console `/console/engines/new`: writer, allowed tenant only
+  `amb`, actions only `create_article` + `update_article`, hub flags off; (9) add the amb-web
+  origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import: `scripts/migrate/network/NETWORK-LEGACY.md`
+  "AsiaMaterialsBrief" (old site `asiamaterialsbrief` found 27-10-26; mapping FINAL, owner 27-10-26: published only, 252 rows). Author bios, contacts
+  and the tag set are PENDING OWNER wording.
+
+- **Asianomist rollout (owner-run; tenant `asn`):** the rule ships in code
+  (`ENGINE_BLOCKED_PILLARS.asn = ["the-brief", "columns", "explainers", "press-room"]`;
+  `SINGLE_HOME_PILLARS.asn = ["press-room"]`) and is inert until the tenant exists. **No
+  migration** (no booths, no schema change). **Status 05-11-26: code only, nothing applied.**
+  Steps: (1) merge + deploy; (2) create the tenant by hand in /admin from `ASN_TENANT_FIELDS`
+  (`docs/07-website-management.md`; slug `asn`, `autoPublishEngineDrafts` off, features
+  Articles + Newsletters + Corrections, frontend URL empty); (3) print host and database
+  name: `node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.pathname)'`;
+  the pathname MUST be `/neondb`; (4) dry run:
+  `npm run audit:add-asn-taxonomy -- --confirm-host=<hostname>` (9 pillars, 17 sub-sections,
+  2 newsletters, 6 authors, 6 tags = 40 rows, all `create`); (5) apply from an interactive
+  terminal: `npm run audit:add-asn-taxonomy -- --apply --confirm-host=<hostname>`;
+  (6) re-run the dry run: all 40 rows must read `exists`; (7) read token:
+  `npx tsx scripts/mint-token.ts read --tenant asn --label frontend-preview`; (8) engine
+  record `content-engine-asn` in Console `/console/engines/new`: writer, allowed tenant only
+  `asn`, actions only `create_article` + `update_article`, hub flags off; (9) add the
+  asianomist-web origin to `PUBLIC_API_ALLOWED_ORIGINS`. Legacy import:
+  `scripts/migrate/network/NETWORK-LEGACY.md` "Asianomist" (old site `asianomist` found
+  05-11-26; mapping FINAL, owner 05-11-26: published only, 1,435 rows at discovery, the old
+  site still publishes). Author bios, newsletters, contacts and the tag set are PENDING OWNER
+  wording.
+
+## Engine hero replace
+
+`POST /api/engine/articles/hero` (contract: [08-content-engine-integration.md](08-content-engine-integration.md)
+"Hero replace") ships OFF. Owner steps, in this order:
+
+1. Set `ENGINE_HERO_REPLACE_URL_HOSTS` to the engine's Supabase storage host on this
+   project's Vercel env (Production). This is a security control and the route fails
+   closed without it: a tenant listed in step 2 while this is empty answers 403
+   `feature_disabled` (`hero replace url hosts not configured`, plus an
+   `engine_action_denied` row). Set it BEFORE step 2.
+2. Set `ENGINE_HERO_REPLACE_TENANTS=vowasia` (CSV of tenant slugs, exact match) and
+   Redeploy.
+3. In /admin → Content Engines, give the `content-engine-vowasia` record BOTH
+   `update_article` and `upload_media`, allowed on tenant `vowasia` only.
+4. First production use: a dry run from the engine side (`media:replace` without
+   `--apply`, no Central write), then one approved rehearsal.
+
+Never set `ENGINE_HERO_REPLACE_ALLOW_LOCAL` on Vercel (it is ignored there anyway).
+
+**Rollback:** unset or empty `ENGINE_HERO_REPLACE_TENANTS` (or `ENGINE_HERO_REPLACE_URL_HOSTS`) and Redeploy: every call
+answers 403 `feature_disabled`, nothing else changes (rehearsed on a local server
+10-11-26). Code rollback = revert the PR (no migration). A bad swap is undone in /admin
+by pointing the article's Hero Image back at the old Media (it is kept; the ids are in
+the `engine_write_accepted` activity row `detail`). Old image bytes stay reachable
+(the old Media row is public) until someone deletes them by hand.
+
+**Runbook — a replace call fails:** `hero_changed` (an editor swapped the hero) or
+`draft_diverged` (pending draft or newer version) are expected skips: resolve in
+/admin, then rerun. `busy` (503) is transient. `hero_upload_failed` (502): check the
+source URL is reachable from Vercel and on the host allowlist. `internal error` (500):
+read the `integration_error` activity row for the detail.
 
 ## Token rotation
 

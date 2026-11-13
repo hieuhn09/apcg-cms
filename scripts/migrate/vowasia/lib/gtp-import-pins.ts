@@ -15,12 +15,13 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+// Re-pinned 13-11-26 after merging main 3f818f53: gtp-transform/gtp-mapping/legacy-sql changes reviewed; none is loaded by VowAsia at runtime except statusWrite/isoOrNull (unchanged).
 export const GTP_IMPORT_PINS: Readonly<Record<string, string>> = Object.freeze({
   "scripts/migrate/lib/media-fetch.ts": "8e0c81eb7dc6b0c73bc1cf609956e6ba27a760d33f309f3b2a24b63b33781145",
   "scripts/migrate/lib/lexical-body.ts": "ba04f2f2d045c6878184c2698288c20eb6d07fdd8a10245b7f722c3b6b38f394",
-  "scripts/migrate/lib/gtp-transform.ts": "135c9b6937333925f3513cb96b6819a7f5a255e84e2ec9d82575324e7f218a61",
-  "scripts/migrate/lib/gtp-mapping.ts": "58ade9e11500a92238334643ba8ef3125c52ee739350611b3709796e8edf961b",
-  "scripts/migrate/lib/legacy-sql.ts": "0fc2925c527d6e06a6ea6d3582a8e4672558a9a8e7be5a91437f7d615ce248b6",
+  "scripts/migrate/lib/gtp-transform.ts": "5093be3a6b44fd10d1bdfd2e6ea799f5c13080fd937a4629327f8e3c39ec8f65",
+  "scripts/migrate/lib/gtp-mapping.ts": "1469e24f5878ae65d6b3e80fbe5362ae2a07923447a2c48e1e371c6dd788fdc8",
+  "scripts/migrate/lib/legacy-sql.ts": "68daad9e20ef5900b3bde20cc3dd33a11a6f8d7b4fc0bfbe5391d6e7cafb3d6a",
   "scripts/migrate/lib/run-dir.ts": "c0866921426f630eaaee05f202c067bfbf8470ff342e6bcf30ae6295a64709fc",
   "scripts/migrate/lib/out-dir.ts": "9a9033715d2baa024efd4174a9af7aa1494ac1831dc4000bb2f066be386a305a",
   "scripts/migrate/lib/failure-controls.ts": "d1ea89947a4141893773f8e88fdcb90edfd517a45a720150d7bb5287db524f70",

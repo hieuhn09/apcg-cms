@@ -377,8 +377,7 @@ export const Articles: CollectionConfig = {
             { name: "affiliate", type: "checkbox", defaultValue: false },
             { name: "deepDive", type: "checkbox", defaultValue: false },
             {
-              // Editor-set flag for BriefAsia's cross-pillar "Exclusive" section.
-              // Never inferred from tag/author/pillar — hand-toggled only.
+              // Editor-set flag for a publication's cross-pillar "Exclusive" section; never inferred from tag/author/pillar, hand-toggled only.
               name: "exclusive",
               type: "checkbox",
               defaultValue: false,
@@ -387,7 +386,7 @@ export const Articles: CollectionConfig = {
               access: { create: canFlagExclusive, update: canFlagExclusive },
               admin: {
                 description:
-                  "Apply this label only when the story rests on reporting BriefAsia did itself: a story we broke, a document we obtained, or an interview we conducted. Aggregation, translation, wire copy and press releases do not qualify.",
+                  "Mark only when the story rests on reporting this publication did itself (a story we broke, a document we obtained, an interview we conducted). Not for aggregation, translation, wire copy or press releases.",
               },
             },
             { name: "pinnedToLatest", type: "checkbox", defaultValue: false, label: "Pin to top of Latest" },

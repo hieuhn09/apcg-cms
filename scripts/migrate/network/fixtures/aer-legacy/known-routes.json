@@ -1,0 +1,6 @@
+{
+  "static": ["/about", "/team", "/contact", "/privacy", "/terms", "/newsletters", "/search", "/corrections"],
+  "sections": ["asia-watch", "briefings", "corporate-asia", "interviews", "long-view", "in-focus"],
+  "subsections": { "asia-watch": ["growth-policy"], "briefings": ["markets"], "corporate-asia": ["capital"], "interviews": [], "long-view": [], "in-focus": [] },
+  "articlePrefix": "/article/"
+}

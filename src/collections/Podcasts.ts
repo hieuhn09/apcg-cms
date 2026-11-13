@@ -1,8 +1,11 @@
-import type { CollectionConfig, TextFieldSingleValidation } from "payload";
+import type { CollectionConfig, PayloadRequest, TextFieldSingleValidation } from "payload";
 import { tenantManagedAccess } from "@/access/collections";
 import { featureGatedAccess } from "@/access/features";
 import { uniqueWithinTenant } from "@/hooks/unique-within-tenant";
 import { extractYoutubeId } from "@/lib/youtube";
+
+const relId = (v: unknown): unknown =>
+  v != null && typeof v === "object" ? (v as { id?: unknown }).id : v;
 
 /** Podcasts — per-tenant, feature-gated (`podcasts`). */
 export const Podcasts: CollectionConfig = {
@@ -11,6 +14,38 @@ export const Podcasts: CollectionConfig = {
   access: featureGatedAccess("podcasts", tenantManagedAccess),
   fields: [
     { name: "show", type: "text" },
+    {
+      name: "series",
+      type: "relationship",
+      relationTo: "podcastSeries",
+      hasMany: false,
+      admin: { description: "Optional. The podcast series this episode belongs to." },
+      filterOptions: ({ data }) => {
+        const t = relId((data as { tenant?: unknown })?.tenant);
+        if (t == null || t === "") return true;
+        return { tenant: { equals: t } };
+      },
+      // filterOptions only narrows the admin dropdown — API writes bypass it.
+      // Hard-validate that the series belongs to this episode's tenant. Returns
+      // a message (never throws) so the error lands on this field as a 400.
+      validate: async (
+        value: unknown,
+        { data, originalDoc, req }: { data?: { tenant?: unknown }; originalDoc?: { tenant?: unknown }; req: PayloadRequest },
+      ) => {
+        const seriesId = relId(value);
+        if (seriesId == null || seriesId === "") return true; // series is optional
+        const series = await req.payload
+          .findByID({ collection: "podcastSeries", id: seriesId as number | string, depth: 0, overrideAccess: true })
+          .catch(() => null);
+        if (!series) return "That podcast series does not exist.";
+        const tenantId = relId(data?.tenant) ?? relId(originalDoc?.tenant);
+        if (tenantId == null) return "Pick the site (tenant) before picking a series.";
+        if (String(relId((series as { tenant?: unknown }).tenant)) !== String(tenantId)) {
+          return "That podcast series belongs to a different site.";
+        }
+        return true;
+      },
+    },
     { name: "episode", type: "text" },
     { name: "title", type: "text", required: true, localized: true },
     { name: "slug", type: "text", required: true, index: true, hooks: { beforeValidate: [uniqueWithinTenant("slug")] } },

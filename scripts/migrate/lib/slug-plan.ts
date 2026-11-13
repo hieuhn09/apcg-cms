@@ -14,6 +14,7 @@
 import { slugify } from "../../../src/lib/http";
 import type { Mapping } from "./gtp-mapping";
 import { enText, mapStatus, str } from "./gtp-transform";
+import { profile } from "./network-profile";
 
 export const DEFAULT_RESERVED_SLUGS = [
   "news", "destinations", "business-of-travel", "experiences-luxury", "press-room", "events-awards", "about", "team", "contact",
@@ -72,7 +73,7 @@ export function baseSlugFor(row: PlanRow): { slug: string; changed?: { from: str
 }
 
 export function buildSlugPlan(rows: readonly PlanRow[], m: Pick<Mapping, "status" | "slug">, reservedExtra: readonly string[] = []): SlugPlanEntry[] {
-  const reserved = new Set([...DEFAULT_RESERVED_SLUGS, ...m.slug.reservedSlugs, ...reservedExtra]);
+  const reserved = new Set([...(profile().reservedSlugs ?? DEFAULT_RESERVED_SLUGS), ...m.slug.reservedSlugs, ...reservedExtra]);
   const eligible = rows.filter((r) => mapStatus(r.status, m).kind === "import");
   const ordered = [...eligible].sort((a, b) => (sortKey(a.created_at, a.id) < sortKey(b.created_at, b.id) ? -1 : 1));
   const used = new Map<string, string>(); // slug -> legacyId that owns it
@@ -124,4 +125,30 @@ export function planEventSlugs(events: readonly EventPlanInput[], taken: Iterabl
     out.push({ legacyId: `event:${e.id}`, kind: "event", slug });
   }
   return out;
+}
+
+/**
+ * Second run (Amendment 5): items an EARLIER run already created keep the slug
+ * they really have in Central (`prior`: legacyId -> Central slug), so they are
+ * recognised as existing and skipped instead of being re-planned (events would
+ * otherwise collide with their own earlier copy, get a -<yyyy> suffix and be
+ * created twice). A NEW item whose planned slug is held by such an existing item
+ * is moved to -2, -3... (reported as slugChanged). Empty `prior` = identity, so
+ * a first run is unchanged. Foreign (non-import) slugs are not handled here: they
+ * stay a reported conflict as before.
+ */
+export function pinPriorSlugs(plan: readonly SlugPlanEntry[], prior: ReadonlyMap<string, string>): SlugPlanEntry[] {
+  if (!prior.size) return [...plan];
+  const pinned = new Set(prior.values());
+  const used = new Set([...pinned, ...plan.filter((e) => !prior.has(e.legacyId) && !pinned.has(e.slug)).map((e) => e.slug)]);
+  return plan.map((e) => {
+    const p = prior.get(e.legacyId);
+    if (p !== undefined) return p === e.slug ? e : { ...e, slug: p };
+    if (!pinned.has(e.slug)) return e;
+    let n = 2;
+    while (used.has(`${e.slug}-${n}`)) n++;
+    const to = `${e.slug}-${n}`;
+    used.add(to);
+    return { ...e, slug: to, slugChanged: { from: e.slug, to, reason: "taken-by-earlier-run" } };
+  });
 }

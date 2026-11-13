@@ -39,6 +39,9 @@ interface EngineContext {
   /** Set only by the hub AUTHOR routes (POST / PATCH /api/hub/articles, APCGHub
    *  P5.1): hub-asserted operator + action; `fields` = request keys that changed. */
   hubAuthor?: { actor: { email: string; role: string; id?: number | string }; action: "create" | "update"; fields?: string[] };
+  /** Set only by the engine hero-replace route (POST /api/engine/articles/hero):
+   *  a heroImage-only swap. See the exemption in `articleBookkeeping`. */
+  heroSwap?: boolean;
 }
 
 function engineCtx(context: unknown): EngineContext {
@@ -196,6 +199,11 @@ export const articleBookkeeping: CollectionBeforeChangeHook = ({
   // would make enqueueTranslations treat up-to-date translations as stale and
   // re-queue them on republish, with no word of the article changed.
   if ((req.context as { hubWrite?: unknown })?.hubWrite) return data;
+  // Engine hero swaps (POST /api/engine/articles/hero) change only heroImage: same
+  // exemption, for the same reason. A bump would make enqueueTranslations re-queue
+  // every up-to-date locale. The route logs its own activity row with the engine id,
+  // so skipping the `lastEngine` stamp loses no audit data.
+  if ((req.context as { heroSwap?: unknown })?.heroSwap === true) return data;
 
   const ctx = engineCtx(req.context);
   const isHuman = Boolean(req.user);
@@ -216,12 +224,19 @@ export const articleBookkeeping: CollectionBeforeChangeHook = ({
 
   // translation stale-on-source-change: if a content field changed, flag every
   // non-protected target translation as outdated (best-effort; the translation
-  // engine re-checks state before writing).
+  // engine re-checks state before writing). `leadImageCaption` is localized content
+  // too (hub live edit widen, 10-11-26): compared only when the key is in `data`,
+  // with null / "" / missing all meaning "no caption".
+  const caption = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+  const captionChanged =
+    Object.prototype.hasOwnProperty.call(data, "leadImageCaption") &&
+    caption(data.leadImageCaption) !== caption(originalDoc?.leadImageCaption);
   const contentChanged =
     operation === "update" &&
     (data.title !== originalDoc?.title ||
       data.dek !== originalDoc?.dek ||
-      JSON.stringify(data.body) !== JSON.stringify(originalDoc?.body));
+      JSON.stringify(data.body) !== JSON.stringify(originalDoc?.body) ||
+      captionChanged);
   if (contentChanged && Array.isArray(data.translationStatus)) {
     data.translationStatus = (data.translationStatus as Array<Record<string, unknown>>).map(
       (row) => {

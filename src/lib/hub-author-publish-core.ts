@@ -48,7 +48,8 @@ import { isEmptyBody } from "@/lib/hub-article-markdown";
 import { json } from "@/lib/http";
 import { toId } from "@/access/helpers";
 import { scopedFind } from "@/lib/scoped";
-import { isEngineBlockedPillar } from "@/lib/constants";
+import { isHubBlockedPillar, isHubBlockedSecondaryPillar } from "@/lib/constants";
+import { isSingleHomePillar } from "@/lib/single-home-pillars";
 import { authenticateHubWriteEngine } from "@/lib/hub-write-auth";
 import { isHubAuthoredDoc } from "@/lib/hub-author-auth";
 import { findSlugConflict } from "@/lib/hub-author-refs";
@@ -149,7 +150,8 @@ async function byIds(payload: Payload, collection: "pillars" | "subsections", te
 /**
  * K4 (a…l) + K13 on the LATEST version — every validator the cron's non-draft update runs
  * (PB-7a) plus the route-only rules (non-empty body, D-SUB, engine-blocked pillars, no
- * single-home author exemption). Collects every field; field names as in the request.
+ * single-home author exemption — superseded 05-11-26: single-home primary
+ * pillars are hub-writable, author optional). Collects every field; field names as in the request.
  * Taxonomy: ONE `id in […]` lookup for pillars (primary + secondary rows), ONE for
  * sub-sections, and ONE `limit 1` count of the primary pillar's sub-sections; tenant-scoped
  * (an id of another tenant / a deleted id ⇒ `invalid`).
@@ -165,8 +167,6 @@ export async function checkPublishable(args: { payload: Payload; tenant: { id: I
   if (isEmptyBody(latest.body)) set("bodyMarkdown", "required");
   if (!text(latest.slug)) set("slug", "required");
   if (typeof latest.readMin !== "number" || !(latest.readMin >= 1)) set("readMin", "out_of_range");
-  // (e) author — required, no single-home exemption (K13)
-  if (toId(latest.author) == null) set("authorId", "required");
   // (f) sponsor when sponsored
   if (latest.sponsored === true && !text(latest.sponsor)) set("sponsor", "required");
   // (j) a video needs a hero image (poster) and a description
@@ -191,15 +191,27 @@ export async function checkPublishable(args: { payload: Payload; tenant: { id: I
   const nonNull = (x: Id | null | undefined): x is Id => x != null;
   const pillars = await byIds(payload, "pillars", tenant.id, unique([pillarId, ...rowPillar].filter(nonNull)));
   const subs = await byIds(payload, "subsections", tenant.id, unique([subId, ...rowSub].filter(nonNull)));
-  const blocked = (p: Doc) => isEngineBlockedPillar(tenant.slug, String(p.slug ?? ""));
+  // secondary rows: engine-blocked pillars refused except hub-writable ones (GCV `exclusive`, 10-11-26)
+  const blocked = (p: Doc) => isHubBlockedSecondaryPillar(tenant.slug, String(p.slug ?? ""));
 
-  // (c) + (k) primary pillar
+  // (c) + (k) primary pillar — the hub may publish into a single-home pillar (Pressroom)
   const primary = pillarId != null ? pillars.get(String(pillarId)) : undefined;
+  const singleHome = primary != null && isSingleHomePillar(tenant.slug, String(primary.slug ?? ""));
   if (pillarId == null) set("pillarSlug", "required");
   else if (!primary) set("pillarSlug", "invalid");
-  else if (blocked(primary)) set("pillarSlug", "blocked_pillar");
+  else if (isHubBlockedPillar(tenant.slug, String(primary.slug ?? ""))) set("pillarSlug", "blocked_pillar");
+  // (e) author — required, except for a single-home pillar (Articles.author rule)
+  if (toId(latest.author) == null && !singleHome) set("authorId", "required");
+  // single-home primary: no sub-section, no secondary, not exclusive (422, not the hook's error)
+  if (singleHome) {
+    if (subId != null) set("subSectionSlug", "single_home");
+    if (rows.length > 0) set("secondary", "single_home");
+    if (latest.exclusive === true) set("flags.exclusive", "single_home");
+  }
   // (d) sub-section: of THIS pillar; REQUIRED when the pillar has sub-sections (D-SUB)
-  if (subId != null) {
+  if (singleHome) {
+    // no sub-section rule beyond the one above
+  } else if (subId != null) {
     const s = subs.get(String(subId));
     if (!s || pillarId == null || String(toId(s.pillar)) !== String(pillarId)) set("subSectionSlug", "invalid");
   } else if (primary) {

@@ -377,6 +377,41 @@ async function main(): Promise<void> {
     );
     synthDoc = (await payload.findByID({ collection: "articles" as never, id: synthId, depth: 0, overrideAccess: true })) as unknown as Doc;
     check("synthetic published (both statuses) + sponsored via the Local API", synthDoc._status === "published" && synthDoc.workflowStatus === "published" && synthDoc.sponsored === true, `_status=${String(synthDoc._status)} workflowStatus=${String(synthDoc.workflowStatus)} sponsored=${String(synthDoc.sponsored)}`);
+    /* ── P2: hero caption (imageCaption, media-gtp-vowasia Phase 2 A6) ── */
+    // A second published article WITH imageCaption + imageCredit. No sub-section,
+    // tag or sponsor flag, so the equality checks in [D] (subsection / tag /
+    // sponsored) are unaffected. The synthetic article above (no imageCaption)
+    // is the without-caption control.
+    console.log("\n[P2] hero caption: intake WITH imageCaption + imageCredit (synthetic = control without)");
+    const CAPTION = "Illustrative image";
+    const CREDIT = "Photo by Probe Person on Pexels";
+    const capt = await intake(
+      baseArticle("captioned", { heroImageUrl: `${LISTENER}/probe.jpg`, imageCredit: CREDIT, imageCaption: `  ${CAPTION}  ` }),
+    );
+    check("captioned intake -> 201 pending_review", capt.status === 201 && capt.json.status === "pending_review", `${capt.status} ${String(capt.json.status ?? capt.json.reason)}`);
+    const captId = capt.json.id as Id;
+    let captHeroId: unknown = null;
+    if (captId != null) {
+      const captDoc = (await payload.findByID({ collection: "articles" as never, id: captId, depth: 0, overrideAccess: true })) as unknown as Doc;
+      captHeroId = relId(captDoc.heroImage);
+      if (captHeroId != null) cleanup.media.add(String(captHeroId));
+      check("captioned article: no sub-section, no tags, not sponsored", captDoc.subSection == null && (!Array.isArray(captDoc.tags) || captDoc.tags.length === 0) && captDoc.sponsored !== true, `subSection=${String(relId(captDoc.subSection))} tags=${JSON.stringify(captDoc.tags)} sponsored=${String(captDoc.sponsored)}`);
+    }
+    check("captioned article has a non-null heroImage", captHeroId != null, `heroImage ${String(captHeroId)}`);
+    if (captHeroId != null) {
+      const m = (await payload.findByID({ collection: "media" as never, id: captHeroId as Id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      check("captioned hero Media caption === 'Illustrative image' (default locale, trimmed)", m.caption === CAPTION, JSON.stringify(m.caption));
+      check("captioned hero Media credit is the plain string", m.credit === CREDIT, JSON.stringify(m.credit));
+    }
+    if (heroId != null) {
+      const m0 = (await payload.findByID({ collection: "media" as never, id: heroId as Id, depth: 0, overrideAccess: true })) as unknown as Doc;
+      check("control (synthetic, no imageCaption): hero Media caption null/empty", m0.caption == null || m0.caption === "", JSON.stringify(m0.caption));
+    }
+    if (captId != null) {
+      await pUpdate(payload, "articles", captId, { _status: "published", workflowStatus: "published" }, { context: { disableRevalidate: true } });
+      const cd = (await payload.findByID({ collection: "articles" as never, id: captId, depth: 0, overrideAccess: true })) as unknown as Doc;
+      check("captioned article published (both statuses) via the Local API", cd._status === "published" && cd.workflowStatus === "published", `_status=${String(cd._status)} workflowStatus=${String(cd.workflowStatus)}`);
+    }
     const pending = await intake(baseArticle("pending"));
     check("second intake article stays pending_review", pending.status === 201 && pending.json.status === "pending_review", `${pending.status} ${String(pending.json.status)}`);
 
@@ -477,6 +512,15 @@ async function main(): Promise<void> {
     check("?tag=<probe tag>", ((f3.json.docs as unknown as Doc[]) ?? []).map((d) => d.slug).join() === SLUG("synthetic"), `${String(f3.json.totalDocs)}`);
     const f4 = await pub("/articles?flag=sponsored");
     check("?flag=sponsored", ((f4.json.docs as unknown as Doc[]) ?? []).map((d) => d.slug).join() === SLUG("synthetic"), `${String(f4.json.totalDocs)}`);
+    {
+      const docs = (list.json.docs as unknown as Doc[]) ?? [];
+      const heroOf = (slug: string) => (docs.find((d) => d.slug === slug)?.heroImage ?? null) as Record<string, unknown> | null;
+      const ch = heroOf(SLUG("captioned"));
+      check("public /articles: captioned heroImage.caption === 'Illustrative image'", !!ch && ch.caption === CAPTION, ch ? JSON.stringify(ch.caption) : "captioned article or heroImage missing");
+      check("public /articles: captioned heroImage.credit is the plain string", !!ch && ch.credit === CREDIT, ch ? JSON.stringify(ch.credit) : "missing");
+      const sh = heroOf(SLUG("synthetic"));
+      check("public /articles: control (synthetic) heroImage.caption null/empty", !!sh && (sh.caption == null || sh.caption === ""), sh ? JSON.stringify(sh.caption) : "synthetic heroImage missing");
+    }
     const one = await pub(`/articles/${SLUG("synthetic")}`);
     const body = (one.json.doc as unknown as Doc | undefined)?.body as { root?: { children?: unknown[] } } | undefined;
     check("/articles/{slug} returns a Lexical body", one.status === 200 && Array.isArray(body?.root?.children), `${one.status}`);

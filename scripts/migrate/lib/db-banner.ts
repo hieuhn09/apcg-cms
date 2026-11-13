@@ -5,6 +5,7 @@
  * messages. Output is `host:port/db` only: never credentials, never a query.
  */
 import { parse } from "pg-connection-string";
+import { legacyEnvNames } from "./network-profile";
 
 export const BANNER_MESSAGES = {
   missing: "legacy-db: LEGACY_GTP_DB_URL is not set; refusing.",
@@ -17,15 +18,16 @@ export class DbBannerError extends Error {
 }
 
 export function legacyBanner(url: string | undefined): { banner: string; host: string; local: boolean } {
-  if (typeof url !== "string" || url.trim() === "") throw new DbBannerError(BANNER_MESSAGES.missing);
+  const msg = (k: keyof typeof BANNER_MESSAGES) => BANNER_MESSAGES[k].replace("LEGACY_GTP_DB_URL", legacyEnvNames().url);
+  if (typeof url !== "string" || url.trim() === "") throw new DbBannerError(msg("missing"));
   let c: ReturnType<typeof parse>;
   try {
     c = parse(url);
   } catch {
-    throw new DbBannerError(BANNER_MESSAGES.unparseable);
+    throw new DbBannerError(msg("unparseable"));
   }
   const host = typeof c.host === "string" ? c.host : "";
-  if (host === "" || host.startsWith("/") || host.includes(",")) throw new DbBannerError(BANNER_MESSAGES.badHost);
+  if (host === "" || host.startsWith("/") || host.includes(",")) throw new DbBannerError(msg("badHost"));
   const port = typeof c.port === "string" && c.port !== "" ? c.port : "5432";
   const db = typeof c.database === "string" ? c.database.replace(/[?].*$/, "") : "";
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(host);
@@ -34,8 +36,9 @@ export function legacyBanner(url: string | undefined): { banner: string; host: s
 
 /** SSL option from LEGACY_GTP_DB_SSL (default require for non-local hosts). */
 export function legacySsl(env: Record<string, string | undefined>, local: boolean): false | { rejectUnauthorized: boolean; ca?: string } {
-  const mode = env.LEGACY_GTP_DB_SSL ?? (local ? "disable" : "require");
+  const n = legacyEnvNames();
+  const mode = env[n.ssl] ?? (local ? "disable" : "require");
   if (mode === "disable") return false;
-  if (mode === "verify-full") return { rejectUnauthorized: true, ...(env.LEGACY_GTP_DB_CA ? { ca: env.LEGACY_GTP_DB_CA } : {}) };
+  if (mode === "verify-full") return { rejectUnauthorized: true, ...(env[n.ca] ? { ca: env[n.ca] } : {}) };
   return { rejectUnauthorized: false };
 }

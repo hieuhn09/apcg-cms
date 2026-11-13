@@ -34,6 +34,12 @@
  * `lastEngine` (= this engine — the hook stamps it only for engine writes),
  * `tenant`. `context.disableRevalidate` (a draft has no public cache to refresh).
  *
+ * Hero focal point (10-11-26): optional closed key `heroFocal` ({x, y} 0-100 | null). It is never an
+ * article column and never in `changed`; an object without a hero after the save ⇒ 422
+ * `fields.heroFocal: unknown_ref` (switch on); the media write runs AFTER the lock commits, only on
+ * 2xx (`hub-hero-focal-core.ts`); failure / switch `HUB_FOCAL_TENANTS` off ⇒ same answer +
+ * `warnings: ["hero_focal_not_applied"]`.
+ *
  * Logs: never `err.message`, body text or a token — an error NAME and CODE only.
  * The exported route wrappers take one / two arguments and NEVER pass `deps`; the
  * `…With(request, …, deps?)` functions exist for unit checks only.
@@ -65,7 +71,8 @@ import {
   type HubParseResult,
 } from "@/lib/hub-author-input";
 import { convertBody, isRoundTripSafeBody, lexicalTreesEqual, type ConvertResult, type HubEditorConfig } from "@/lib/hub-author-body";
-import { findSlugConflict, resolveDraftRefs, type ResolvedRefs } from "@/lib/hub-author-refs";
+import { isLiveEditTenant, isLiveWideTenant, liveEditTenants, liveGateReason, liveWideTenants } from "@/lib/hub-author-live-pure";
+import { bodyMediaIdsMatch, findSlugConflict, resolveDraftRefs, type ResolvedRefs } from "@/lib/hub-author-refs";
 import {
   busyResponse,
   isBusyCode,
@@ -74,6 +81,13 @@ import {
   type HubLockCtx,
   type HubLockResult,
 } from "@/lib/hub-article-lock";
+import {
+  applyHeroFocalAfterCommit,
+  finishWithHeroFocal,
+  focalEnabledFor,
+  heroFocalPrecheck,
+  type HubFocalDeps,
+} from "@/lib/hub-hero-focal-core";
 
 const SCOPE = "hub/articles/author";
 
@@ -90,6 +104,8 @@ export interface HubDraftDeps {
   getPayload?: () => Promise<Payload>;
   /** The CMS-A lock + transaction (default: `withHubArticleLock`); `--check6 --unit-only` passes a disabled one. */
   lock?: typeof withHubArticleLock;
+  /** Hero focal point (10-11-26): switch + request seams of the after-commit focal write. */
+  focal?: HubFocalDeps;
 }
 
 // ── Frozen response bodies ───────────────────────────────────────────────────
@@ -137,8 +153,16 @@ export function mapWriteError(err: unknown): MappedWriteError {
   const data = (err as { data?: { errors?: unknown } } | null)?.data;
   if (name === "ValidationError" && Array.isArray(data?.errors)) {
     const fields: HubFieldErrors = {};
-    for (const e of data.errors as { path?: unknown }[]) {
-      if (typeof e?.path === "string" && e.path !== "") fields[e.path] = "invalid";
+    for (const e of data.errors as { path?: unknown; message?: unknown }[]) {
+      if (typeof e?.path !== "string" || e.path === "") continue;
+      // Single-home rule (Pressroom) from the Articles hook ⇒ `single_home` on the hub field name.
+      if (typeof e.message === "string" && e.message.includes("is a single-home pillar")) {
+        const f = e.path.startsWith("secondarySections") ? "secondary" : e.path === "subSection" ? "subSectionSlug" : e.path === "exclusive" ? "flags.exclusive" : e.path;
+        fields[f] = "single_home";
+        continue;
+      }
+      // P5.3 (review NIT 5): the hub sends `heroImageId`; Payload reports the field path `heroImage`.
+      fields[e.path === "heroImage" ? "heroImageId" : e.path] = "invalid";
     }
     return { kind: "invalid", status: 422, fields };
   }
@@ -169,7 +193,7 @@ function parsedResponse(r: Extract<HubParseResult, { ok: false }>): Response {
   return json(r.body, r.status);
 }
 
-/** Tenant ∈ grant (403 + log, `requested` cut to 64 chars — E15) and `features.articles` (403). */
+/** Tenant ∈ grant (403 + log, `requested` cut to 64 chars — E15) and `features.articles` (403). Also used by `POST /api/hub/media` (P5.3). */
 async function resolveTenant(
   payload: Payload,
   auth: { engine: { id: Id }; tenants: { id: Id; slug: string }[] },
@@ -278,10 +302,16 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     if (!refsR.ok) return invalid(refsR.fields);
     const refs = refsR.refs;
 
+    // Hero focal point (N8): an object focal needs a hero after this save.
+    const focalErr = heroFocalPrecheck({ heroFocal: v.heroFocal, heroAfter: refs.heroImage ?? null, enabled: focalEnabledFor(tenant.slug, deps?.focal) });
+    if (focalErr) return invalid(focalErr);
+
     let lexical: unknown = undefined;
     if (v.bodyMarkdown) {
       const c = await (deps?.convert ?? defaultConvert)(payload, v.bodyMarkdown);
       if (!c.ok) return conversionRejected(payload, c);
+      // P5.3 T8 (c): the stored tree's media ids must be exactly the tenant-checked ids.
+      if (!bodyMediaIdsMatch(c.lexical, refs.bodyMediaIds ?? [])) return invalid({ bodyMarkdown: "unknown_ref" });
       lexical = c.lexical;
     }
 
@@ -318,9 +348,17 @@ export async function handleHubDraftCreateWith(request: Request, deps?: HubDraft
     if (refs.coAuthors) data.coAuthors = refs.coAuthors;
     for (const [k, b] of Object.entries(v.flags ?? {})) data[k] = b;
     if (v.sponsor != null) data.sponsor = v.sponsor;
+    if (refs.heroImage != null) data.heroImage = refs.heroImage;
+    if (v.leadImageCaption != null) data.leadImageCaption = v.leadImageCaption;
+    if (v.pinnedUntil != null) data.pinnedUntil = v.pinnedUntil;
 
     // CMS-A (M5): the slug lock, the slug check again and the create run in ONE transaction.
-    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data }));
+    const res = await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id }, (lk) => createInLock(lk, { v, tenant, data }));
+    // Hero focal point: AFTER the commit, only on 201, only when the request carried `heroFocal`.
+    if (v.heroFocal === undefined) return res;
+    return await finishWithHeroFocal(res, (b) =>
+      applyHeroFocalAfterCommit(payload, { tenant, articleId: b.id as Id, heroFocal: v.heroFocal, draft: true }, deps?.focal),
+    );
   } catch (err) {
     return logInternal(payload, engine.id, err);
   }
@@ -413,6 +451,269 @@ function mergeRules(v: HubDraftInput, refs: ResolvedRefs, latest: Doc): HubField
   return fields;
 }
 
+/**
+ * The editable-article gate shared by PATCH and `POST /api/hub/media` (P5.3, T2):
+ * id shape + int4 (404) → latest draft AND main row in THAT tenant (404) → both a
+ * manual draft (422 not_editable origin|status) → latest hub-authored (422
+ * not_editable not_hub_authored). `findMain` is injectable so PATCH keeps its own
+ * seam (`--check6 --unit-only` M22 / `--check7 --unit-only` LA-U5 count main reads).
+ */
+export async function loadHubEditableArticle(
+  payload: Payload,
+  tenant: { id: Id },
+  id: string,
+  findMain: (payload: Payload, id: Id) => Promise<Doc | null> = defaultFindMain,
+): Promise<{ ok: true; articleId: number; latest: Doc; main: Doc } | { ok: false; response: Response }> {
+  if (!isHubArticleId(id)) return { ok: false, response: notFound() };
+  const articleId = Number(id);
+  const latest = (await payload.findByID({
+    collection: "articles",
+    id: articleId,
+    draft: true,
+    depth: 0,
+    overrideAccess: true,
+    disableErrors: true,
+  })) as unknown as Doc | null;
+  if (!latest || String(toId(latest.tenant)) !== String(tenant.id)) return { ok: false, response: notFound() };
+  const main = await findMain(payload, articleId);
+  if (!main || String(toId(main.tenant)) !== String(tenant.id)) return { ok: false, response: notFound() };
+
+  const reason = gateReason(main) ?? gateReason(latest);
+  if (reason) return { ok: false, response: notEditable(reason) };
+  if (!(await isHubAuthoredDoc(payload, latest))) return { ok: false, response: notEditable("not_hub_authored") };
+  return { ok: true, articleId, latest, main };
+}
+
+/** Seams of `loadHubMediaArticle` (unit checks only; production never passes them). */
+export interface HubMediaArticleDeps {
+  /** `HUB_LIVE_EDIT_TENANTS` (default: read from the env on this call). */
+  liveTenants?: readonly string[];
+  /** `HUB_LIVE_EDIT_WIDE_TENANTS` (default: read from the env on this call). */
+  wideTenants?: readonly string[];
+}
+
+/**
+ * The article gate of `POST /api/hub/media` (wide live edit, content-engine plan
+ * hub-live-edit-widen_PLAN_10-11-26.md, step 2.3): `loadHubEditableArticle` first (a
+ * hub-authored manual draft — unchanged, PATCH keeps using it directly). Only when that
+ * answers 422 not_editable AND the tenant is in BOTH live switches, the article may instead
+ * be a PUBLISHED one that passes the WIDE live gate (`liveGateReason` with `wide`: manual or
+ * engine, not scheduled, published on both statuses, no unpublished draft) — so a new hero
+ * can be uploaded for a live edit. Otherwise the draft gate's own response is returned, so a
+ * non-wide tenant sees exactly the old 404 / 422 not_editable.
+ */
+export async function loadHubMediaArticle(
+  payload: Payload,
+  tenant: { id: Id; slug: string },
+  id: string,
+  deps?: HubMediaArticleDeps,
+): Promise<{ ok: true; articleId: number } | { ok: false; response: Response }> {
+  const draft = await loadHubEditableArticle(payload, tenant, id);
+  if (draft.ok) return { ok: true, articleId: draft.articleId };
+  if (draft.response.status !== 422) return draft;
+  const wide =
+    isLiveEditTenant(tenant.slug, deps?.liveTenants ?? liveEditTenants()) &&
+    isLiveWideTenant(tenant.slug, deps?.wideTenants ?? liveWideTenants());
+  if (!wide) return draft;
+  const articleId = Number(id);
+  const latest = (await payload.findByID({
+    collection: "articles",
+    id: articleId,
+    draft: true,
+    depth: 0,
+    overrideAccess: true,
+    disableErrors: true,
+  })) as unknown as Doc | null;
+  const main = await defaultFindMain(payload, articleId);
+  if (!latest || !main || String(toId(latest.tenant)) !== String(tenant.id) || String(toId(main.tenant)) !== String(tenant.id)) return draft;
+  if (liveGateReason({ main, latest, isHubAuthored: false, wide: true }) !== null) return draft;
+  return { ok: true, articleId };
+}
+
+/** The result of `buildDraftUpdateData`: the update `data` + the changed REQUEST keys, or the frozen error Response. */
+export type DraftUpdateBuild = { ok: true; data: Doc; changed: HubDraftFieldKey[] } | { ok: false; response: Response };
+
+/**
+ * APCGHub P5.4 (D3): the PATCH pipeline after the `expectedVersion` check, moved here
+ * VERBATIM so the live-edit route runs exactly the same rules — (with bodyMarkdown) the
+ * stored body round-trip check (422 body_not_editable) → references (422) → merge rules
+ * (422) → (with a non-empty body) conversion + body media ids (422) → the field map
+ * against `latest` (what changes, by REQUEST key). `editorConfig` is a LOADER, called only
+ * when `bodyMarkdown` is present (as PATCH always did).
+ */
+export async function buildDraftUpdateData(
+  payload: Payload,
+  args: {
+    v: HubDraftInput;
+    tenant: TenantDoc;
+    latest: Doc;
+    editorConfig: () => Promise<HubEditorConfig>;
+    deps?: { convert?: (payload: Payload, md: string) => Promise<ConvertResult> };
+  },
+): Promise<DraftUpdateBuild> {
+  const { v, tenant, latest } = args;
+  if (v.bodyMarkdown !== undefined) {
+    const editorConfig = await args.editorConfig();
+    if (!isRoundTripSafeBody(editorConfig, latest.body)) return { ok: false, response: bodyNotEditable() };
+  }
+
+  const refsR = await resolveDraftRefs({ payload, tenant, input: v, currentPillarId: toId(latest.pillar) ?? null });
+  if (!refsR.ok) return { ok: false, response: invalid(refsR.fields) };
+  const refs = refsR.refs;
+
+  const merge = mergeRules(v, refs, latest);
+  if (Object.keys(merge).length) return { ok: false, response: invalid(merge) };
+
+  let lexical: unknown = undefined;
+  if (v.bodyMarkdown) {
+    const c = await (args.deps?.convert ?? defaultConvert)(payload, v.bodyMarkdown);
+    if (!c.ok) return { ok: false, response: conversionRejected(payload, c) };
+    // P5.3 T8 (c): the stored tree's media ids must be exactly the tenant-checked ids.
+    if (!bodyMediaIdsMatch(c.lexical, refs.bodyMediaIds ?? [])) return { ok: false, response: invalid({ bodyMarkdown: "unknown_ref" }) };
+    lexical = c.lexical;
+  }
+
+  // What changes, by REQUEST key name (E11 c), against the latest version.
+  const data: Doc = {};
+  const changed: HubDraftFieldKey[] = [];
+  const mark = (k: HubDraftFieldKey) => {
+    if (!changed.includes(k)) changed.push(k);
+  };
+  for (const k of v.present) {
+    switch (k) {
+      case "title":
+        if (v.title !== latest.title) {
+          data.title = v.title;
+          mark(k);
+        }
+        break;
+      case "slug":
+        if (v.slug !== latest.slug) {
+          data.slug = v.slug;
+          mark(k);
+        }
+        break;
+      case "dek":
+        if ((v.dek ?? null) !== ((latest.dek as string | null | undefined) ?? null)) {
+          data.dek = v.dek ?? null;
+          mark(k);
+        }
+        break;
+      case "bodyMarkdown": {
+        const nowEmpty = isEmptyBody(latest.body);
+        const differs = lexical === undefined ? !nowEmpty : nowEmpty || !lexicalTreesEqual(lexical, latest.body);
+        if (differs) {
+          data.body = lexical ?? null;
+          mark(k);
+        }
+        break;
+      }
+      case "takeaways": {
+        const joined = v.takeaways && v.takeaways.length ? v.takeaways.join("\n") : null;
+        if (joined !== ((latest.takeaways as string | null | undefined) || null)) {
+          data.takeaways = joined;
+          mark(k);
+        }
+        break;
+      }
+      case "readMin":
+        if (v.readMin !== latest.readMin) {
+          data.readMin = v.readMin;
+          mark(k);
+        }
+        break;
+      case "pillarSlug":
+        if (idOrNull(refs.pillar) !== idOrNull(latest.pillar)) {
+          data.pillar = refs.pillar;
+          mark(k);
+        }
+        break;
+      case "subSectionSlug":
+        if (idOrNull(refs.subSection) !== idOrNull(latest.subSection)) {
+          data.subSection = refs.subSection ?? null;
+          mark(k);
+        }
+        break;
+      case "secondary":
+        if (secondaryKey(refs.secondarySections) !== secondaryKey(latest.secondarySections)) {
+          data.secondarySections = refs.secondarySections;
+          mark(k);
+        }
+        break;
+      case "tagSlugs":
+        if (!sameIds(refs.tags, latest.tags)) {
+          data.tags = refs.tags;
+          mark(k);
+        }
+        break;
+      case "countrySlugs":
+        if (!sameIds(refs.countries, latest.countries)) {
+          data.countries = refs.countries;
+          data.country = refs.countries?.[0] ?? null;
+          mark(k);
+        }
+        break;
+      case "citySlugs":
+        if (!sameIds(refs.cities, latest.cities)) {
+          data.cities = refs.cities;
+          mark(k);
+        }
+        break;
+      case "authorId":
+        if (idOrNull(refs.author) !== idOrNull(latest.author)) {
+          data.author = refs.author;
+          mark(k);
+        }
+        break;
+      case "coAuthorIds":
+        if (!sameIds(refs.coAuthors, latest.coAuthors)) {
+          data.coAuthors = refs.coAuthors;
+          mark(k);
+        }
+        break;
+      case "flags":
+        for (const [fk, b] of Object.entries(v.flags ?? {})) {
+          if ((latest[fk] === true) !== b) {
+            data[fk] = b;
+            mark(k);
+          }
+        }
+        break;
+      case "sponsor":
+        if ((v.sponsor ?? null) !== ((latest.sponsor as string | null | undefined) ?? null)) {
+          data.sponsor = v.sponsor ?? null;
+          mark(k);
+        }
+        break;
+      case "heroImageId":
+        if (idOrNull(refs.heroImage) !== idOrNull(latest.heroImage)) {
+          data.heroImage = refs.heroImage ?? null;
+          mark(k);
+        }
+        break;
+      case "leadImageCaption":
+        if ((v.leadImageCaption ?? null) !== ((latest.leadImageCaption as string | null | undefined) || null)) {
+          data.leadImageCaption = v.leadImageCaption ?? null;
+          mark(k);
+        }
+        break;
+      case "heroFocal":
+        // 10-11-26: never an article column and never in `changed` (no version bump); the focal
+        // point is written on the hero media AFTER the lock commits (hub-hero-focal-core.ts).
+        break;
+      case "pinnedUntil": {
+        const cur = typeof latest.pinnedUntil === "string" && latest.pinnedUntil ? new Date(latest.pinnedUntil).toISOString() : null;
+        if ((v.pinnedUntil ?? null) !== cur) {
+          data.pinnedUntil = v.pinnedUntil ?? null;
+          mark(k);
+        }
+        break;
+      }
+    }
+  }
+  return { ok: true, data, changed };
+}
+
 export async function handleHubDraftUpdateWith(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -436,172 +737,50 @@ export async function handleHubDraftUpdateWith(
     if (!t.ok) return t.response;
     const tenant = t.tenant;
 
-    if (!isHubArticleId(id)) return notFound();
-    const articleId = Number(id);
-    const latest = (await payload.findByID({
-      collection: "articles",
-      id: articleId,
-      draft: true,
-      depth: 0,
-      overrideAccess: true,
-      disableErrors: true,
-    })) as unknown as Doc | null;
-    if (!latest || String(toId(latest.tenant)) !== String(tenant.id)) return notFound();
-    const main = await findMain(payload, articleId);
-    if (!main || String(toId(main.tenant)) !== String(tenant.id)) return notFound();
-
-    const reason = gateReason(main) ?? gateReason(latest);
-    if (reason) return notEditable(reason);
-    if (!(await isHubAuthoredDoc(payload, latest))) return notEditable("not_hub_authored");
+    const loaded = await loadHubEditableArticle(payload, tenant, id, findMain);
+    if (!loaded.ok) return loaded.response;
+    const { articleId, latest } = loaded;
 
     const currentVersion = typeof latest.version === "number" ? latest.version : 0;
     if (v.expectedVersion !== currentVersion) return versionConflict(currentVersion);
 
-    if (v.bodyMarkdown !== undefined) {
-      const editorConfig = (await loadHubEditorConfig(payload.config)) as HubEditorConfig;
-      if (!isRoundTripSafeBody(editorConfig, latest.body)) return bodyNotEditable();
-    }
+    const built = await buildDraftUpdateData(payload, {
+      v,
+      tenant,
+      latest,
+      editorConfig: async () => (await loadHubEditorConfig(payload.config)) as HubEditorConfig,
+      deps: { convert: deps?.convert },
+    });
+    if (!built.ok) return built.response;
+    const { data, changed } = built;
 
-    const refsR = await resolveDraftRefs({ payload, tenant, input: v, currentPillarId: toId(latest.pillar) ?? null });
-    if (!refsR.ok) return invalid(refsR.fields);
-    const refs = refsR.refs;
-
-    const merge = mergeRules(v, refs, latest);
-    if (Object.keys(merge).length) return invalid(merge);
-
-    let lexical: unknown = undefined;
-    if (v.bodyMarkdown) {
-      const c = await (deps?.convert ?? defaultConvert)(payload, v.bodyMarkdown);
-      if (!c.ok) return conversionRejected(payload, c);
-      lexical = c.lexical;
-    }
-
-    // What changes, by REQUEST key name (E11 c), against the latest version.
-    const data: Doc = {};
-    const changed: HubDraftFieldKey[] = [];
-    const mark = (k: HubDraftFieldKey) => {
-      if (!changed.includes(k)) changed.push(k);
-    };
-    for (const k of v.present) {
-      switch (k) {
-        case "title":
-          if (v.title !== latest.title) {
-            data.title = v.title;
-            mark(k);
-          }
-          break;
-        case "slug":
-          if (v.slug !== latest.slug) {
-            data.slug = v.slug;
-            mark(k);
-          }
-          break;
-        case "dek":
-          if ((v.dek ?? null) !== ((latest.dek as string | null | undefined) ?? null)) {
-            data.dek = v.dek ?? null;
-            mark(k);
-          }
-          break;
-        case "bodyMarkdown": {
-          const nowEmpty = isEmptyBody(latest.body);
-          const differs = lexical === undefined ? !nowEmpty : nowEmpty || !lexicalTreesEqual(lexical, latest.body);
-          if (differs) {
-            data.body = lexical ?? null;
-            mark(k);
-          }
-          break;
-        }
-        case "takeaways": {
-          const joined = v.takeaways && v.takeaways.length ? v.takeaways.join("\n") : null;
-          if (joined !== ((latest.takeaways as string | null | undefined) || null)) {
-            data.takeaways = joined;
-            mark(k);
-          }
-          break;
-        }
-        case "readMin":
-          if (v.readMin !== latest.readMin) {
-            data.readMin = v.readMin;
-            mark(k);
-          }
-          break;
-        case "pillarSlug":
-          if (idOrNull(refs.pillar) !== idOrNull(latest.pillar)) {
-            data.pillar = refs.pillar;
-            mark(k);
-          }
-          break;
-        case "subSectionSlug":
-          if (idOrNull(refs.subSection) !== idOrNull(latest.subSection)) {
-            data.subSection = refs.subSection ?? null;
-            mark(k);
-          }
-          break;
-        case "secondary":
-          if (secondaryKey(refs.secondarySections) !== secondaryKey(latest.secondarySections)) {
-            data.secondarySections = refs.secondarySections;
-            mark(k);
-          }
-          break;
-        case "tagSlugs":
-          if (!sameIds(refs.tags, latest.tags)) {
-            data.tags = refs.tags;
-            mark(k);
-          }
-          break;
-        case "countrySlugs":
-          if (!sameIds(refs.countries, latest.countries)) {
-            data.countries = refs.countries;
-            data.country = refs.countries?.[0] ?? null;
-            mark(k);
-          }
-          break;
-        case "citySlugs":
-          if (!sameIds(refs.cities, latest.cities)) {
-            data.cities = refs.cities;
-            mark(k);
-          }
-          break;
-        case "authorId":
-          if (idOrNull(refs.author) !== idOrNull(latest.author)) {
-            data.author = refs.author;
-            mark(k);
-          }
-          break;
-        case "coAuthorIds":
-          if (!sameIds(refs.coAuthors, latest.coAuthors)) {
-            data.coAuthors = refs.coAuthors;
-            mark(k);
-          }
-          break;
-        case "flags":
-          for (const [fk, b] of Object.entries(v.flags ?? {})) {
-            if ((latest[fk] === true) !== b) {
-              data[fk] = b;
-              mark(k);
-            }
-          }
-          break;
-        case "sponsor":
-          if ((v.sponsor ?? null) !== ((latest.sponsor as string | null | undefined) ?? null)) {
-            data.sponsor = v.sponsor ?? null;
-            mark(k);
-          }
-          break;
-      }
-    }
+    // Hero focal point (N8): the hero after this save = the request's checked id, else the latest version's.
+    const focalErr = heroFocalPrecheck({
+      heroFocal: v.heroFocal,
+      heroAfter: v.heroImageId !== undefined ? v.heroImageId : latest.heroImage,
+      enabled: focalEnabledFor(tenant.slug, deps?.focal),
+    });
+    if (focalErr) return invalid(focalErr);
+    // AFTER the commit (or the no-write 200), only on 2xx, only when the request carried `heroFocal`.
+    const withFocal = async (res: Response): Promise<Response> =>
+      v.heroFocal === undefined
+        ? res
+        : finishWithHeroFocal(res, () => applyHeroFocalAfterCommit(payload, { tenant, articleId, heroFocal: v.heroFocal, draft: true }, deps?.focal));
 
     if (data.slug !== undefined && (await findSlugConflict({ payload, tenantId: tenant.id, slug: v.slug as string, excludeId: articleId }))) {
       return slugConflictResponse(payload, tenant.id, v.slug, articleId);
     }
 
     if (changed.length === 0) {
-      return json({ ok: true, id: latest.id, tenant: tenant.slug, workflowStatus: "draft", version: currentVersion, changed: [] }, 200);
+      // A focal-only PATCH lands here: `changed: []`, version unchanged, no article write.
+      return await withFocal(json({ ok: true, id: latest.id, tenant: tenant.slug, workflowStatus: "draft", version: currentVersion, changed: [] }, 200));
     }
 
     // CMS-A (M1): re-read, re-check and update in ONE transaction under the article lock.
-    return await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id, articleId }, (lk) =>
-      updateInLock(lk, { v, tenant, articleId, data, changed, latest, currentVersion }),
+    return await withFocal(
+      await (deps?.lock ?? withHubArticleLock)({ tenantId: tenant.id, articleId }, (lk) =>
+        updateInLock(lk, { v, tenant, articleId, data, changed, latest, currentVersion }),
+      ),
     );
   } catch (err) {
     return logInternal(payload, engine.id, err);

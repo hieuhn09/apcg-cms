@@ -51,6 +51,7 @@ import {
   type ConvertResult,
   type HubEditorConfig,
 } from "@/lib/hub-author-convert-core";
+import { mediaTokenConverters, withoutMediaTokenLines } from "@/lib/hub-author-media-token";
 
 export {
   checkExportedMarkdown,
@@ -103,9 +104,22 @@ export function hasBidi(s: string): boolean {
   return false;
 }
 
-/** Any `![` (image syntax, inline or reference). */
+/**
+ * Any `![` (image syntax, inline or reference) OUTSIDE the valid body-image token
+ * lines of P5.3 T8 (`![<alt>](cms-media:<id>)` standing alone as a root paragraph,
+ * see `hub-author-media-token.ts`). Every other image form is still `image`.
+ */
 export function hasImageSyntax(md: string): boolean {
-  return md.includes("![");
+  return withoutMediaTokenLines(md).includes("![");
+}
+
+/**
+ * The converters of every hub body conversion and round-trip (P5.3 T8): the real
+ * Lexical converters wrapped by the ONE media-token wrapper — the same wrapper the
+ * `view=edit` export uses, so "round-trip safe" and "exported with tokens" agree.
+ */
+export function hubBodyConverters(editorConfig: HubEditorConfig): BodyConverters {
+  return mediaTokenConverters(lexicalConverters(editorConfig));
 }
 
 // ── 1b linear pre-check (D23; "Định nghĩa đơn vị 1b") ───────────────────────
@@ -278,7 +292,7 @@ export function convertBodyGuarded(
   timeoutMs: number = currentConvertTimeoutMs(),
   deps?: Partial<BodyConverters>,
 ): ConvertResult {
-  const real = deps?.toLexical && deps?.toMarkdown ? null : lexicalConverters(editorConfig);
+  const real = deps?.toLexical && deps?.toMarkdown ? null : hubBodyConverters(editorConfig);
   const conv: BodyConverters = {
     toLexical: deps?.toLexical ?? (real as BodyConverters).toLexical,
     toMarkdown: deps?.toMarkdown ?? (real as BodyConverters).toMarkdown,
@@ -312,7 +326,7 @@ export function isRoundTripSafeBody(
   deps?: Partial<BodyConverters>,
 ): boolean {
   if (isEmptyBody(lexical)) return true;
-  const real = deps?.toLexical && deps?.toMarkdown ? null : lexicalConverters(editorConfig);
+  const real = deps?.toLexical && deps?.toMarkdown ? null : hubBodyConverters(editorConfig);
   try {
     return (
       runWithHardTimeout(

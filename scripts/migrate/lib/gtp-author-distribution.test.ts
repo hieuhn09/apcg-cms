@@ -98,3 +98,41 @@ test("A3: keepLegacy false ignores bylines; keepLegacy true keeps mapped bylines
 test("A3: empty pool is refused", () => {
   assert.throws(() => assignAuthors(corpus(3), { ...CFG, pool: [] }));
 });
+
+test("A5: empty `fixed` gives exactly the first-run plan", () => {
+  const items = corpus(500, 5);
+  assert.deepEqual([...assignAuthors(items, CFG, {}, new Map()).entries()], [...assignAuthors(items, CFG).entries()]);
+});
+
+test("A5: second run keeps the real Central author of existing items and balances only the new ones", () => {
+  const all = corpus(1649, 13);
+  const first = assignAuthors(all.slice(0, 1600), CFG);
+  // Central drifted after run 1 (an editor re-credited some articles): fixed = the REAL author, not the plan.
+  const fixed = new Map([...first.entries()].map(([id, n], i) => [id, i % 9 === 0 ? (POOL[0] as string) : n]));
+  for (const fresh of [1, 2, 3, 4, 49]) {
+    const items = all.slice(0, 1600 + fresh);
+    const a = assignAuthors(items, CFG, {}, fixed);
+    for (const [id, n] of fixed) assert.equal(a.get(id), n, `existing ${id} keeps its Central author`);
+    const totals = authorTotals(a, POOL);
+    // best possible spread: water-filling the new items onto the existing counts
+    const ex = authorTotals(fixed, POOL).totals;
+    const best = [...Array(fresh)].reduce((t: number[]) => {
+      const i = t.indexOf(Math.min(...t));
+      t[i] = (t[i] as number) + 1;
+      return t;
+    }, POOL.map((n) => ex[n] as number));
+    assert.equal(totals.spread, Math.max(...best) - Math.min(...best), `fresh ${fresh}`);
+    const order = [...a.entries()].sort();
+    assert.deepEqual([...assignAuthors([...items].reverse(), CFG, {}, new Map([...fixed].reverse())).entries()].sort(), order, "order independent");
+  }
+});
+
+test("A5: with balanced existing items the overall spread stays <= 1", () => {
+  const all = corpus(1700, 21);
+  const first = assignAuthors(all.slice(0, 1650), CFG);
+  for (const fresh of [1, 2, 5, 50]) {
+    const a = assignAuthors(all.slice(0, 1650 + fresh), CFG, {}, first);
+    assert.ok(authorTotals(a, POOL).spread <= 1, `fresh ${fresh}`);
+    for (const [id, n] of first) assert.equal(a.get(id), n);
+  }
+});

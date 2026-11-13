@@ -6,7 +6,7 @@
  * Exit 0 = every check PASS; exit 2 = at least one FAIL (listed).
  *
  *   npm run migrate:gtp:verify -- --run-id <id> --mapping-overlay <overlay> [--mapping path] [--from-snapshot dir]
- *     [--public-base <url>] [--base <gtp-web url>] [--confirm-host=<host>] [--require-final] [--rehearsal] [--out dir]
+ *     [--public-base <url>] [--base <gtp-web url>] [--confirm-host=<host>] [--require-final] [--rehearsal] [--out dir] [--batch 500]
  *   (read token: GTP_READ_TOKEN env; --read-token accepted with a warning)
  */
 import "../../lib/env";
@@ -14,7 +14,7 @@ import path from "node:path";
 import { getPayload } from "payload";
 import config from "../../../payload.config";
 import { pFind } from "../../lib/payload-loose";
-import { CliError } from "./args";
+import { CliError, intFlag } from "./args";
 import { parseCommand, resolveMappingPath, resolveReadToken, resolveRequireFinal } from "./cli-spec";
 import { assertImportTenant, centralTarget, loadEffectiveMapping, openLegacy, outDir, runMain } from "./cli-common";
 import { expectedFromSource } from "./gtp-expected";
@@ -24,12 +24,13 @@ import { blocks, nodeTypes } from "./lexical-body";
 import { normaliseKey } from "./normalise-path";
 import { writeFileSafe } from "./out-dir";
 import { applyRewrittenLinks } from "./verify-parity-links";
-import { RunDir, RunDirError, RUN_MESSAGES, checkRunId } from "./run-dir";
+import { RunDir, RunDirError, RUN_MESSAGES, allRunDirs, checkRunId } from "./run-dir";
 import type { SlugPlanEntry } from "./slug-plan";
+import { isGtp, profile } from "./network-profile";
 
 type Doc = Record<string, unknown>;
 type P = Awaited<ReturnType<typeof getPayload>>;
-const MARKER = { origin: "import", engineSourceName: "legacy:globaltravelpost" };
+const MARKER = { origin: "import", engineSourceName: profile().markerSourceName };
 
 async function findAll(payload: P, collection: string, where: Doc, extra: Doc = {}): Promise<Doc[]> {
   const out: Doc[] = [];
@@ -73,20 +74,25 @@ async function main(): Promise<number> {
   const add = (id: string, name: string, fails: string[], skip?: string) =>
     checks.push({ id, name, status: skip ? "SKIP" : fails.length ? "FAIL" : "PASS", detail: skip ? [skip] : fails.slice(0, 25) });
 
+  // Page size of the legacy read (default 500). The result must not depend on it (Amendment 5).
+  const batch = intFlag(a, "batch", 500) as number;
   const reader = await openLegacy(a, v, siteId);
   const src: Doc[] = [];
-  for await (const p of reader.pages("articles", ["id", "slug", "title", "status", "section", "subsection", "body_sections", "featured_image", "source_url", "published_at", "byline"], 500)) src.push(...p);
+  for await (const p of reader.pages("articles", ["id", "slug", "title", "status", "section", "subsection", "body_sections", "featured_image", "source_url", "published_at", "byline"], batch)) src.push(...p);
   const eventsSrc: Doc[] = [];
-  for await (const p of reader.pages("events", "all", 500)) eventsSrc.push(...p);
+  if (v.mapping.events.enabled) for await (const p of reader.pages("events", "all", batch)) eventsSrc.push(...p);
   await reader.close();
-  const exp = expectedFromSource(src, m);
+  // Owner decision 10-11-26 (supersedes OD-8): gtp expects 0 archived/draft rows (and 0 inactive events) in Central.
+  const publishedOnly = isGtp() && !a.has("include-archived-drafts");
+  const exp = expectedFromSource(src, m, { publishedOnly });
 
   const payload = await getPayload({ config });
   const tenant = ((await pFind(payload, "tenants", { where: { slug: { equals: tenantSlug } }, limit: 1 })) as unknown as { docs: Doc[] }).docs[0];
   if (!tenant) throw new CliError(`verify: tenant ${tenantSlug} not found.`);
   const tenantId = tenant.id as number | string;
   const markerRows = await findAll(payload, "articles", { and: [{ tenant: { equals: tenantId } }, { origin: { equals: MARKER.origin } }, { engineSourceName: { equals: MARKER.engineSourceName } }] }, { draft: true, depth: 0 });
-  const eventIds = new Set(slugMap.filter((e) => e.kind === "event").map((e) => String(e.articleId)));
+  // Event listings created by ANY run in this out dir (a second run skips the events of the first; Amendment 5).
+  const eventIds = new Set([run, ...allRunDirs(outDir(a))].flatMap((r) => r.slugMap()).filter((e) => e.kind === "event").map((e) => String(e.articleId)));
   const art = markerRows.filter((d) => !eventIds.has(String(d.id)));
   const ev = markerRows.filter((d) => eventIds.has(String(d.id)));
   const pillars = new Map((await findAll(payload, "pillars", { tenant: { equals: tenantId } })).map((p) => [String(p.id), String(p.slug)]));
@@ -119,7 +125,8 @@ async function main(): Promise<number> {
   }
   // 3 slug set diff
   {
-    const expSlugs = new Set(plan.filter((p) => p.kind === "article").map((p) => p.slug));
+    const droppedSlugs = new Set(publishedOnly ? slugMap.filter((e) => e.kind === "article" && e.status !== "published").map((e) => e.slug) : []);
+    const expSlugs = new Set(plan.filter((p) => p.kind === "article" && !droppedSlugs.has(p.slug)).map((p) => p.slug));
     const fails: string[] = [];
     for (const s of expSlugs) if (!bySlug.has(s)) fails.push(`missing in Central: ${s}`);
     for (const s of bySlug.keys()) if (!expSlugs.has(s)) fails.push(`unexpected in Central: ${s}`);
@@ -153,7 +160,7 @@ async function main(): Promise<number> {
         fails.push(`no Central row for ${String(r.id)}`);
         continue;
       }
-      const s = sectionsToHtml(r.body_sections);
+      const s = sectionsToHtml(r.body_sections, m.body.lineBreaks, m.body.reflowMaxChars);
       // Pass 2 (rewrite-links) legitimately replaced old-site URLs with /article/<slug>: apply the same mapping to the source text.
       const srcText = applyRewrittenLinks(s.text, blocks(d.body).map((b) => b.text).join("\n"), e?.textLinks ?? [], oldToNew);
       const a1 = plainTextForParity(srcText);
@@ -234,7 +241,7 @@ async function main(): Promise<number> {
       if (e && e.status === "published" && !visible) fails.push(`${String(d.slug)}: published row not public`);
     }
     if (publicBase) {
-      if (!tok.token) throw new CliError("verify: --public-base needs GTP_READ_TOKEN.");
+      if (!tok.token) throw new CliError(`verify: --public-base needs ${profile().readTokenEnv}.`);
       const headers = { authorization: `Bearer ${tok.token}` };
       const published = art.filter((d) => d.workflowStatus === "published");
       const nonPublic = art.filter((d) => d.workflowStatus !== "published");
@@ -255,9 +262,10 @@ async function main(): Promise<number> {
   }
   // 10 single-home
   {
-    const pr = [...pillars.entries()].find(([, s]) => s === "press-room")?.[0];
-    const fails = art.filter((d) => relId(d.pillar) === pr && (relId(d.subSection) || (Array.isArray(d.secondarySections) && d.secondarySections.length) || d.exclusive === true)).map((d) => String(d.slug));
-    add("10", "single-home (press-room)", fails);
+    const sh = new Set(profile().singleHomePillars);
+    const prs = new Set([...pillars.entries()].filter(([, s]) => sh.has(s)).map(([id]) => id));
+    const fails = art.filter((d) => prs.has(relId(d.pillar) ?? "") && (relId(d.subSection) || (Array.isArray(d.secondarySections) && d.secondarySections.length) || d.exclusive === true)).map((d) => String(d.slug));
+    add("10", `single-home (${profile().singleHomePillars.join(", ") || "none for this tenant"})`, fails);
   }
   // 11 provenance and marker
   {
@@ -279,9 +287,10 @@ async function main(): Promise<number> {
     const ed = planEvents(eventsSrc.map(toLegacyEvent), calendar, m.events.nearMatchThreshold);
     const fails: string[] = [];
     if (m.events.enabled) {
-      if (ev.length !== ed.imports.length) fails.push(`events expected ${ed.imports.length} (= ${eventsSrc.length} - ${ed.duplicates.length} duplicates - ${ed.near.length} near), Central ${ev.length}`);
+      const expEv = publishedOnly ? ed.imports.filter((e) => e.active) : ed.imports;
+      if (ev.length !== expEv.length) fails.push(`events expected ${expEv.length} (= ${eventsSrc.length} - ${ed.duplicates.length} duplicates - ${ed.near.length} near${publishedOnly ? ` - ${ed.imports.length - expEv.length} inactive (published-only)` : ""}), Central ${ev.length}`);
       const arch = ev.filter((d) => d.workflowStatus === "archived").length;
-      const expArch = ed.imports.filter((e) => !e.active).length;
+      const expArch = expEv.filter((e) => !e.active).length;
       if (arch !== expArch) fails.push(`archived events ${arch} expected ${expArch}`);
       for (const d of ev) {
         const b = Array.isArray(d.briefs) ? (d.briefs as Doc[]) : [];
@@ -291,7 +300,7 @@ async function main(): Promise<number> {
     add("E", "events (imported = total - duplicates - near; inactive archived; briefs shape)", fails);
   }
   // 12 PII scan of the report itself (below)
-  const lines = [`# GTP parity report (run ${run.dir.split("/").pop()})`, "", `- Central: ${central.banner}; tenant ${tenantSlug}; marker rows ${markerRows.length} (articles ${art.length}, events ${ev.length})`, ""];
+  const lines = [`# ${profile().id.toUpperCase()} parity report (run ${run.dir.split("/").pop()})`, "", `- Central: ${central.banner}; tenant ${tenantSlug}; marker rows ${markerRows.length} (articles ${art.length}, events ${ev.length})`, ""];
   for (const c of checks) {
     lines.push(`## ${c.id} ${c.name}: ${c.status}`);
     for (const d of c.detail) lines.push(`- ${d}`);

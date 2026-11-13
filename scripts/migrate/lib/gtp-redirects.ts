@@ -6,6 +6,7 @@
 import type { Mapping } from "./gtp-mapping";
 import { normalise } from "./normalise-path";
 import type { SlugMapEntry } from "./run-dir";
+import { isGtp, profile } from "./network-profile";
 import { isKnownDestination, type KnownRoutes, type MapValue } from "./gtp-redirect-contract";
 
 export interface RedirectRule {
@@ -37,7 +38,9 @@ function sectionTarget(pillar: string, sub?: string): string {
   return sub ? `/${pillar}/${sub}` : `/${pillar}`;
 }
 
-export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping, "archivedAs"> & { urls: Omit<Mapping["urls"], "gonePaths"> & { gonePaths?: readonly string[] } }, kr: KnownRoutes): RedirectBuild {
+export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping, "archivedAs"> & { urls: Omit<Mapping["urls"], "gonePaths"> & { gonePaths?: readonly string[] } }, kr: KnownRoutes, opts: { dropArchived?: boolean } = {}): RedirectBuild {
+  // Owner decision 10-11-26 (supersedes OD-8): for gtp, archived legacy URLs get NO rule (no 301, no 410); they 404.
+  const dropArchived = opts.dropArchived ?? isGtp();
   const out: RedirectBuild = { rules: [], counts: { identityDropped: 0, archived: 0, published: 0, sections: 0, static: 0, gone: 0, feeds: 0, draftsNoRule: 0, collisions: 0, normaliseUnconverged: 0 }, collisions: [], unconverged: [], errors: [] };
   const byFrom = new Map<string, RedirectRule & { owner: string }>();
   const add = (rawFrom: string, to: string | null, status: 301 | 410, kind: RedirectRule["kind"], source: RedirectRule["source"], owner: string) => {
@@ -67,7 +70,9 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
   for (const e of articles) {
     if (e.oldSection) {
       const oldSec = m.urls.sectionPaths[e.oldSection] ?? `/${e.oldSection}`;
-      if (!sectionsSeen.has(oldSec)) sectionsSeen.set(oldSec, sectionTarget(e.oldSection));
+      // Default (GTP): the old section slug is kept. Opt-in (AER profile): a non-pillar old section goes to the pillar its rows were mapped to.
+      const secTarget = profile().redirectNonPillarSectionsToMappedPillar && !profile().pillarSlugs.includes(e.oldSection) ? e.pillar ?? e.oldSection : e.oldSection;
+      if (!sectionsSeen.has(oldSec)) sectionsSeen.set(oldSec, sectionTarget(secTarget));
       if (e.oldSub) {
         const oldSubPath = `${oldSec}/${e.oldSub}`;
         if (!sectionsSeen.has(oldSubPath)) sectionsSeen.set(oldSubPath, sectionTarget(e.pillar ?? e.oldSection, e.subSection));
@@ -77,8 +82,10 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
     if (e.status === "published") {
       add(e.oldUrl, `/article/${e.slug}`, 301, "article", "slug-map", e.legacyId);
       out.counts.published = (out.counts.published ?? 0) + 1;
+    } else if (e.status === "archived" && dropArchived) {
+      out.counts.archivedNoRule = (out.counts.archivedNoRule ?? 0) + 1;
     } else if (e.status === "archived") {
-      const to = m.archivedAs === "410" ? null : sectionTarget(e.pillar ?? e.oldSection ?? "news", e.subSection);
+      const to = m.archivedAs === "410" ? null : sectionTarget(e.pillar ?? e.oldSection ?? (profile().pillarSlugs[0] as string), e.subSection);
       add(e.oldUrl, to, m.archivedAs === "410" ? 410 : 301, "article", "slug-map", e.legacyId);
       out.counts.archived = (out.counts.archived ?? 0) + 1;
     } else out.counts.draftsNoRule = (out.counts.draftsNoRule ?? 0) + 1;
@@ -99,7 +106,7 @@ export function buildRedirects(entries: readonly SlugMapEntry[], m: Pick<Mapping
     add(p, null, 410, "static", "rule", `gone:${p}`);
     out.counts.gone = (out.counts.gone ?? 0) + 1;
   }
-  const feedTarget = kr.static.find((s) => FEEDS.includes(s)) ?? "/news";
+  const feedTarget = kr.static.find((s) => FEEDS.includes(s)) ?? `/${profile().pillarSlugs[0] as string}`;
   for (const f of FEEDS) {
     add(f, feedTarget, 301, "feed", "rule", `feed:${f}`);
     out.counts.feeds = (out.counts.feeds ?? 0) + 1;

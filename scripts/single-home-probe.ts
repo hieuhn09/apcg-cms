@@ -1,6 +1,6 @@
 /**
  * single-home-probe.ts — empirical probe for the single-home pillar rule
- * (BriefAsia + GCV Pressroom). LOCAL DATABASE ONLY: hard-refuses any non-local
+ * (BriefAsia + GCV + WAD + Opentechwire/dtw Pressroom). LOCAL DATABASE ONLY: hard-refuses any non-local
  * DATABASE_URL via scripts/lib/local-db-guard.ts (no override). It creates AND
  * deletes rows.
  *
@@ -13,9 +13,13 @@
  * Every fixture carries a run tag and is deleted in `finally`. The brief-asia
  * `pressroom` row is reused when it already exists (and then never deleted);
  * otherwise the probe creates it, runs the 0-reference delete check on it last,
- * and leaves none behind. Also creates and deletes `(wad, pressroom)` (the
- * negative control, not single-home) and `(gcv, pressroom)` (single-home since
- * GCV Pressroom parity) rows, plus wad/gcv articles.
+ * and leaves none behind. Also creates and deletes `(wad, pressroom)` (single-home
+ * since WAD Pressroom parity, 20-10-26), `(gcv, pressroom)` (single-home since
+ * GCV Pressroom parity), `(dtw, pressroom)` (single-home since the OTW
+ * Pressroom owner decision, 04-11-26; created inside the [DTW] block only, AFTER
+ * the move-into-dtw checks, which rely on dtw having no `pressroom` row) and
+ * `(world-travel-brief, pressroom)` (the negative control, not single-home)
+ * rows, plus wad/gcv/dtw/world-travel-brief articles.
  *
  * Exit code 0 = every check passed.
  */
@@ -128,7 +132,8 @@ async function main() {
     const wad = await find("tenants", { slug: { equals: "wad" } });
     const gcv = await find("tenants", { slug: { equals: "gcv" } });
     const dtw = await find("tenants", { slug: { equals: "dtw" } });
-    if (!ba || !wad || !gcv || !dtw) throw new Error("tenants brief-asia / wad / gcv / dtw missing — run `npm run db:seed` first");
+    const wtb = await find("tenants", { slug: { equals: "world-travel-brief" } });
+    if (!ba || !wad || !gcv || !dtw || !wtb) throw new Error("tenants brief-asia / wad / gcv / dtw / world-travel-brief missing — run `npm run db:seed` first");
     const asia = await find("pillars", { and: [{ tenant: { equals: ba.id } }, { slug: { equals: "asia" } }] });
     const finance = await find("pillars", { and: [{ tenant: { equals: ba.id } }, { slug: { equals: "finance" } }] });
     if (!asia || !finance) throw new Error("brief-asia pillars asia/finance missing — run `npm run db:seed` first");
@@ -144,10 +149,12 @@ async function main() {
     console.log(`[probe] brief-asia pressroom pillar id ${pressroom.id} (${ownPressroom ? "created by probe" : "pre-existing, reused"})`);
     const wadPress = await create("pillars", { tenant: wad.id, slug: "pressroom", title: "WAD Pressroom", order: 99 });
     const gcvPress = await create("pillars", { tenant: gcv.id, slug: "pressroom", title: "GCV Pressroom", order: 99 });
+    const wtbPress = await create("pillars", { tenant: wtb.id, slug: "pressroom", title: "WTB Pressroom (control)", order: 99 });
     const asiaSub = await create("subsections", { tenant: ba.id, pillar: asia.id, slug: `${TAG}-sub`, title: "Probe sub" });
     const baAuthor = await create("authors", { tenant: ba.id, name: `${TAG} BA` });
     const wadAuthor = await create("authors", { tenant: wad.id, name: `${TAG} WAD` });
     const gcvAuthor = await create("authors", { tenant: gcv.id, name: `${TAG} GCV` });
+    const wtbAuthor = await create("authors", { tenant: wtb.id, name: `${TAG} WTB` });
     let n = 0;
     const art = (tenant: Id, author: Id, extra: Record<string, unknown>) => ({
       tenant,
@@ -246,12 +253,36 @@ async function main() {
 
     console.log("\n[V4] SubSections");
     await expectReject("sub-section under the brief-asia pressroom pillar", () => create("subsections", { tenant: ba.id, pillar: pressroom!.id, slug: `${TAG}-press-sub`, title: "x" }), V4);
-    await expectOk("sub-section under WAD's pressroom pillar (control)", () => create("subsections", { tenant: wad.id, pillar: wadPress.id, slug: `${TAG}-wad-sub`, title: "x" }));
+    await expectReject("sub-section under WAD's pressroom pillar (V4)", () => create("subsections", { tenant: wad.id, pillar: wadPress.id, slug: `${TAG}-wad-sub`, title: "x" }), V4);
+    await expectOk("sub-section under world-travel-brief's pressroom pillar (control)", () => create("subsections", { tenant: wtb.id, pillar: wtbPress.id, slug: `${TAG}-wtb-sub`, title: "x" }));
 
-    console.log("\n[controls] wad pressroom is not single-home");
-    await expectOk("wad article primary=wad pressroom with a secondary row + exclusive", () =>
-      create("articles", art(wad.id, wadAuthor.id, { pillar: wadPress.id, secondarySections: [{ pillar: wadPress.id }], exclusive: true })),
+    console.log("\n[controls] world-travel-brief pressroom is not single-home");
+    await expectOk("wtb article primary=wtb pressroom with a secondary row + exclusive", () =>
+      create("articles", art(wtb.id, wtbAuthor.id, { pillar: wtbPress.id, secondarySections: [{ pillar: wtbPress.id }], exclusive: true })),
     );
+
+    console.log("\n[WAD] wad pressroom is single-home");
+    const wadOther = await find("pillars", { and: [{ tenant: { equals: wad.id } }, { slug: { equals: "architecture" } }] });
+    if (!wadOther) throw new Error("wad pillar architecture missing — run `npm run db:seed` first");
+    await expectReject("wad article with a secondary wad pressroom row (V3)", () =>
+      create("articles", art(wad.id, wadAuthor.id, { pillar: wadOther.id, secondarySections: [{ pillar: wadPress.id }] })),
+      V3,
+    );
+    await expectReject("wad pressroom article with a secondary row (V1)", () =>
+      create("articles", art(wad.id, wadAuthor.id, { pillar: wadPress.id, secondarySections: [{ pillar: wadOther.id }] })),
+      V1,
+    );
+    await expectReject("wad pressroom article marked exclusive (V6)", () => create("articles", art(wad.id, wadAuthor.id, { pillar: wadPress.id, exclusive: true })), V6);
+    const wadArt = await expectOk("wad pressroom article with NO author publishes", () =>
+      create("articles", art(wad.id, null as unknown as Id, { pillar: wadPress.id, workflowStatus: "published", _status: "published" })),
+    );
+    await expectReject("ordinary wad (architecture) article with NO author is rejected on publish", () =>
+      create("articles", art(wad.id, null as unknown as Id, { pillar: wadOther.id, workflowStatus: "published", _status: "published" })),
+      "This field is required.",
+    );
+    await expectReject("rename wad pressroom slug", () => update("pillars", wadPress.id, { slug: "press" }), RENAME);
+    await expectReject("move wad pressroom to another tenant (dtw)", () => update("pillars", wadPress.id, { tenant: dtw.id }), MOVE);
+    if (wadArt) await expectReject("delete in-use wad pressroom", () => remove("pillars", wadPress.id), DELETE);
 
     console.log("\n[GCV] gcv pressroom is single-home");
     const gcvOther = await find("pillars", { and: [{ tenant: { equals: gcv.id } }, { slug: { not_equals: "pressroom" } }] });
@@ -279,10 +310,36 @@ async function main() {
     // dtw has no `pressroom` pillar, so slug uniqueness cannot pre-empt the guard.
     await expectReject("move brief-asia pressroom to another tenant (dtw, PATCH {tenant})", () => update("pillars", pressroom!.id, { tenant: dtw.id }), MOVE);
     await expectOk("update brief-asia pressroom title (pair unchanged)", () => update("pillars", pressroom!.id, { title: "Pressroom" }));
-    await expectOk("rename WAD's pressroom (control) and back", async () => {
-      await update("pillars", wadPress.id, { slug: `${TAG}-wadpress` });
-      return update("pillars", wadPress.id, { slug: "pressroom" });
+    await expectOk("rename world-travel-brief's pressroom (control) and back", async () => {
+      await update("pillars", wtbPress.id, { slug: `${TAG}-wtbpress` });
+      return update("pillars", wtbPress.id, { slug: "pressroom" });
     });
+
+    console.log("\n[DTW] dtw pressroom is single-home (OTW Pressroom, 04-11-26)");
+    // Created only now: the move-into-dtw checks above need dtw to have NO pressroom row.
+    const dtwPress = await create("pillars", { tenant: dtw.id, slug: "pressroom", title: "OTW Pressroom", order: 99 });
+    const dtwAuthor = await create("authors", { tenant: dtw.id, name: `${TAG} DTW` });
+    const dtwOther = await find("pillars", { and: [{ tenant: { equals: dtw.id } }, { slug: { equals: "ai" } }] });
+    if (!dtwOther) throw new Error("dtw pillar ai missing — run `npm run db:seed` first");
+    await expectReject("dtw article with a secondary dtw pressroom row (V3)", () =>
+      create("articles", art(dtw.id, dtwAuthor.id, { pillar: dtwOther.id, secondarySections: [{ pillar: dtwPress.id }] })),
+      V3,
+    );
+    await expectReject("dtw pressroom article with a secondary row (V1)", () =>
+      create("articles", art(dtw.id, dtwAuthor.id, { pillar: dtwPress.id, secondarySections: [{ pillar: dtwOther.id }] })),
+      V1,
+    );
+    await expectReject("dtw pressroom article marked exclusive (V6)", () => create("articles", art(dtw.id, dtwAuthor.id, { pillar: dtwPress.id, exclusive: true })), V6);
+    await expectReject("sub-section under the dtw pressroom pillar (V4)", () => create("subsections", { tenant: dtw.id, pillar: dtwPress.id, slug: `${TAG}-dtw-sub`, title: "x" }), V4);
+    const dtwArt = await expectOk("dtw pressroom article with NO author publishes", () =>
+      create("articles", art(dtw.id, null as unknown as Id, { pillar: dtwPress.id, workflowStatus: "published", _status: "published" })),
+    );
+    await expectReject("ordinary dtw (ai) article with NO author is rejected on publish", () =>
+      create("articles", art(dtw.id, null as unknown as Id, { pillar: dtwOther.id, workflowStatus: "published", _status: "published" })),
+      "This field is required.",
+    );
+    await expectReject("rename dtw pressroom slug", () => update("pillars", dtwPress.id, { slug: "press" }), RENAME);
+    if (dtwArt) await expectReject("delete in-use dtw pressroom", () => remove("pillars", dtwPress.id), DELETE);
 
     const tryDelete = (label: string) => expectReject(`delete in-use pressroom: ${label}`, () => remove("pillars", pressroom!.id), DELETE);
     if (pArt) await tryDelete("referenced by a main article");
@@ -329,8 +386,10 @@ async function main() {
       pressroomId = undefined;
       // With no brief-asia pressroom row left, uniqueness cannot pre-empt the guard.
       await expectReject("move WAD's pressroom into brief-asia (PATCH {tenant})", () => update("pillars", wadPress.id, { tenant: ba.id }), MOVE);
+      await expectReject("move world-travel-brief's pressroom into brief-asia (new pair single-home)", () => update("pillars", wtbPress.id, { tenant: ba.id }), MOVE);
+      await expectReject("move dtw pressroom into brief-asia (PATCH {tenant})", () => update("pillars", dtwPress.id, { tenant: ba.id }), MOVE);
     } else {
-      console.log("  SKIP  per-reference delete checks, 0-ref delete and the WAD->brief-asia move — the brief-asia pressroom row pre-existed (run on a fresh seed to cover them)");
+      console.log("  SKIP  per-reference delete checks, 0-ref delete and the WAD/WTB/DTW->brief-asia moves — the brief-asia pressroom row pre-existed (run on a fresh seed to cover them)");
     }
 
     console.log("\n[G87] seed fixture guard");

@@ -201,9 +201,14 @@ export interface HubPillar {
   icon: string | null;
   order: number | null;
   description: string | null;
+  /** True when the HUB may not write this pillar as primary (engine-blocked minus single-home, PA-11 / 05-11-26). */
+  blocked: boolean;
 }
 
-export function sanitizeHubPillar(doc: Doc): HubPillar {
+/** A pillar as sanitized from the row, before `markBlockedPillars` adds `blocked` (PA-11). */
+export type HubPillarBase = Omit<HubPillar, "blocked">;
+
+export function sanitizeHubPillar(doc: Doc): HubPillarBase {
   return {
     id: doc.id as number | string,
     slug: str(doc.slug),
@@ -273,10 +278,15 @@ export interface HubTag {
   id: number | string;
   slug: string | null;
   title: string | null;
+  /** Articles of the tenant using the tag (any status); absent when unknown. */
+  uses?: number;
 }
 
 export function sanitizeHubTag(doc: Doc): HubTag {
-  return { id: doc.id as number | string, slug: str(doc.slug), title: str(doc.title) };
+  const out: HubTag = { id: doc.id as number | string, slug: str(doc.slug), title: str(doc.title) };
+  const u = doc.uses;
+  if (typeof u === "number" && Number.isInteger(u) && u >= 0) out.uses = u;
+  return out;
 }
 
 export interface HubCountry {

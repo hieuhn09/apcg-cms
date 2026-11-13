@@ -40,7 +40,8 @@ export function tenantTag(tenantSlug: string, tag: string): string {
   return `${tenantSlug}:${tag}`;
 }
 
-async function postRevalidate(
+/** Exported 10-11-26 for the guarded Media focal hook (`src/hooks/media-focal-revalidate.ts`); unchanged. */
+export async function postRevalidate(
   payload: Payload,
   tenant: TenantDoc | null,
   body: Record<string, unknown>,
@@ -100,6 +101,24 @@ async function postRevalidate(
     payload.logger.warn(
       `[revalidate] webhook to ${url} ${timedOut ? `timed out after ${REVALIDATE_TIMEOUT_MS}ms` : "failed"}: ${message}`,
     );
+  }
+}
+
+/**
+ * The same signed webhook the `afterChange` hook sends, for a caller that wrote with
+ * `context.disableRevalidate` inside a transaction and must notify only AFTER commit
+ * (engine hero replace). Best-effort: never throws.
+ */
+export async function revalidateAfterCommit(
+  payload: Payload,
+  tenantId: number | string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const tenant = await findTenantById(payload, tenantId);
+    await postRevalidate(payload, tenant, body);
+  } catch (err) {
+    payload.logger.warn(`[revalidate] after-commit webhook skipped: ${(err as Error).message}`);
   }
 }
 

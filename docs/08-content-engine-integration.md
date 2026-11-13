@@ -38,6 +38,8 @@ Content-Type: application/json
   "byline": "Mei Lin Tan",
   "contentType": "article",
   "heroImageUrl": "https://example.com/image.jpg",
+  "imageCredit": "Photo by Jane Doe on Pexels",
+  "imageCaption": "Illustrative image",
   "sections": ["finance"],
   "countries": ["sg", "vn"],
   "sourceProvenance": { "url": "https://source", "name": "Source Publisher", "accessedAt": "2026-06-28T02:00:00Z" },
@@ -50,6 +52,14 @@ Content-Type: application/json
   tenant; otherwise it defaults to the engine's single allowed tenant.
 - `engineDraftId` is the idempotency key (per tenant). If omitted, `sourceProvenance.url`
   is used.
+- `imageCredit` and `imageCaption` are optional and apply to the hero image only
+  (ignored without `heroImageUrl`). Both are written when the hero Media doc is
+  created; a refresh never changes the hero Media, so an editor's later edit is
+  never overwritten. `imageCredit` is plain text (trimmed; no link). `imageCaption`
+  is trimmed, internal whitespace/newlines collapsed to single spaces, capped at
+  200 characters, and written to the Media `caption` in the default locale (like
+  `alt`); an absent, empty or non-string value writes no caption at all. Central
+  stores the text it is sent and applies no label policy of its own.
 - Drafts are created in **`pending_review`** — the engine does NOT publish. An
   editor reviews and publishes.
 
@@ -64,8 +74,8 @@ Content-Type: application/json
 | 401 | `{ ok:false, status:"unauthorized" }` | bad/suspended token |
 | 403 | `{ ok:false, status:"forbidden", reason }` | tenant/action not allowed |
 | 422 | `{ ok:false, status:"unprocessable", reason }` | feature disabled / unknown pillar |
-| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom`, GlobalTravelPost (`gtp`) `press-room` and `events-awards`, VowAsia (`vowasia`) `press-room`, `real-weddings` and `directory`, Pressroom / Press Room / Events & Awards articles come only from editors; WAD's own `pressroom` is not blocked); the check is on the PRIMARY `pillarSlug` only (a gtp `news` primary with `sections:["events-awards"]` is not blocked by it); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
-| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom`, GCV `pressroom`, GlobalTravelPost `gtp` `press-room` and VowAsia `vowasia` `press-room`; WAD's `pressroom` and gtp `events-awards` are not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar not writable by engine: <slug>" }` | the pillar is engine-blocked for this tenant (`ENGINE_BLOCKED_PILLARS`: GCV `exclusive` and `pressroom`, BriefAsia `pressroom`, WAD `pressroom` (since 20-10-26), Opentechwire (`dtw`) `pressroom` (since 04-11-26), GlobalTravelPost (`gtp`) `press-room` and `events-awards`, VowAsia (`vowasia`) `press-room`, `real-weddings` and `directory`, Asia Economic Review (`aer`) `long-view`, `interviews` and `in-focus`, AsiaGolfReview (`agr`) `course-reviews`, `rankings` and `press-room`, AsiaMaterialsBrief (`amb`) `press-room`, Pressroom / Press Room / Events & Awards articles come only from editors); the check is on the PRIMARY `pillarSlug` only (a gtp `news` primary with `sections:["events-awards"]` is not blocked by it); case/whitespace-insensitive match (the reason prints the normalised slug); applies to create AND refresh |
+| 422 | `{ ok:false, status:"unprocessable", reason:"pillar rule: \"<slug>\" is a single-home pillar: …" }` | single-home pillar rule (`SINGLE_HOME_PILLARS`, BriefAsia `pressroom`, GCV `pressroom`, WAD `pressroom` (since 20-10-26), Opentechwire (`dtw`) `pressroom` (since 04-11-26), GlobalTravelPost `gtp` `press-room`, VowAsia `vowasia` `press-room`, AsiaGolfReview `agr` `press-room` and AsiaMaterialsBrief `amb` `press-room`; gtp `events-awards` is not single-home): a Pressroom item may carry no other `sections[]` entry (an entry equal to the primary is ignored; for a single-home primary an unknown slug is refused too), no `subSectionSlug` / `subSectionSlugs[]` / `secondarySubSections`; and no article may list `pressroom` in `sections[]` (case/whitespace-insensitive). Checked before the idempotency lookup, so it applies to create AND refresh; logged as `integration_error`. Terminal: fix the payload, do not retry. `secondaryPillarSlugs` is never checked (ignored by intake) |
 | 5xx | `{ ok:false, status:"error" }` | transient — safe to retry |
 
 ### GlobalTravelPost (`gtp`) notes
@@ -102,6 +112,78 @@ Content-Type: application/json
   team page, PENDING owner confirmation); an unmatched byline creates a "ghost" author.
 - Status 13-10-26: code only. The tenant, the taxonomy rows and any engine record do NOT
   exist yet; intake for `vowasia` answers 4xx until the owner creates them.
+
+### Asia Economic Review (`aer`) notes
+
+- Tenant slug / `publicationId` `aer`. Engine-writable pillars: `asia-watch`, `briefings`,
+  `corporate-asia`; `long-view`, `interviews`, `in-focus` are editor-only (422 `pillar not
+  writable by engine`, row above). No single-home pillar. Taxonomy source of truth:
+  `scripts/lib/aer-taxonomy.ts`.
+- `engineDraftId`: `content-engine:aer:<article.id>`, same convention as gtp/vowasia.
+- `byline` must equal an aer `authors.name` exactly (`Lena Ho`, `Arjun Menon`,
+  `Mei Fong Chua`, `Rahul Sethi`); no shared "editorial team" byline.
+- Status 19-10-26: code only; intake for `aer` answers 4xx until the owner creates the
+  tenant, taxonomy and engine record.
+
+### AsiaGolfReview (`agr`) notes
+
+- Tenant slug / `publicationId` `agr`. Engine-writable pillars: `golf-travel`, `the-game`,
+  `gear-style`, `golf-business` (all have sub-sections: send `subSectionSlug(s)`);
+  `course-reviews`, `rankings` and `press-room` are editor-only (422 `pillar not writable by
+  engine`). `press-room` is single-home; unhyphenated `pressroom` means nothing for agr.
+  Taxonomy source of truth: `scripts/lib/agr-taxonomy.ts`.
+- `engineDraftId`: `content-engine:agr:<article.id>`, same convention as gtp/vowasia/aer.
+- `byline` must equal an agr `authors.name` exactly (`Rachel Lim`, `Arjun Mehta`,
+  `Kenji Sato`, `Ha Tran`, `Daniel Wong`); no shared "AGR Editors" byline.
+- Status 23-10-26: code only; intake for `agr` answers 4xx until the owner creates the
+  tenant, taxonomy and engine record.
+
+### AsiaBeautyBrief (`abb`) notes
+
+- Tenant slug / `publicationId` `abb`. Engine-writable pillars: `briefing`, `markets`,
+  `supply`, `trends`, `professional`; `pressroom` is single-home AND editor-only (422).
+  `press-room` is not a pillar on abb and is not blocked. Taxonomy source of truth:
+  `scripts/lib/abb-taxonomy.ts` (from the canonical `abb-taxonomy_22-10-26.json`).
+- `byline` must equal an abb `authors.name` exactly: `Joanne Lau`, `Kim Seo-yeon`,
+  `Kavita Rao`, `Emi Fujita`, `Nathan Leong`.
+- **Booths (The Beauty Exhibition) are editor-only.** The engine has no write path: intake
+  only creates/refreshes articles, there is no booths engine action, and an engine token
+  does not authenticate Payload REST (`/api/booths` answers 403; probe
+  `npm run probe:abb-booths`). The booth-to-article link is stored on the booth.
+  The same holds for amb (AsiaMaterialsBrief's The Exhibition reuses `booths`).
+- Status 22-10-26: code only; tenant, taxonomy and engine record do not exist yet.
+
+### AsiaMaterialsBrief (`amb`) notes
+
+- Tenant slug / `publicationId` `amb`. Engine-writable pillars: `briefing` (default),
+  `materials`, `interiors-ffe`, `lighting-tech`, `projects` (all have sub-sections: send
+  `subSectionSlug(s)`); `press-room` is single-home AND editor-only (422 `pillar not writable
+  by engine`); unhyphenated `pressroom` means nothing for amb. Central does NOT block
+  sub-sections: keeping the engine off `projects/specified` and `projects/design-voices` is
+  the content engine's job (list: `AMB_ENGINE_EXCLUDED_SUBSECTIONS`). Taxonomy source of
+  truth: `scripts/lib/amb-taxonomy.ts`.
+- `engineDraftId`: `content-engine:amb:<article.id>`, same convention as gtp/vowasia/aer/agr.
+- `byline` must equal an amb `authors.name` exactly (`Rachel Tan`, `Marcus Lim`,
+  `Siriporn Chaiyasit`, `Dimas Prasetyo`, `Lin Wei`, `Aisyah Rahman`); no shared
+  "AMB Newsroom" byline.
+- **Booths (The Exhibition) are editor-only**, exactly as for abb: the engine has no write
+  path to `booths`.
+- Status 27-10-26: code only; intake for `amb` answers 4xx until the owner creates the
+  tenant, taxonomy and engine record.
+
+### Asianomist (`asn`) notes
+
+- Tenant slug / `publicationId` `asn`. Engine-writable pillars: `economies` (default),
+  `markets`, `industries` (with sub-sections: send `subSectionSlug(s)`), `banking-fintech`,
+  `wealth` (no sub-sections). Editor-only (422 `pillar not writable by engine`):
+  `the-brief`, `columns`, `explainers`, `press-room`; `press-room` is also single-home;
+  unhyphenated `pressroom` means nothing for asn. Taxonomy source of truth:
+  `scripts/lib/asn-taxonomy.ts`.
+- `engineDraftId`: `content-engine:asn:<article.id>`, same convention as gtp/vowasia/aer/agr/amb.
+- `byline` must equal an asn `authors.name` exactly (`Mark Chen`, `Anna Lee`, `Linh Tran`,
+  `Ken Mori`, `Grace Ong`, `Ryan Cruz`); no shared "Asianomist Desk" / newsroom byline.
+- Status 05-11-26: code only; intake for `asn` answers 4xx until the owner creates the
+  tenant, taxonomy and engine record.
 
 ### `contentType` — what the document is
 
@@ -147,6 +229,96 @@ POST {CMS_URL}/api/engine/translation
 
 Approved/locked translations are never overwritten (409). See
 [10-translation.md](10-translation.md).
+
+## Hero replace
+
+`POST {CMS_URL}/api/engine/articles/hero` swaps ONLY `heroImage` on one article of one
+tenant (rights takedown or editorial fix of an engine pool image). It is used by the
+content-engine `npm run media:replace` CLI (media-gtp-vowasia phase 5). Code:
+`src/app/api/engine/articles/hero/route.ts` (binding) and
+`src/lib/engine-hero-replace-core.ts` (logic; the header lists the check order).
+
+**Off by default.** Two gates on top of the engine bearer:
+
+- the engine must hold BOTH `update_article` and `upload_media` (missing one: 403
+  `forbidden`, `reason: action not allowed: <action>`, plus an `engine_action_denied`
+  activity row); no new engine action exists;
+- the tenant slug must be listed in `ENGINE_HERO_REPLACE_TENANTS` (CSV, exact match,
+  read on every call; unset/empty = OFF). Not listed: 403 `feature_disabled` before any
+  article is read;
+- `ENGINE_HERO_REPLACE_URL_HOSTS` must be non-empty (fail closed): a listed tenant with an
+  empty host list answers 403 `feature_disabled`, `reason: hero replace url hosts not
+  configured`, before any article read or fetch (only the local probe with
+  `ENGINE_HERO_REPLACE_ALLOW_LOCAL` is exempt). Both `feature_disabled` answers log an
+  `engine_action_denied` row with `detail: {action: "replace_hero", reason}`.
+
+Request (`Content-Type: application/json`, body at most 16 KB measured on the text):
+
+| Field | Required | Notes |
+|---|---|---|
+| `publicationId` | yes when the engine has several tenants | tenant slug |
+| `engineDraftId` | yes | the intake key (`content-engine:<pub>:<articles.id>`); lookup is tenant-scoped, another tenant's id is a 404 |
+| `expectedHeroMediaId` | yes (may be `null`) | the Central Media id the caller believes is current; `null` = "expects no hero" |
+| `heroImageUrl` | yes unless `dryRun` | https only; see "URL rules" |
+| `imageCredit` | no | trimmed plain text; empty = Media credit unset |
+| `imageCaption` | no | same rules as intake (trim, collapse, 200-char cap) |
+| `replacementKey` | yes unless `dryRun` | 1-120 chars; the CLI sends `replace:<articles.id>:<old asset>:<new asset>` |
+| `reason` | yes unless `dryRun` | 1-200 chars, stored in the activity detail |
+| `dryRun` | no | `true` = inspect only |
+
+Responses (error envelope as intake: `{ok:false, status, reason}`):
+
+| HTTP | `status` | When |
+|---|---|---|
+| 200 | `replaced` | `{ok, articleId, oldMediaId, newMediaId, heroUrl, version}` |
+| 200 | `noop` | the `replacementKey` token is already in the current hero filename (`{articleId, currentHeroMediaId, heroUrl}`) |
+| 200 | `dry_run` | `{articleId, currentHeroMediaId, currentHeroCredit, currentHeroFilename, version, workflowStatus, draftDiverged}`; never fetches, writes or logs |
+| 400 | `bad_request` | invalid JSON or fields (`reason` names them) |
+| 401 | `unauthorized` | unknown / inactive bearer |
+| 403 | `forbidden` / `feature_disabled` | missing action, tenant not allowed, tenant not in the env switch, or host list empty |
+| 404 | `not_found` | no such `engineDraftId` in THIS tenant |
+| 409 | `hero_changed` | current hero differs from `expectedHeroMediaId` (`currentHeroMediaId` in the body) |
+| 409 | `draft_diverged` | the article has a pending draft / newer version, or the post-write check refused (`reason: article has unpublished changes`) |
+| 413 | `too_large` | body over 16 KB |
+| 422 | `unprocessable` | `articles` feature off; `reason` starts with `invalid_hero_url`, `hero_not_an_image`, `hero_too_large` or `article_invalid`; or a single-home rule message |
+| 500 | `error` | `reason: internal error` only (detail goes to an `integration_error` activity row) |
+| 502 | `hero_upload_failed` | fetch or Media create failed; the article is untouched |
+| 503 | `busy` | article lock busy; retry once after a few seconds |
+
+What the write does: a NEW Media doc (the old one is kept for audit; filename
+`<slug>-r<first 8 hex of sha256(replacementKey)>.<ext>`, `alt` = the article's
+default-locale title), then a non-draft update of `heroImage` only, inside the hub
+article lock plus a `FOR NO KEY UPDATE` row lock, with the draft gate re-run inside the
+lock and a post-write check (only `heroImage`/`updatedAt` may move; `version`,
+`_status`, `workflowStatus`, `publishedAt` must stay equal; a violation rolls back with
+409). The update carries `context.heroSwap`, so `version` is NOT bumped and
+translations are not re-queued. `editedByHuman` is not checked (an editor's own swap
+is protected by `expectedHeroMediaId`); any `workflowStatus` is accepted. The legacy
+imported shape (`_status: draft` + `workflowStatus: published`) keeps both values. The
+post-write check also requires the row to point at the new Media id. The write runs
+with `context.disableRevalidate`; the signed revalidate webhook (`tags: ["articles:all"]`,
+the article slug) is sent ONCE after the transaction committed, only for `replaced`
+(best-effort, never fails the call; no webhook on noop / 409 / rollback). Exactly one `engine_write_accepted`
+row is logged with `detail: {action: "replace_hero", reason, replacementKey,
+oldMediaId, newMediaId}`.
+
+URL rules (`validateHeroFetchUrl` + the upload helper): https only, no userinfo, no
+literal private/loopback/link-local/metadata address or internal name, every DNS
+answer must be public, no redirects (`redirect: manual`, 3xx = 422), 15 s timeout,
+the DNS lookup bounded by the same timeout, response type `image/jpeg|png|webp` (or
+`application/octet-stream` / no type, decided by the sniff) AND matching magic bytes
+(the stored type is the sniffed one), body streamed and cut at 15 MB, decoded header
+within the per-type pixel cap of the hub direct upload (JPEG/PNG 50 MP, WebP 16.8 MP;
+over = 422 `hero_too_large`, undecodable = 422 `hero_not_an_image`). Every
+`invalid_hero_url` refusal logs an `integration_error` row with the guard reason only
+(never the URL). `ENGINE_HERO_REPLACE_URL_HOSTS` (CSV of exact hosts) pins the source
+host and is REQUIRED: empty = the route is off for every tenant (403 above). `ENGINE_HERO_REPLACE_ALLOW_LOCAL=true` relaxes http + loopback for the local
+probe only and is ignored when `VERCEL_ENV` is set or `NODE_ENV=production`. Residual:
+DNS rebinding between the lookup and the connect.
+
+Checks: `npm run test:engine-hero` (unit, no DB) and `npm run probe:hero-replace`
+(disposable local Postgres + `next dev`, cases HP1-HP11). Enable / rollback:
+[11-operations.md](11-operations.md) "Engine hero replace".
 
 ## Check activity
 

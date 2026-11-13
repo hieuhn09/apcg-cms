@@ -22,6 +22,7 @@
 
 import { convertLexicalToMarkdown, convertMarkdownToLexical } from "@payloadcms/richtext-lexical";
 import { BODY_MAX_JSON_CHARS, BODY_MAX_NODES, WS_RUN_MAX } from "@/lib/hub-author-limits";
+import { uploadValueId } from "@/lib/hub-author-media-token";
 
 /** The editor config both converters take. */
 export type HubEditorConfig = Parameters<typeof convertMarkdownToLexical>[0]["editorConfig"];
@@ -188,6 +189,9 @@ export const HUB_BODY_NODE_TYPES: readonly string[] = [
   "link",
   "horizontalrule",
   "linebreak",
+  // P5.3 T8 (branch B): a body image — ONLY `relationTo: "media"` with a positive id
+  // (checked in `checkLexicalTree`); produced from a `![](cms-media:<id>)` token.
+  "upload",
 ];
 
 type Node = Record<string, unknown>;
@@ -257,6 +261,7 @@ export function checkLexicalTree(lexical: unknown): TreeCheck {
     const type = n.type;
     if (typeof type !== "string" || !HUB_BODY_NODE_TYPES.includes(type)) return { ok: false, code: "node" };
     if (type === "link" && !isAllowedLinkUrl(linkUrlOf(n))) return { ok: false, code: "url" };
+    if (type === "upload" && (n.relationTo !== "media" || typeof n.value !== "number" || uploadValueId(n.value) === null)) return { ok: false, code: "node" };
     const kids = n.children;
     if (kids !== undefined) {
       if (!Array.isArray(kids)) return { ok: false, code: "node" };
@@ -276,8 +281,10 @@ export function checkLexicalTree(lexical: unknown): TreeCheck {
 /**
  * Round-trip comparator (P-1b, frozen at Stage 0.6). Compared per node: `type`,
  * `format`, `tag`, `text`, `listType`, `indent`, `checked` (absent ≡ undefined),
- * `children`, and for links `fields.url` / `fields.newTab` / `fields.linkType`.
- * IGNORED: the link node `id` (random 24 hex on every conversion), `direction`,
+ * `children`, for links `fields.url` / `fields.newTab` / `fields.linkType`, and for
+ * `upload` nodes (P5.3 T8 / E4) `relationTo` + the media id taken from `value` (a
+ * number, or `value.id` when populated) — so changing a body image IS a change.
+ * IGNORED: the link / upload node `id` (random 24 hex on every conversion), `direction`,
  * `textFormat`, `textStyle`, and every other key. Iterative.
  */
 const COMPARED_KEYS = ["type", "format", "tag", "text", "listType", "indent", "checked"] as const;
@@ -294,6 +301,11 @@ export function lexicalTreesEqual(a: unknown, b: unknown): boolean {
       const fx = isNode(x.fields) ? x.fields : {};
       const fy = isNode(y.fields) ? y.fields : {};
       for (const k of COMPARED_LINK_FIELDS) if (fx[k] !== fy[k]) return false;
+    }
+    if (x.type === "upload") {
+      if (x.relationTo !== y.relationTo) return false;
+      const ix = uploadValueId(x.value);
+      if (ix === null || ix !== uploadValueId(y.value)) return false;
     }
     const kx = x.children;
     const ky = y.children;

@@ -77,8 +77,9 @@ the Phase 5 runbook is authoritative for order and commands.
 | Import (staged / full) | `... --apply --limit 50 --run-id <id>` then `... --apply --resume --run-id <id>` |
 | Second pass | `npm run migrate:gtp:rewrite-links -- --run-id <id> [--apply]` |
 | Redirects | `npm run migrate:gtp:redirects -- --run-id <id> --mapping-overlay <overlay> --known-routes <file> --emit-gtp-web <dir> --sitemap-urls <file> --min-coverage <pct>` |
-| Parity | `GTP_READ_TOKEN=... npm run migrate:gtp:verify -- --run-id <id> --mapping-overlay <overlay> [--public-base <url>]` |
-| Rollback | `npm run migrate:gtp:rollback -- --run-id <id> [--list-orphans] [--apply] [--include-edited] [--include-orphans]` |
+| Parity | `GTP_READ_TOKEN=... npm run migrate:gtp:verify -- --run-id <id> --mapping-overlay <overlay> [--public-base <url>] [--batch 500]` |
+| Rollback | `npm run migrate:gtp:rollback -- --run-id <id> [--list-orphans] [--apply] [--include-edited] [--include-orphans] [--only-status archived,draft]` |
+| Import, old behaviour | add `--include-archived-drafts` to import / redirects / verify (fixture rehearsal only; see "Published-only") |
 
 Non-local Central: add `--confirm-host=<host>`; the importer refuses
 `IMPORT_TENANT_SLUG` other than `gtp`.
@@ -87,6 +88,89 @@ Load watchdog: the Payload-booting tools exit 75 when the module graph stalls
 under the tsx loader (seen intermittently in the build environment; the older
 `import-gcv-legacy.ts` shows the same). Nothing has been done at that point:
 re-run the same command.
+
+## Published-only (owner decision 10-11-26, supersedes OD-8)
+
+Old-site ARCHIVED (~411) and DRAFT (~68) articles are DROPPED: not kept in
+Central and no redirect for their URLs (no 301, no 410; they simply 404). Only
+PUBLISHED legacy articles (~1,157) plus the active industry-calendar events are
+migrated. OD-8 (301 vs 410 for archived) is moot; `archivedAs` is no longer used
+for gtp.
+
+- **Importer:** published-only is the default for gtp. Archived/draft rows (and
+  inactive events) are skipped and counted in the report under
+  `skip: status archived (published-only)` / `skip: status draft (published-only)`
+  / `skip: event status archived (published-only)`, and listed in
+  `rejects.ndjson`. They are also left out of the slug plan, the author plan and
+  the source-url collision report. `--include-archived-drafts` restores the old
+  behaviour (used by the fixture rehearsal only). Network tenants (aer, agr,
+  amb, asn) are unaffected.
+- **Redirects:** no rule for archived or draft slug-map entries (count
+  `archivedNoRule`); published rules unchanged.
+- **Parity:** expects 0 archived and 0 draft rows (and 0 inactive events) in
+  tenant gtp; published expectations unchanged. Run it after the cleanup below.
+- **Cleanup of rows already imported:** `migrate:gtp:rollback --only-status
+  archived,draft` deletes, from ONE run id, only journaled rows whose status
+  recorded in that run's `slug-map.json` (the mapped legacy status) AND whose
+  current Central `workflowStatus` are both archived or draft. Everything else
+  in the full rollback still applies: import marker + tenant gtp required,
+  untouched since import (unless `--include-edited`), media only when
+  `origin: created` and unreferenced, run-created tags only when unused, the
+  run directory is kept. Published rows, rows an editor has since published,
+  and non-import rows are never selected. `--only-status` cannot be combined
+  with `--include-orphans`. The dry run prints counts per status and up to 20
+  sample slugs; the full list is in `rollback-report-dry.json`.
+
+Owner commands (run once per run id that imported archived/draft rows, e.g. the
+first full run and any earlier delta run, all from the same `--out` directory):
+
+```bash
+# (a) dry run: counts per status + sample slugs, nothing written
+npm run migrate:gtp:rollback -- --run-id <id> --only-status archived,draft
+# (b) apply (Neon direct host, from a TTY)
+npm run migrate:gtp:rollback -- --run-id <id> --only-status archived,draft --apply --confirm-host=<Neon direct host>
+# (c) delta/final import before DNS cutover: NEW run id, same --out; archived/draft are skipped by default
+npm run migrate:gtp:import -- --mapping-overlay <overlay> --run-id <new-id>            # dry run first
+npm run migrate:gtp:import -- --mapping-overlay <overlay> --run-id <new-id> --apply --confirm-host=<Neon direct host>
+# (d) redirects (per run id whose slug map holds the published rows you ship) + parity
+npm run migrate:gtp:redirects -- --run-id <id> --mapping-overlay <overlay> --known-routes <file> --emit-gtp-web <dir>
+GTP_READ_TOKEN=... npm run migrate:gtp:verify -- --run-id <new-id> --mapping-overlay <overlay>
+```
+
+Note: the redirect builder reads ONE run's `slug-map.json` (unchanged
+behaviour). A delta run's map holds only the rows that run created or adopted,
+not the first run's rows; the archived/draft entries still sitting in the first
+run's map now produce no rule, so rebuilding that run's map after the cleanup is
+safe. Combining maps across runs is not part of this change.
+
+## Second run (delta migration, Amendment 5)
+
+Use this when the old site got new articles after the first import.
+
+- Use a NEW `--run-id` (never `--resume` the old run) and the SAME `--out`
+  directory as the first run: the first run's directory (its `slug-map.json`)
+  must be present. A fresh run refuses `--apply` when Central holds import rows
+  that no run directory in `--out` has journaled (it would otherwise adopt them).
+- Create-only: every item the earlier run created and that still exists in
+  Central keeps its Central slug and is skipped (`skippedExisting`); nothing
+  already in Central is updated. Edits and deletions made on the old site after
+  the first run are NOT carried over.
+- Authors: existing items keep their real Central author (fixed in
+  `author-plan.json`); only the new items are balanced, so the per-author
+  counts over (existing + new) differ by at most 1 when possible. The report
+  shows the plan totals and the actual totals (existing Central rows + new)
+  with their spread.
+- A new item whose slug is already held by an earlier-run item gets `-2`, `-3`
+  (listed under slugChanged, reason `taken-by-earlier-run`).
+- Rollback of the second run id removes only that run's articles.
+- Dry run first: `planned` must equal the number of new importable articles.
+
+Pagination note (Amendment 5): legacy rows are read page by page in
+(created_at, id) order. The cursor now carries the exact created_at (with
+microseconds) as text; before, it lost the microseconds and re-read rows at
+page edges (the first real run read 1,843 rows for about 1,770, and verify
+reported false count FAILs). Reports now show the true row counts; the result
+no longer depends on `--batch`.
 
 ## Run artifacts (`scripts/migrate/out/<run-id>/`)
 
@@ -119,3 +203,12 @@ empty for a sign-off run).
 - `import: the run directory already exists`: add `--resume` or use a new `--run-id`.
 - `slugConflictForeign`: a non-import article in tenant `gtp` already uses a legacy
   slug; it is never touched. Resolve it by hand, then resume.
+
+## Tải lên DB cũ / Load on the legacy DB
+
+Sự cố 12-11-26: DB mạng cũ (Supabase Micro, dùng chung với 4 site đang chạy) quá tải; người vận hành thấy `gtp_migrator` mở hơn 150 kết nối trong một giờ, vì công cụ cũ mở một kết nối MỚI cho mỗi lô truy vấn và thử lại tới 4 lần. Từ nay:
+
+- Mỗi lượt chạy dùng **đúng MỘT kết nối** (mở khi cần lần đầu, đóng ở cuối lượt kể cả khi lỗi). Mỗi lô là một giao dịch `BEGIN READ ONLY … COMMIT` ngắn trên kết nối đó. Lỗi mất kết nối: bỏ kết nối hỏng, chờ (2 s rồi 4 s), mở lại, tối đa 2 lần.
+- Chạy **MỘT tựa một lúc**, giờ thấp điểm; **báo người vận hành DB mạng trước mỗi lượt**; **không bao giờ** chạy song song với lượt của tựa khác (kể cả discover/export/verify).
+
+One connection per run (opened lazily, closed in a `finally`), each batch a short read-only transaction on it; reconnect at most twice with 2 s/4 s backoff. Run one title at a time, off-peak, after telling the network DB operator, never in parallel with another title's run.

@@ -19,6 +19,7 @@ export const FEATURE_KEYS = [
   "dashboards", // FundingRows / AiLeaderboardRows (DTW dashboards)
   "citiesMap", // Cities (WTB "The Map" / /place directory)
   "video", // VideoMedia + the Articles video fields (short-form article video)
+  "exhibition", // Booths (AsiaBeautyBrief "The Beauty Exhibition" directory)
 ] as const;
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 
@@ -34,9 +35,10 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // BriefAsia `pressroom` (owner decision 05-10-26): the content engine may not
 // create or refresh Pressroom articles; they come only from editors (admin /
 // Console) and the owner's scripts. GCV `pressroom` (owner decision 05-10-26,
-// GCV Pressroom parity) is blocked the same way: editor-only. WAD's own
-// `pressroom` pillar is a different tenant and stays engine-writable (the
-// negative control).
+// GCV Pressroom parity) is blocked the same way: editor-only. WAD `pressroom`
+// (owner decision 20-10-26, WAD Pressroom parity) is blocked the same way too:
+// editor-only. Opentechwire (tenant `dtw`) `pressroom` (owner decision
+// 04-11-26, OTW Pressroom) is blocked the same way: editor-only.
 //
 // GTP (GlobalTravelPost, tenant `gtp`, gtp-launch P1): `press-room` (hyphenated
 // slug; single-home too, see below) and `events-awards` are editor-only. The
@@ -50,12 +52,101 @@ export type FeatureKey = (typeof FEATURE_KEYS)[number];
 // also engine-blocked (editor-only) but NOT single-home (like gtp
 // `events-awards`). VowAsia has no `events-awards` pillar; its five other
 // pillars stay engine-writable.
+//
+// Asia Economic Review (tenant `aer`, aer launch W2, owner
+// decision 19-10-26): `long-view`, `interviews` and `in-focus` are editor-only.
+// AER has NO single-home pillar (it publishes no press releases), so it has no
+// SINGLE_HOME_PILLARS entry; the blocked pillars keep sub-sections, secondary
+// sections and a REQUIRED author. `asia-watch`, `briefings` and
+// `corporate-asia` stay engine-writable.
+//
+// AsiaGolfReview (tenant `agr`, agr launch W2, owner decision 23-10-26):
+// `course-reviews` and `rankings` are editor-only (reviews are played on-site,
+// rankings come from a named panel); `press-room` (hyphenated slug, like
+// gtp/vowasia; single-home too, see below) is editor-only. `course-reviews`
+// and `rankings` are NOT single-home: they keep sub-sections, secondary
+// sections and a REQUIRED author. `golf-travel`, `the-game`, `gear-style` and
+// `golf-business` stay engine-writable. The unhyphenated `pressroom` means
+// nothing for agr.
+//
+// AsiaBeautyBrief (tenant `abb`, abb launch, owner decision 22-10-26):
+// `pressroom` (unhyphenated, like BriefAsia/GCV/WAD; single-home too, see below)
+// is editor-only. abb has no `events-awards` pillar; `press-room` on abb is NOT
+// blocked (exact slug match). Its five other pillars stay engine-writable.
+//
+// AsiaMaterialsBrief (tenant `amb`, amb launch W2, owner decision 27-10-26):
+// only `press-room` (hyphenated slug, like gtp/vowasia/agr; single-home too, see
+// below) is editor-only. `briefing`, `materials`, `interiors-ffe`,
+// `lighting-tech` and `projects` stay engine-writable. The plan also keeps the
+// engine off the `projects` sub-sections `specified` and `design-voices`
+// (named suppliers / real interviews); there is no sub-section block here, that
+// rule lives in the content-engine amb publication. The unhyphenated
+// `pressroom` means nothing for amb.
+//
+// Asianomist (tenant `asn`, asn launch W2, owner default 05-11-26 from the
+// legacy site's `taxonomy_ai_excluded`, split per the design): `the-brief`
+// (editor-curated), `columns` (signed opinion), `explainers` and `press-room`
+// (hyphenated slug, like gtp/vowasia/agr/amb; single-home too, see below) are
+// editor-only. `the-brief`, `columns` and `explainers` are NOT single-home:
+// they keep sub-sections, secondary sections and a REQUIRED author.
+// `economies`, `markets`, `banking-fintech`, `industries` and `wealth` stay
+// engine-writable. The unhyphenated `pressroom` means nothing for asn.
 export const ENGINE_BLOCKED_PILLARS: Record<string, string[]> = {
+  abb: ["pressroom"],
   gcv: ["exclusive", "pressroom"],
   "brief-asia": ["pressroom"],
   gtp: ["press-room", "events-awards"],
   vowasia: ["press-room", "real-weddings", "directory"],
+  wad: ["pressroom"],
+  dtw: ["pressroom"],
+  aer: ["long-view", "interviews", "in-focus"],
+  agr: ["course-reviews", "rankings", "press-room"],
+  amb: ["press-room"],
+  asn: ["the-brief", "columns", "explainers", "press-room"],
 };
+
+/**
+ * Engine-blocked pillars that are NOT single-home but that editors may still
+ * choose from the hub (APCGHub composer), as the PRIMARY pillar and as a
+ * SECONDARY section. The engine stays blocked (intake keeps
+ * `isEngineBlockedPillar`).
+ *
+ * GCV `exclusive` (owner decision 10-11-26): the hand-curated Exclusive pillar
+ * is written by editors, and the hub is now where editors write. Not
+ * single-home: sub-section rule, secondary sections and a REQUIRED author apply.
+ * Owner decision 10-11-26 (same day): also allowed as a secondary section.
+ */
+export const HUB_WRITABLE_BLOCKED_PILLARS: Record<string, string[]> = {
+  gcv: ["exclusive"],
+};
+
+/**
+ * True when the HUB may not write into `pillarSlug` for `tenantSlug` (hub
+ * Pressroom authoring, 05-11-26, owner decision): every engine-blocked pillar
+ * EXCEPT the tenant's single-home pillars (Pressroom / Press Room), which
+ * editors post from the hub, and EXCEPT `HUB_WRITABLE_BLOCKED_PILLARS`
+ * (GCV `exclusive`, 10-11-26). Engine intake keeps `isEngineBlockedPillar`.
+ * Same trim + lower-case comparison on every list.
+ */
+export function isHubBlockedPillar(tenantSlug: string | undefined | null, pillarSlug: string): boolean {
+  if (!isEngineBlockedPillar(tenantSlug, pillarSlug)) return false;
+  const want = normalizeEngineBlockedSlug(pillarSlug);
+  const t = tenantSlug as string;
+  const allowed = [...(SINGLE_HOME_PILLARS[t] ?? []), ...(HUB_WRITABLE_BLOCKED_PILLARS[t] ?? [])];
+  return !allowed.some((s) => normalizeEngineBlockedSlug(s) === want);
+}
+
+/**
+ * True when the HUB may not use `pillarSlug` as a SECONDARY section for
+ * `tenantSlug`: every engine-blocked pillar EXCEPT `HUB_WRITABLE_BLOCKED_PILLARS`
+ * (GCV `exclusive`, 10-11-26). Single-home pillars stay refused here: a
+ * single-home pillar is never another article's secondary section.
+ */
+export function isHubBlockedSecondaryPillar(tenantSlug: string | undefined | null, pillarSlug: string): boolean {
+  if (!isEngineBlockedPillar(tenantSlug, pillarSlug)) return false;
+  const want = normalizeEngineBlockedSlug(pillarSlug);
+  return !(HUB_WRITABLE_BLOCKED_PILLARS[tenantSlug as string] ?? []).some((s) => normalizeEngineBlockedSlug(s) === want);
+}
 
 /** Normalised slug used by the engine-blocked gate (trim + lower-case). */
 export function normalizeEngineBlockedSlug(slug: string): string {
@@ -78,9 +169,11 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // A single-home pillar's articles belong to nothing else: no secondary
 // sections, no sub-section, never added as another article's secondary section,
 // no sub-sections of its own, and (BriefAsia) never flagged `exclusive`.
-// Tenant-slug-keyed like ENGINE_BLOCKED_PILLARS: BriefAsia and (since 05-10-26)
-// GCV `pressroom` are single-home; WAD also has a `pressroom` pillar and is NOT
-// affected (the negative control). Code constant on purpose: no schema field, no
+// Tenant-slug-keyed like ENGINE_BLOCKED_PILLARS: BriefAsia, (since 05-10-26)
+// GCV, (since 20-10-26, owner decision) WAD and (since 04-11-26, owner
+// decision) Opentechwire (`dtw`) `pressroom` are single-home, each with an
+// optional author. The same slug on any other tenant is unaffected.
+// Code constant on purpose: no schema field, no
 // migration. Enforced by src/lib/single-home-pillars.ts + its hooks; the slug is
 // protected from rename / tenant move / in-use delete by the Pillars guards.
 // GTP `press-room` (hyphenated, exact slug; gtp-launch P1) is single-home with
@@ -89,11 +182,28 @@ export function isEngineBlockedPillar(tenantSlug: string | undefined | null, pil
 // VowAsia `press-room` (vowasia launch P1, owner decision 13-10-26: "pressroom
 // is a pillar and has no secondary pillar") is single-home with an optional
 // author, exactly like GTP `press-room`.
+// AsiaGolfReview `press-room` (agr launch W2, owner decision 23-10-26) is
+// single-home with an optional author, exactly like GTP `press-room`; agr
+// `pressroom` (unhyphenated) is NOT single-home.
+// AsiaBeautyBrief `pressroom` (abb launch, owner decision 22-10-26) is
+// single-home with an optional author, like the other Pressroom pillars.
+// AsiaMaterialsBrief `press-room` (amb launch W2, owner decision 27-10-26) is
+// single-home with an optional author, exactly like GTP/AGR `press-room`; amb
+// `pressroom` (unhyphenated) is NOT single-home.
+// Asianomist `press-room` (asn launch W2, owner default 05-11-26) is
+// single-home with an optional author, exactly like GTP/AGR/AMB `press-room`;
+// asn `pressroom` (unhyphenated) is NOT single-home.
 export const SINGLE_HOME_PILLARS: Record<string, string[]> = {
+  abb: ["pressroom"],
   "brief-asia": ["pressroom"],
   gcv: ["pressroom"],
   gtp: ["press-room"],
   vowasia: ["press-room"],
+  wad: ["pressroom"],
+  dtw: ["pressroom"],
+  agr: ["press-room"],
+  amb: ["press-room"],
+  asn: ["press-room"],
 };
 
 // ── Top-level user role (global identity) ───────────────────────────────────
@@ -235,7 +345,7 @@ export type ActivityEvent = (typeof ACTIVITY_EVENTS)[number];
 export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   articles: ["articles", "subsections"],
   newsletters: ["newsletters"],
-  podcasts: ["podcasts"],
+  podcasts: ["podcasts", "podcastSeries"],
   marketData: ["marketSnapshots", "fxRates", "trendingBlocks"],
   sponsorSlots: ["sponsorSlots"],
   wireDrops: ["wireDrops"],
@@ -244,4 +354,5 @@ export const FEATURE_COLLECTIONS: Record<FeatureKey, string[]> = {
   dashboards: ["fundingRows", "aiLeaderboardRows"],
   citiesMap: ["cities"],
   video: ["videoMedia"],
+  exhibition: ["booths"],
 };

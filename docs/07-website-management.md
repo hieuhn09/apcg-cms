@@ -74,6 +74,128 @@ and nothing has been run against any database. Field sheet as data:
   tenant-keyed code path the gtp probe already exercises; unit tests cover the vowasia
   entry).
 
+### Example: Asia Economic Review (`aer`)
+
+Owner-run, systemAdmin only. Status 19-10-26: **code only**; the tenant does NOT exist yet
+and nothing has been run against any database. Field sheet as data: `AER_TENANT_FIELDS`
+in `scripts/lib/aer-taxonomy.ts`.
+
+- Name `Asia Economic Review`, slug `aer` (the web repo is `aer-web`; the domain is
+  `asiaeconomicreview.com`), status `active`, default language `en`, supported languages
+  `[en]`, timezone `Asia/Singapore`. Contact: editorial `editor@asiaeconomicreview.com`,
+  general `info@asiaeconomicreview.com`, advertising/partnerships `info@asiapresscentre.com`.
+- Domain, additional domains and **frontend URL: EMPTY at creation** (set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` on; everything else off (incl.
+  translations).
+- **Auto publish engine drafts: OFF** (`audit:add-aer-taxonomy` refuses `--apply` while on).
+- `long-view`, `interviews` and `in-focus` are engine-blocked in code
+  (`src/lib/constants.ts`). AER has **no single-home pillar** (no Press Room). No migration.
+- Then create the taxonomy (6 pillars, 12 sub-sections, 1 newsletter, 4 authors, 6 tags =
+  29 rows) with `npm run audit:add-aer-taxonomy`: see `docs/11-operations.md`
+  "Asia Economic Review rollout". Same `/neondb` name guard as the vowasia script.
+
+### Example: AsiaGolfReview (`agr`)
+
+Owner-run, systemAdmin only. Status 23-10-26: **code only**; the tenant does NOT exist yet
+and nothing has been run against any database. Field sheet as data: `AGR_TENANT_FIELDS`
+in `scripts/lib/agr-taxonomy.ts`.
+
+- Name `AsiaGolfReview`, slug `agr` (the web repo is `agr-web`; the domain is
+  `asiagolfreview.com`), status `active`, default language `en`, supported languages
+  `[en]`, timezone `Asia/Singapore`. Contact (PENDING OWNER): editorial
+  `editor@asiagolfreview.com`, general `info@asiagolfreview.com`, advertising/partnerships
+  `info@asiapresscentre.com`.
+- Domain, additional domains and **frontend URL: EMPTY at creation** (set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` on; everything else off (incl.
+  translations).
+- **Auto publish engine drafts: OFF** (`audit:add-agr-taxonomy` refuses `--apply` while on).
+- `course-reviews`, `rankings` and `press-room` are engine-blocked in code
+  (`src/lib/constants.ts`); `press-room` (hyphenated) is also single-home (no sub-sections,
+  optional author). No migration.
+- Then create the taxonomy (7 pillars, 29 sub-sections, 2 newsletters, 5 authors, 7 tags =
+  50 rows) with `npm run audit:add-agr-taxonomy`: see `docs/11-operations.md`
+  "AsiaGolfReview rollout". Same `/neondb` name guard as the aer script.
+
+### Example: AsiaBeautyBrief (`abb`)
+
+Owner-run, systemAdmin only. Status 22-10-26: **code only, on branch, not merged**; the
+tenant does NOT exist yet and nothing has been run against any shared database. Field sheet
+as data: `ABB_TENANT_FIELDS` in `scripts/lib/abb-taxonomy.ts`.
+
+- Name `AsiaBeautyBrief`, slug `abb`, status `active`, default language `en`, supported
+  languages `[en]`, timezone `Asia/Singapore`. Domain and frontend URL EMPTY at creation
+  (live domain `asiabeautybrief.com`, set at cutover).
+- Features: `articles`, `newsletters`, `corrections` and **`exhibition`** on; everything
+  else off. `exhibition` is a NEW flag (needs migration `20261022_000000_add_booths_exhibition`
+  deployed first); it shows the **Exhibition > Booths** collection in /admin and serves
+  `/api/public/booths*` (shapes: header comments of `src/app/api/public/booths/` and `src/lib/public-booths.ts`).
+- **Auto publish engine drafts: OFF** (`audit:add-abb-taxonomy` refuses `--apply` while on).
+- `pressroom` (no hyphen) is single-home and engine-blocked in code; `press-room` is NOT
+  blocked on abb. No Events/Awards pillar.
+- Then create the taxonomy (6 pillars, 22 sub-sections, 3 newsletters, 5 authors, 57 tags
+  = 93 rows) with `npm run audit:add-abb-taxonomy`: see `docs/11-operations.md`
+  "AsiaBeautyBrief rollout". Booths are entered by editors in /admin (never by the engine).
+  The same collection serves AsiaMaterialsBrief's The Exhibition (`amb`, below); each title
+  may only use its own six halls (`BOOTH_HALLS_BY_TENANT`, `src/lib/booth-halls.ts`).
+- Mint a read token for abb-web, create the engine record in the Console
+  (`/console/engines/new`, tenant `abb` only, actions `create_article` + `update_article`,
+  hub flags off), and add the abb-web origin to `PUBLIC_API_ALLOWED_ORIGINS`.
+
+### Example: AsiaMaterialsBrief (`amb`)
+
+Owner-run, systemAdmin only. Status 27-10-26: **code only, on branch
+`claude/sharp-ramanujan-6bxu4n`, not pushed**; the tenant does NOT exist yet and nothing has
+been run against any shared database. Field sheet as data: `AMB_TENANT_FIELDS` in
+`scripts/lib/amb-taxonomy.ts`.
+
+- Name `AsiaMaterialsBrief`, slug `amb` (the web repo is `amb-web`; the domain is
+  `asiamaterialsbrief.com`), status `active`, default language `en`, supported languages
+  `[en]`, timezone `Asia/Singapore`. Contact (PENDING OWNER, the design's mailboxes):
+  editorial and general `info@asiamaterialsbrief.com`, advertising/partnerships
+  `info@asiapresscentre.com`.
+- Domain, additional domains and **frontend URL: EMPTY at creation** (set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` and **`exhibition`** on; everything
+  else off (incl. translations). `exhibition` shows **Exhibition > Booths** in /admin and
+  serves `/api/public/booths*` for The Exhibition (same collection as abb).
+- **Auto publish engine drafts: OFF** (`audit:add-amb-taxonomy` refuses `--apply` while on).
+- Only `press-room` (hyphenated) is engine-blocked in code (`src/lib/constants.ts`), and it
+  is single-home (no sub-sections, optional author). The engine also stays off the
+  `projects` sub-sections `specified` and `design-voices`: that rule is in the content
+  engine, not here.
+- Booth halls: amb uses six of the `booths.hall` values, in this website order:
+  `manufacturers`, `brands`, `design-studios`, `distributors-showrooms`, `services`,
+  `country-pavilions` (`AMB_BOOTH_HALLS` in `src/lib/booth-halls.ts`); a hall of another
+  title is refused by the field validate (abb keeps its six). The four new values need
+  migration `20261027_000000_add_amb_booth_halls` deployed first (additive
+  `ALTER TYPE ... ADD VALUE`).
+- Then create the taxonomy (6 pillars, 18 sub-sections, 3 newsletters, 6 authors, 6 tags =
+  39 rows) with `npm run audit:add-amb-taxonomy`: see `docs/11-operations.md`
+  "AsiaMaterialsBrief rollout". Same `/neondb` name guard as the agr script. Booths are
+  entered by editors in /admin (never by the engine).
+
+### Example: Asianomist (`asn`)
+
+Owner-run, systemAdmin only. Status 05-11-26: **code only, on branch
+`claude/happy-cori-31qi49`, not pushed**; the tenant does NOT exist yet and nothing has been
+run against any shared database. Field sheet as data: `ASN_TENANT_FIELDS` in
+`scripts/lib/asn-taxonomy.ts`.
+
+- Name `Asianomist`, slug `asn` (the web repo is `asianomist-web`; the domain is
+  `asianomist.com`), status `active`, default language `en`, supported languages `[en]`,
+  timezone `Asia/Singapore`. Contact (PENDING OWNER, the design's mailboxes): editorial and
+  general `info@asianomist.com`, advertising/partnerships `info@asiapresscentre.com` (the
+  old site used `editorial@asianomist.com`).
+- Domain, additional domains and **frontend URL: EMPTY at creation** (set only at cutover).
+- Features: `articles`, `newsletters`, `corrections` on; everything else off (no
+  `exhibition`: Asianomist has no booths; no `marketData`).
+- **Auto publish engine drafts: OFF** (`audit:add-asn-taxonomy` refuses `--apply` while on).
+- Engine-blocked in code (`src/lib/constants.ts`): `the-brief`, `columns`, `explainers`,
+  `press-room`; only `press-room` (hyphenated) is single-home (no sub-sections, optional
+  author).
+- Then create the taxonomy (9 pillars, 17 sub-sections, 2 newsletters, 6 authors, 6 tags =
+  40 rows) with `npm run audit:add-asn-taxonomy`: see `docs/11-operations.md` "Asianomist
+  rollout". Same `/neondb` name guard as the amb script.
+
 ## Configure domain & languages
 
 - **Domain**: `domain` + `additionalDomains` are informational/CORS hints; the

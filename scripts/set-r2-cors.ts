@@ -12,6 +12,16 @@
  *   R2_CORS_ORIGINS='https://apcg-cms.vercel.app,http://localhost:3508' npm run r2:cors
  *   npm run r2:cors -- --dry-run
  *
+ * `--staging` (hub docx import phase A): target the PRIVATE staging bucket
+ * `R2_STAGING_BUCKET` instead (missing ⇒ error), PUT/HEAD only; keys
+ * `R2_STAGING_ACCESS_KEY_ID` / `R2_STAGING_SECRET_ACCESS_KEY` when set, else the main
+ * pair. Here R2_CORS_ORIGINS lists the HUB origins (the hub's browser does the PUT):
+ *
+ *   R2_CORS_ORIGINS='https://<hub-production>,https://<hub-preview-alias>' npm run r2:cors -- --staging --dry-run
+ *
+ * `--dry-run` prints the rules it WOULD write and the current rules (when the
+ * credentials are present and allowed to read them); it never writes.
+ *
  * Origins must be scheme+host[+port] with no trailing slash and no path. The
  * R2_* credentials are read from the usual local env files via ./lib/env.
  */
@@ -20,10 +30,8 @@ import {
   GetBucketCorsCommand,
   PutBucketCorsCommand,
   S3Client,
-  type CORSRule,
 } from "@aws-sdk/client-s3";
-
-const DEFAULT_ORIGINS = ["http://localhost:3508"];
+import { buildCorsRules, invalidOrigins, parseOrigins } from "./lib/r2-cors-rules";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -31,48 +39,52 @@ const required = (name: string): string => {
   return value;
 };
 
-const origins = (process.env["R2_CORS_ORIGINS"] ?? "")
-  .split(",")
-  .map((s) => s.trim().replace(/\/+$/, ""))
-  .filter(Boolean);
-
-const allowedOrigins = origins.length ? origins : DEFAULT_ORIGINS;
+const staging = process.argv.includes("--staging");
 const dryRun = process.argv.includes("--dry-run");
+const allowedOrigins = parseOrigins(process.env["R2_CORS_ORIGINS"]);
 
-const bad = allowedOrigins.filter((o) => !/^https?:\/\/[^/]+$/.test(o));
+const bad = invalidOrigins(allowedOrigins);
 if (bad.length) {
   throw new Error(`Not valid origins (scheme + host only, no path/slash): ${bad.join(", ")}`);
 }
 
-/**
- * PUT is the upload itself. GET/HEAD keep direct-from-R2 reads working for any
- * browser code that fetches bytes rather than rendering an <img>. ETag is the
- * only response header the AWS SDK's client handler needs back.
- */
-const rules: CORSRule[] = [
-  {
-    AllowedOrigins: allowedOrigins,
-    AllowedMethods: ["PUT", "GET", "HEAD"],
-    AllowedHeaders: ["content-type", "content-length"],
-    ExposeHeaders: ["ETag"],
-    MaxAgeSeconds: 3600,
-  },
-];
+const rules = buildCorsRules(allowedOrigins, { staging });
 
-const bucket = required("R2_BUCKET");
-const client = new S3Client({
-  endpoint: required("R2_ENDPOINT"),
-  region: "auto",
-  credentials: {
-    accessKeyId: required("R2_ACCESS_KEY_ID"),
-    secretAccessKey: required("R2_SECRET_ACCESS_KEY"),
-  },
-  forcePathStyle: true,
-});
+const bucket = staging ? required("R2_STAGING_BUCKET") : required("R2_BUCKET");
+if (staging && bucket === process.env["R2_BUCKET"]) {
+  throw new Error("--staging: R2_STAGING_BUCKET must be a separate bucket, not R2_BUCKET.");
+}
+const keyId = staging ? (process.env["R2_STAGING_ACCESS_KEY_ID"] ?? process.env["R2_ACCESS_KEY_ID"]) : process.env["R2_ACCESS_KEY_ID"];
+const keySecret = staging
+  ? (process.env["R2_STAGING_SECRET_ACCESS_KEY"] ?? process.env["R2_SECRET_ACCESS_KEY"])
+  : process.env["R2_SECRET_ACCESS_KEY"];
+const endpoint = process.env["R2_ENDPOINT"];
+const haveCredentials = Boolean(endpoint && keyId && keySecret);
+if (!dryRun && !haveCredentials) {
+  // Writing needs all three; a dry run can still print the rules without them.
+  required("R2_ENDPOINT");
+  throw new Error(`${staging ? "R2_STAGING_ACCESS_KEY_ID / R2_STAGING_SECRET_ACCESS_KEY or " : ""}R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY are required.`);
+}
+const client = haveCredentials
+  ? new S3Client({
+      endpoint,
+      region: "auto",
+      credentials: { accessKeyId: keyId as string, secretAccessKey: keySecret as string },
+      forcePathStyle: true,
+    })
+  : null;
 
 const run = async (): Promise<void> => {
+  console.log(`target:  ${staging ? "STAGING bucket (--staging)" : "main bucket"}`);
   console.log(`bucket:  ${bucket}`);
   console.log(`origins: ${allowedOrigins.join(", ")}`);
+  console.log(`rules:   ${JSON.stringify(rules)}`);
+
+  if (!client) {
+    console.log("current: (not read — no R2 credentials in this environment)");
+    console.log("\n--dry-run: nothing written.");
+    return;
+  }
 
   // "No rules" and "not allowed to look" must never print the same thing: the
   // R2 key normally used here has Object Read/Write only, so bucket-level calls

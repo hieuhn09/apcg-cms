@@ -21,7 +21,14 @@ const MODULES: Record<
   string,
   { feature: FeatureKey; collections: { slug: CollSlug; sort: string; key: string; depth?: number; where?: () => Where }[] }
 > = {
-  podcasts: { feature: "podcasts", collections: [{ slug: "podcasts", sort: "-publishedAt", key: "podcasts" }] },
+  podcasts: {
+    feature: "podcasts",
+    collections: [
+      { slug: "podcasts", sort: "-publishedAt", key: "podcasts" },
+      // The tenant's series list; episodes carry `series` populated at depth 1.
+      { slug: "podcastSeries", sort: "order", key: "podcastSeries" },
+    ],
+  },
   newsletters: { feature: "newsletters", collections: [{ slug: "newsletters", sort: "order", key: "newsletters" }] },
   corrections: { feature: "corrections", collections: [{ slug: "corrections", sort: "-correctionDate", key: "corrections" }] },
   wire: {

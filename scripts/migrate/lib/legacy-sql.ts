@@ -181,6 +181,8 @@ function render(id: BuilderId, a: BuilderArgs): string {
         ? ` WHERE (${ord.join(", ")}) > (${ord.map((_, i) => (spec.hasCreatedAt && i === 0 ? `$${first + i}::timestamptz` : `$${first + i}`)).join(", ")})`
         : "";
       const limitParam = a.withCursor ? `$${first + n}` : `$${first}`;
+      // Amendment 5: the exact created_at as text (microseconds kept) so the next cursor is lossless.
+      if (spec.hasCreatedAt) cols.push(`${ord[0] as string}::text AS ${q(CURSOR_TS)}`);
       return `SELECT ${cols.join(", ")} FROM ${scoped(schema, t)}${cursor} ORDER BY ${ord.join(", ")} LIMIT ${limitParam}`;
     }
     case "sampleRows": {
@@ -271,12 +273,24 @@ export function siteAuthorsRows(schema: string, siteId: string, allow?: string[]
   return issue("siteAuthorsRows", { schema, allow }, [siteId]);
 }
 
-/** Cursor values for the last row of a keyset page. */
+/**
+ * Extra column every keysetPage on a created_at table returns: the ordering value
+ * `coalesce(created_at, epoch)` rendered by Postgres as text. node-postgres parses
+ * timestamptz into a JS Date (milliseconds), so a cursor built from the Date dropped
+ * the microseconds and the next page re-read the last row (Amendment 5: 73 duplicate
+ * reads on the real legacy DB). The text form round-trips exactly through `::timestamptz`.
+ * Readers strip it before yielding rows.
+ */
+export const CURSOR_TS = "__cursor_ts";
+
+/** Cursor values for the last row of a keyset page (lossless when the row carries CURSOR_TS). */
 export function cursorOf(table: string, row: Record<string, unknown>): unknown[] {
   const t = checkAllow(table, undefined);
   const spec: TableSpec = ALLOWED_TABLES[t];
   const vals = spec.keyColumns.map((k) => row[k]);
   if (!spec.hasCreatedAt) return vals;
+  const exact = row[CURSOR_TS];
+  if (typeof exact === "string" && exact) return [exact, ...vals];
   const c = row.created_at;
   const iso = c instanceof Date ? c.toISOString() : typeof c === "string" && c ? c : EPOCH;
   return [iso, ...vals];
@@ -460,10 +474,20 @@ export function normaliseRow(row: Record<string, unknown>): Record<string, unkno
   return out;
 }
 
+/**
+ * ONE connection per run (incident 12-11-26: a fresh connection per batch
+ * opened 150+ connections an hour on the shared network DB). The connection is
+ * opened lazily on the first batch and kept until close(); every batch is its
+ * own short BEGIN READ ONLY .. COMMIT on it. At most one open connection per
+ * instance. On a reconnect-class error the dead connection is dropped and the
+ * batch retried on a new one after an exponential backoff (default 2 retries,
+ * base 2 s); any other error drops the connection and rethrows.
+ */
 export class LegacyReadOnlyDb {
   readonly log: QueryLogEntry[] = [];
   /** Event order for the S-08 test: "BEGIN" | "COMMIT" | "QUERY". */
   readonly events: string[] = [];
+  private client: MinimalPgClient | null = null;
   constructor(
     private readonly makeClient: () => MinimalPgClient,
     private readonly opts: { retries?: number; backoffMs?: number; onEvent?: (e: string) => void } = {},
@@ -474,22 +498,41 @@ export class LegacyReadOnlyDb {
     this.opts.onEvent?.(e);
   }
 
-  /** Run a group of SafeQueries in ONE short read-only transaction on a fresh connection. */
+  private async conn(): Promise<MinimalPgClient> {
+    if (this.client) return this.client;
+    const client = this.makeClient();
+    try {
+      await client.connect();
+    } catch (err) {
+      await client.end().catch(() => {});
+      throw err;
+    }
+    try {
+      await client.query("SET default_transaction_read_only = on"); // advisory; SELECT-only grants are the fence
+    } catch {
+      /* transaction-mode pooler may refuse session SET */
+    }
+    this.client = client;
+    return client;
+  }
+
+  /** Drop the current connection (if any). Idempotent. */
+  async close(): Promise<void> {
+    const c = this.client;
+    this.client = null;
+    if (c) await c.end().catch(() => {});
+  }
+
+  /** Run a group of SafeQueries in ONE short read-only transaction on the run's single connection. */
   async batch(queries: SafeQuery[]): Promise<Record<string, unknown>[][]> {
     for (const sq of queries) {
       if (!issued.has(sq)) throw new LegacySqlError(SQL_MESSAGES.notBranded);
       assertSafeQuery(sq);
     }
-    const retries = this.opts.retries ?? 4;
+    const retries = this.opts.retries ?? 2;
     for (let attempt = 0; ; attempt++) {
-      const client = this.makeClient();
       try {
-        await client.connect();
-        try {
-          await client.query("SET default_transaction_read_only = on"); // advisory; SELECT-only grants are the fence
-        } catch {
-          /* transaction-mode pooler may refuse session SET */
-        }
+        const client = await this.conn();
         this.ev("BEGIN");
         await client.query("BEGIN READ ONLY");
         try {
@@ -508,14 +551,14 @@ export class LegacyReadOnlyDb {
         this.ev("COMMIT");
         return out;
       } catch (err) {
+        // The transaction state is unknown: never reuse this connection.
+        await this.close();
         const code = (err as { code?: string }).code ?? "";
         if (attempt < retries && RECONNECT_CODES.has(code)) {
-          await new Promise((r) => setTimeout(r, (this.opts.backoffMs ?? 500) * 2 ** attempt));
+          await new Promise((r) => setTimeout(r, (this.opts.backoffMs ?? 2000) * 2 ** attempt));
           continue;
         }
         throw err;
-      } finally {
-        await client.end().catch(() => {});
       }
     }
   }
