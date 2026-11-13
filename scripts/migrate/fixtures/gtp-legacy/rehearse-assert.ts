@@ -600,6 +600,7 @@ async function main(): Promise<number> {
       const last = rows[rows.length - 1] as Doc;
       cur = [typeof last.created_at === "string" ? last.created_at : EPOCH, last.id];
     }
+    await db.close();
     await r.close();
     await c.query("DELETE FROM articles WHERE site_id = $1", [A5_SITE]);
     await c.query("DELETE FROM sites WHERE id = $1", [A5_SITE]);

@@ -64,6 +64,15 @@ export function assertImportTenant(): string {
   return t;
 }
 
+/** Readers opened by openLegacy; runMain closes them all (one DB connection per run, closed in a finally). */
+const openReaders = new Set<LegacyReader>();
+async function closeOpenReaders(): Promise<void> {
+  for (const r of [...openReaders]) {
+    openReaders.delete(r);
+    await r.close().catch(() => {});
+  }
+}
+
 /** Open the legacy source: --from-snapshot dir, else LEGACY_GTP_DB_URL (env only, never argv). */
 export async function openLegacy(a: ParsedArgs, v: ValidationResult, siteId: string): Promise<LegacyReader> {
   const snap = a.get("from-snapshot");
@@ -77,6 +86,7 @@ export async function openLegacy(a: ParsedArgs, v: ValidationResult, siteId: str
     console.log(`[${profile().id}] legacy source: ${b.banner} (read-only, site-filtered)`);
     reader = await LiveLegacyReader.open(url as string, legacySsl(process.env, b.local), v.mapping.source.schema, siteId, effectiveAllowList(v.mapping.source.tableAllowList));
   }
+  openReaders.add(reader);
   await assertGtpSite(reader);
   return reader;
 }
@@ -86,6 +96,7 @@ const KNOWN = [CliError, MappingError, LocalDbGuardError, LegacySqlError, OutDir
 /** Uniform failure handler: fixed messages, exit 2 for refusals, 1 otherwise. */
 export function runMain(name: string, fn: () => Promise<number | void>): void {
   fn()
+    .finally(closeOpenReaders)
     .then((code) => process.exit(typeof code === "number" ? code : 0))
     .catch((err: unknown) => {
       const e = err as Error;

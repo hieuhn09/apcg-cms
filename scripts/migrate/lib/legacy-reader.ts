@@ -48,7 +48,13 @@ export class LiveLegacyReader implements LegacyReader {
   static async open(url: string, ssl: false | { rejectUnauthorized: boolean; ca?: string }, schema: string, siteId: string, allow: AllowedTable[]): Promise<LiveLegacyReader> {
     const db = new LegacyReadOnlyDb(() => new pg.Client({ connectionString: url, ssl: ssl === false ? false : ssl, application_name: `${profile().id}-legacy-migrate` }) as never);
     const r = new LiveLegacyReader(db, schema, siteId, allow);
-    const rows = await db.query(catalogColumns(schema, allow));
+    let rows: Record<string, unknown>[];
+    try {
+      rows = await db.query(catalogColumns(schema, allow));
+    } catch (err) {
+      await db.close();
+      throw err;
+    }
     for (const c of rows) {
       const t = String(c.table_name);
       if (!r.catalog.has(t)) r.catalog.set(t, new Set());
@@ -99,6 +105,7 @@ export class LiveLegacyReader implements LegacyReader {
   }
   async close(): Promise<void> {
     setCatalog(undefined);
+    await this.db.close();
   }
 }
 

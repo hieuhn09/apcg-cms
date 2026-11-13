@@ -203,3 +203,12 @@ empty for a sign-off run).
 - `import: the run directory already exists`: add `--resume` or use a new `--run-id`.
 - `slugConflictForeign`: a non-import article in tenant `gtp` already uses a legacy
   slug; it is never touched. Resolve it by hand, then resume.
+
+## Tải lên DB cũ / Load on the legacy DB
+
+Sự cố 12-11-26: DB mạng cũ (Supabase Micro, dùng chung với 4 site đang chạy) quá tải; người vận hành thấy `gtp_migrator` mở hơn 150 kết nối trong một giờ, vì công cụ cũ mở một kết nối MỚI cho mỗi lô truy vấn và thử lại tới 4 lần. Từ nay:
+
+- Mỗi lượt chạy dùng **đúng MỘT kết nối** (mở khi cần lần đầu, đóng ở cuối lượt kể cả khi lỗi). Mỗi lô là một giao dịch `BEGIN READ ONLY … COMMIT` ngắn trên kết nối đó. Lỗi mất kết nối: bỏ kết nối hỏng, chờ (2 s rồi 4 s), mở lại, tối đa 2 lần.
+- Chạy **MỘT tựa một lúc**, giờ thấp điểm; **báo người vận hành DB mạng trước mỗi lượt**; **không bao giờ** chạy song song với lượt của tựa khác (kể cả discover/export/verify).
+
+One connection per run (opened lazily, closed in a `finally`), each batch a short read-only transaction on it; reconnect at most twice with 2 s/4 s backoff. Run one title at a time, off-peak, after telling the network DB operator, never in parallel with another title's run.
