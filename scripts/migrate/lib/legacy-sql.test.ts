@@ -132,7 +132,7 @@ test("C1: a raw string or forged object never reaches the driver", async () => {
   for (const t of seen) assert.doesNotMatch(t, /\b(INSERT|UPDATE|DELETE|DROP)\b/);
 });
 
-test("C1/A11-S08: every batch is BEGIN READ ONLY..COMMIT on a fresh connection; reconnect on server termination", async () => {
+test("C1/A11-S08: every batch is BEGIN READ ONLY..COMMIT on the run's one connection; reconnect on server termination", async () => {
   let made = 0;
   let failOnce = true;
   const db = new LegacyReadOnlyDb(() => {
@@ -153,8 +153,94 @@ test("C1/A11-S08: every batch is BEGIN READ ONLY..COMMIT on a fresh connection; 
   assert.equal(made, 2);
   assert.equal(r1?.[0]?.d, "2026-01-01T00:00:00.000Z");
   await db.batch([countRows(S, "events", SITE)]);
-  assert.equal(made, 3);
+  assert.equal(made, 2);
   assert.deepEqual(db.events, ["BEGIN", "QUERY", "BEGIN", "QUERY", "COMMIT", "BEGIN", "QUERY", "COMMIT"]);
+});
+
+function countingClient(opts: { failOn?: (n: number, t: string) => string | null } = {}) {
+  const stats = { made: 0, connects: 0, ends: 0, open: 0, maxOpen: 0, selects: 0 };
+  const make = (): MinimalPgClient => {
+    stats.made++;
+    let alive = false;
+    return {
+      connect: async () => {
+        stats.connects++;
+        alive = true;
+        stats.open++;
+        stats.maxOpen = Math.max(stats.maxOpen, stats.open);
+      },
+      query: async (t: string) => {
+        if (t.startsWith("SELECT")) {
+          stats.selects++;
+          const code = opts.failOn?.(stats.selects, t);
+          if (code) throw Object.assign(new Error("boom"), { code });
+        }
+        return { rows: [{ n: 1 }] };
+      },
+      end: async () => {
+        stats.ends++;
+        if (alive) stats.open--;
+        alive = false;
+      },
+    };
+  };
+  return { stats, make };
+}
+
+test("incident 12-11-26: N batches use exactly one connect(); never more than one open connection", async () => {
+  const { stats, make } = countingClient();
+  const db = new LegacyReadOnlyDb(make, { backoffMs: 1 });
+  for (let i = 0; i < 25; i++) await db.batch([countRows(S, "articles", SITE), countRows(S, "events", SITE)]);
+  await db.query(countRows(S, "articles", SITE));
+  assert.equal(stats.connects, 1);
+  assert.equal(stats.maxOpen, 1);
+  assert.equal(stats.ends, 0);
+  assert.equal(db.events.filter((e) => e === "BEGIN").length, 26);
+  assert.equal(db.events.filter((e) => e === "COMMIT").length, 26);
+  await db.close();
+  assert.equal(stats.open, 0);
+});
+
+test("a reconnect-class error on batch k drops the connection, reconnects exactly once, then succeeds", async () => {
+  const { stats, make } = countingClient({ failOn: (n) => (n === 3 ? "57P01" : null) });
+  const db = new LegacyReadOnlyDb(make, { backoffMs: 1 });
+  for (let i = 0; i < 5; i++) await db.query(countRows(S, "articles", SITE));
+  assert.equal(stats.connects, 2);
+  assert.equal(stats.ends, 1);
+  assert.equal(stats.maxOpen, 1);
+  await db.close();
+  assert.equal(stats.open, 0);
+});
+
+test("reconnect retries are capped (default 2) then the error is rethrown with the connection closed", async () => {
+  const { stats, make } = countingClient({ failOn: () => "08006" });
+  const db = new LegacyReadOnlyDb(make, { backoffMs: 1 });
+  await assert.rejects(db.query(countRows(S, "articles", SITE)), { code: "08006" });
+  assert.equal(stats.connects, 3);
+  assert.equal(stats.open, 0);
+});
+
+test("a non-reconnect error closes the connection and rethrows without retry", async () => {
+  const { stats, make } = countingClient({ failOn: (n) => (n === 1 ? "42P01" : null) });
+  const db = new LegacyReadOnlyDb(make, { backoffMs: 1 });
+  await assert.rejects(db.query(countRows(S, "articles", SITE)), { code: "42P01" });
+  assert.equal(stats.connects, 1);
+  assert.equal(stats.open, 0);
+  await db.query(countRows(S, "articles", SITE)); // next batch opens a fresh one
+  assert.equal(stats.connects, 2);
+  await db.close();
+});
+
+test("close() ends the connection and is idempotent; close before any batch is a no-op", async () => {
+  const { stats, make } = countingClient();
+  const db = new LegacyReadOnlyDb(make);
+  await db.close();
+  assert.equal(stats.made, 0);
+  await db.query(countRows(S, "articles", SITE));
+  await db.close();
+  await db.close();
+  assert.equal(stats.ends, 1);
+  assert.equal(stats.open, 0);
 });
 
 test("keyset cursor helper", () => {
