@@ -83,7 +83,7 @@ function world(o: WorldOpts = {}) {
     publishedAt: "2026-10-01T00:00:00.000Z", scheduledFor: null, sourceLanguage: "en", tags: [], countries: [], country: null, cities: [], coAuthors: [],
   };
   const st = { main: { ...base, ...o.main } as Doc, latest: { ...base, ...o.main, ...o.latest } as Doc };
-  const log = { reads: [] as Doc[], updates: [] as Doc[], creates: [] as Doc[], events: [] as string[], sql: [] as unknown[] };
+  const log = { reads: [] as Doc[], updates: [] as Doc[], creates: [] as Doc[], events: [] as string[], sql: [] as unknown[], bases: [] as Doc[] };
   const shape = (d: Doc, a: Doc): Doc => {
     const out: Doc = { ...d };
     const fr = out.titleFr;
@@ -102,7 +102,14 @@ function world(o: WorldOpts = {}) {
   const payload = {
     config: CONFIG,
     logger: { info: () => {}, warn: () => {}, error: () => {} },
-    db: { sessions },
+    db: {
+      sessions,
+      // The base Payload merges a non-draft update over: the latest version snapshot (every locale).
+      async findVersions(a: Doc) {
+        log.bases.push(a);
+        return { docs: [{ version: shape(st.latest, { locale: "all" }) }] };
+      },
+    },
     async findByID(a: Doc) {
       log.reads.push(a);
       if (a.collection === "tenants") return { ...tenant, features: { ...tenant.features } };
@@ -264,7 +271,8 @@ test("post-write assertion turns an interleaved draft into 409 draft_diverged wi
       w.st.latest = { ...w.st.main, title: "Unpublished draft title", _status: "draft", version: (w.st.main.version as number) + 1 };
     },
   });
-  assert.deepEqual([r.status, r.body], [409, { ok: false, status: "draft_diverged", reason: "article has unpublished changes" }]);
+  // Same status + `draft_diverged` contract; the reason now names the failed leg, not "unpublished changes".
+  assert.deepEqual([r.status, r.body], [409, { ok: false, status: "draft_diverged", reason: "post_write_mismatch:fields" }]);
   assert.equal(JSON.stringify(r.body).includes("Unpublished draft title"), false);
   assert.equal(w.log.events.at(-1), "kill");
   // ADV3-1: on a translation tenant, a draft that changed ONLY the fr title ⇒ 409 too.
@@ -279,6 +287,53 @@ test("post-write assertion turns an interleaved draft into 409 draft_diverged wi
   // Control: no interleaving ⇒ 200 on both tenants.
   assert.equal((await call(world(), { dek: "New dek" })).status, 200);
   assert.equal((await call(world({ translations: true, doubleBump: true }), { dek: "New dek" })).status, 200);
+});
+
+test("snapshot drift: a latest version with a stale author does not revert main's author (GCV 9474)", async () => {
+  // Main row author 9 (fixed by a script / SQL, no new version); the latest version snapshot still says 3.
+  // A non-draft update merges over the SNAPSHOT, so without the guard the write puts author 3 back on main
+  // and D12 rolls every edit back with 409 (`keys=author`).
+  const w = world({ main: { author: 9 }, latest: { author: 3 } });
+  const r = await call(w, { title: "New title" });
+  assert.deepEqual([r.status, r.body.changed], [200, ["title"]]);
+  const u = w.log.updates[0]!;
+  assert.deepEqual(u.data, { title: "New title", author: 9 });
+  assert.equal(w.st.main.author, 9);
+  // The hub-facing parts do not move: context fields name only what the edit changed.
+  assert.deepEqual((u.context as Doc).hubAuthor, { actor: ACTOR, action: "update", fields: ["title"] });
+  // The base is read once, on the transaction, every locale.
+  assert.equal(w.log.bases.length, 1);
+  assert.equal(w.log.bases[0]!.req, LOCK_REQ);
+  assert.equal(w.log.bases[0]!.locale, "all");
+  assert.deepEqual(w.log.bases[0]!.where, { and: [{ parent: { equals: 5 } }, { latest: { equals: true } }] });
+  // Control: no drift ⇒ the write carries ONLY the changed field (byte-identical to before).
+  const wc = world();
+  assert.equal((await call(wc, { title: "New title" })).status, 200);
+  assert.deepEqual(Object.keys(wc.log.updates[0]!.data as Doc), ["title"]);
+});
+
+test("snapshot drift: relationship arrays, scalars and the en text are pinned too; an edit's own columns are not overridden", async () => {
+  const w = world({ main: { tags: [4, 5], readMin: 7, dek: "Main dek", sponsored: true }, latest: { tags: [1], readMin: 2, dek: "Old dek", sponsored: false } });
+  // `readMin` is the edit's own column ⇒ the edit wins; the rest are pinned to main.
+  const r = await call(w, { readMin: 9 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(w.log.updates[0]!.data, { readMin: 9, tags: [4, 5], dek: "Main dek", sponsored: true });
+  assert.deepEqual([w.st.main.tags, w.st.main.dek, w.st.main.sponsored, w.st.main.readMin], [[4, 5], "Main dek", true, 9]);
+});
+
+test("snapshot drift: the overlay stays inside the post-write check (drift on a non-en locale still rolls back with 409)", async () => {
+  // The write is locale "en": a stale fr title in the snapshot cannot be pinned, so D12 still refuses it.
+  const w = world({ main: { titleFr: "Principal" }, latest: { titleFr: "Ancien" } });
+  const r = await call(w, { dek: "New dek" });
+  assert.deepEqual([r.status, r.body], [409, { ok: false, status: "draft_diverged", reason: "post_write_mismatch:fields" }]);
+  assert.equal(w.log.events.at(-1), "kill");
+  // An overlaid column that does NOT take effect is still caught (the overlay is not in changedColumns).
+  const w2 = world({ main: { author: 9 }, latest: { author: 3 } });
+  const r2 = await call(w2, { title: "T" }, { findBaseTx: async () => ({ author: 3 }) });
+  assert.equal(r2.status, 200);
+  const w3 = world({ main: { author: 9 }, latest: { author: 3 } });
+  const r3 = await call(w3, { title: "T" }, { findBaseTx: async () => ({ author: 9 }) });
+  assert.deepEqual([r3.status, r3.body.reason], [409, "post_write_mismatch:fields"]);
 });
 
 test("D12 excludes only the flag columns actually written: an unchanged sent flag flipped by an interleaved draft is 409", async () => {

@@ -11018,6 +11018,8 @@ async function check9() {
   };
   const noLock = { lockRow: async () => {} };
   const DIVERGED = [409, { ok: false, status: "draft_diverged", reason: "article has unpublished changes" }];
+  // 16-11-26: a failed post-write check (D12, after the write, rolled back) answers the same status with a reason that names the leg.
+  const DIVERGED_POST = [409, { ok: false, status: "draft_diverged", reason: "post_write_mismatch:fields" }];
   const NLE = (reason: string) => [422, { ok: false, status: "not_live_editable", reason }];
   const pair = (r: { status: number; body: Doc }) => [r.status, r.body];
   const group = async (name: (typeof P9_GROUPS)[number], fn: () => Promise<void>) => {
@@ -11196,7 +11198,7 @@ async function check9() {
       const l = await latestOf(x.id);
       expect("P3b: (AC29 / AC34) Save-Draft through beforeWrite (2nd connection, REAL lockRow) ⇒ 409 draft_diverged + rollback: row snapshot unchanged, public title unchanged, draft kept, phantom human_edit = 1, _articles_v delta 0 (counted from after the seam's draft)", [
         ...pair(r), (await rowSnap(x.id)) === snap0, (pub1.body.doc as Doc | undefined)?.title === (pub0.body.doc as Doc | undefined)?.title, l._status, (await actCount(x.id)) - act0, (await verCount(x.id)) - verAfterSeam,
-      ], [...DIVERGED, true, true, "draft", 1, 0]);
+      ], [...DIVERGED_POST, true, true, "draft", 1, 0]);
     });
 
     // ══ P3c — translation tenant (i): Save-Draft en / fr; a NON-draft write (isolated D12) ══
@@ -11209,7 +11211,7 @@ async function check9() {
           await payload.update({ collection: "articles", id: x.id, draft: true, overrideAccess: true, locale: "en", context: { disableRevalidate: true }, data: { title: `P9 3c SLIPPED EN ${run}` } as never });
         },
       });
-      expect("P3c-i: translation tenant, Save-Draft (en title) slips in, REAL lockRow ⇒ 409 + rollback, row unchanged", [...pair(r1), (await rowSnap(x.id)) === snap0], [...DIVERGED, true]);
+      expect("P3c-i: translation tenant, Save-Draft (en title) slips in, REAL lockRow ⇒ 409 + rollback, row unchanged", [...pair(r1), (await rowSnap(x.id)) === snap0], [...DIVERGED_POST, true]);
       const y = await mkPublished(t);
       const snapY = await rowSnap(y.id);
       const r2 = await inproc(y.id, t, y.version, { dek: `P9 3c dek fr ${run}` }, {
@@ -11217,7 +11219,7 @@ async function check9() {
           await payload.update({ collection: "articles", id: y.id, draft: true, overrideAccess: true, locale: "fr" as never, context: { disableRevalidate: true }, data: { title: `P9 3c GLISSÉ FR ${run}` } as never });
         },
       });
-      expect("P3c-i(fr): (ADV3-1) Save-Draft changing ONLY the fr title ⇒ 409 + rollback, row unchanged", [...pair(r2), (await rowSnap(y.id)) === snapY], [...DIVERGED, true]);
+      expect("P3c-i(fr): (ADV3-1) Save-Draft changing ONLY the fr title ⇒ 409 + rollback, row unchanged", [...pair(r2), (await rowSnap(y.id)) === snapY], [...DIVERGED_POST, true]);
       const z = await mkPublished(t);
       const r3 = await inproc(z.id, t, z.version, { dek: `P9 3c live dek ii ${run}` }, {
         ...noLock,
@@ -11228,7 +11230,7 @@ async function check9() {
       const zm = await mainOf(z.id);
       expect("P3c-ii: [ca cô lập D12 — lockRow no-op] a NON-draft write without ctx changes the title (status still published, version leg passes on the translation tenant) ⇒ ONLY the field leg catches it ⇒ 409; main = the slipped write, not the live dek", [
         ...pair(r3), String(zm.title), zm.dek === `P9 3c live dek ii ${run}`, zm._status,
-      ], [...DIVERGED, `P9 3c NONDRAFT ${run}`, false, "published"]);
+      ], [...DIVERGED_POST, `P9 3c NONDRAFT ${run}`, false, "published"]);
       // MINOR-1: a sent-but-UNCHANGED flag (longHaul:false = stored) must stay in the D12 comparison.
       const f = await mkPublished(t);
       const fm0 = await mainOf(f.id);
@@ -11241,7 +11243,7 @@ async function check9() {
       const fm = await mainOf(f.id);
       expect("P3c-ii(flags): [ca cô lập D12 — lockRow no-op] request flips deepDive and re-sends longHaul UNCHANGED; a NON-draft write flips longHaul in the window ⇒ the field leg still compares longHaul ⇒ 409; main = the slipped write, deepDive not applied", [
         ...pair(r4), fm.longHaul === (fm0.longHaul !== true), fm.deepDive === fm0.deepDive,
-      ], [...DIVERGED, true, true]);
+      ], [...DIVERGED_POST, true, true]);
       const w = await mkPublished(t);
       expect("P3c control: translation tenant, no interleaving, REAL lockRow ⇒ 200", (await inproc(w.id, t, w.version, { dek: "P9 3c control" })).status, 200);
     });
@@ -11258,7 +11260,7 @@ async function check9() {
       const xm = await mainOf(x.id);
       expect("P3d-i: [ca cô lập D12 — lockRow no-op] a Hide (the /status write, hubWrite, no lock) commits before the write ⇒ 409 + rollback; the article STAYS archived (never re-published); public 404", [
         ...pair(r1), xm.workflowStatus, (await pubGet("gcv", x.slug)).status,
-      ], [...DIVERGED, "archived", 404]);
+      ], [...DIVERGED_POST, "archived", 404]);
       const y = await mkPublished("gcv");
       let code: string | null = null;
       const r2 = await inproc(y.id, "gcv", y.version, { dek: `P9 3d ii dek ${run}` }, {
