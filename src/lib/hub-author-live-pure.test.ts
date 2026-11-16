@@ -15,6 +15,7 @@ import {
   HUB_LIVE_WIDE_FLAGS,
   isLiveWideTenant,
   liveDiffKeys,
+  liveBaseOverlay,
   liveEditTenants,
   liveGateReason,
   liveLockedReason,
@@ -279,5 +280,50 @@ describe("HUB_LIVE_FIELD_KEYS (D4)", () => {
     assert.equal(keys.indexOf("heroFocal"), keys.indexOf("leadImageCaption") + 1);
     assert.equal((HUB_LIVE_WIDE_FIELD_KEYS as readonly string[]).includes("heroFocal"), false);
     assert.equal(liveLockedReason({ heroFocal: { x: 10, y: 20 } }, false), null);
+  });
+});
+
+describe("liveBaseOverlay (snapshot-drift guard)", () => {
+  // pre = main row (locale "all"); base = the latest version snapshot Payload merges a non-draft update over.
+  const pre: Doc = { id: 7, version: 4, author: 9, tags: [4, 5], title: { en: "Main", fr: "Principal" }, body: { en: { root: { type: "root", children: [] } } }, deepDive: false, publishedAt: "2026-10-01T00:00:00.000Z" };
+
+  it("no base or no difference ⇒ nothing to pin", () => {
+    assert.deepEqual(liveBaseOverlay({ pre, base: null, data: {} }), { overlay: {}, keys: [] });
+    assert.deepEqual(liveBaseOverlay({ pre, base: { ...pre, updatedAt: "x", version: 3, id: 99 }, data: {} }), { overlay: {}, keys: [] });
+  });
+
+  it("a plain field that drifted is pinned to main's value, null when main has none", () => {
+    const r = liveBaseOverlay({ pre, base: { ...pre, author: 3, tags: [1], publishedAt: "2026-09-01T00:00:00.000Z", sponsor: "S" }, data: {} });
+    assert.deepEqual(r.overlay, { author: 9, tags: [4, 5], publishedAt: "2026-10-01T00:00:00.000Z", sponsor: null });
+    assert.deepEqual(r.keys, ["author", "tags", "publishedAt", "sponsor"]);
+  });
+
+  it("a key already in data (the edit's own column) is never touched", () => {
+    assert.deepEqual(liveBaseOverlay({ pre, base: { ...pre, author: 3 }, data: { author: 11 } }).overlay, {});
+  });
+
+  it("a localized field drifted on en is pinned to main's en; a drift on another locale is left for D12", () => {
+    const enDrift = liveBaseOverlay({ pre, base: { ...pre, title: { en: "Old", fr: "Principal" } }, data: {} });
+    assert.deepEqual(enDrift.overlay, { title: "Main" });
+    const frDrift = liveBaseOverlay({ pre, base: { ...pre, title: { en: "Main", fr: "Ancien" } }, data: {} });
+    assert.deepEqual(frDrift.overlay, {});
+    const bodyDrift = liveBaseOverlay({ pre, base: { ...pre, body: { en: { root: { type: "root", children: [{ type: "paragraph" }] } } } }, data: {} });
+    assert.deepEqual(bodyDrift.overlay, { body: { root: { type: "root", children: [] } } });
+  });
+
+  it("never pins the keys the write itself recomputes", () => {
+    const r = liveBaseOverlay({
+      pre: { ...pre, translationStatus: [{ locale: "fr", state: "pending" }], lastEditedBy: 1, _status: "published", createdAt: "a", updatedAt: "b" },
+      base: { ...pre, translationStatus: [], lastEditedBy: 2, _status: "draft", createdAt: "c", updatedAt: "d", version: 1 },
+      data: {},
+    });
+    assert.deepEqual(r.overlay, {});
+  });
+
+  it("the overlay is not a changed column: livePostWriteCheck still compares it", () => {
+    const pre2 = { ...pre, workflowStatus: "published" };
+    const post = { ...pre2, author: 3 }; // the pin did not take effect
+    const res = livePostWriteCheck({ pre: pre2, post: { ...post, workflowStatus: "published", _status: "published", version: 5 }, latest: { _status: "published", version: 5 }, changedColumns: ["title"], currentVersion: 4, translationsActive: false, localized: ["title", "body"] });
+    assert.deepEqual(res, { ok: false, leg: "fields", detail: ["author"] });
   });
 });

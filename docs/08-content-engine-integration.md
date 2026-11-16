@@ -278,7 +278,7 @@ Responses (error envelope as intake: `{ok:false, status, reason}`):
 | 403 | `forbidden` / `feature_disabled` | missing action, tenant not allowed, tenant not in the env switch, or host list empty |
 | 404 | `not_found` | no such `engineDraftId` in THIS tenant |
 | 409 | `hero_changed` | current hero differs from `expectedHeroMediaId` (`currentHeroMediaId` in the body) |
-| 409 | `draft_diverged` | the article has a pending draft / newer version, or the post-write check refused (`reason: article has unpublished changes`) |
+| 409 | `draft_diverged` | the article has a pending draft / newer version (`reason: article has unpublished changes`), or the post-write check refused and rolled the write back (`reason: post_write_mismatch:<fields|status|version>`; same status, so clients keep mapping by `status`) |
 | 413 | `too_large` | body over 16 KB |
 | 422 | `unprocessable` | `articles` feature off; `reason` starts with `invalid_hero_url`, `hero_not_an_image`, `hero_too_large` or `article_invalid`; or a single-home rule message |
 | 500 | `error` | `reason: internal error` only (detail goes to an `integration_error` activity row) |

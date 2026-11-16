@@ -86,7 +86,15 @@ function world(o: WorldOpts = {}) {
   const payload = {
     config: CONFIG,
     logger: { info: () => {}, warn: () => {}, error: () => {} },
-    db: { sessions: { tx1: { db: { execute: async () => {} } } } },
+    db: {
+      sessions: { tx1: { db: { execute: async () => {} } } },
+      // The latest-version base of a non-draft update (snapshot-drift guard in hub-author-live-core).
+      async findVersions(a: Doc) {
+        const parent = ((a.where as { and: { parent?: { equals: unknown } }[] }).and[0]?.parent?.equals) as string | number;
+        const rec = articles.get(String(parent));
+        return { docs: rec ? [{ version: shape(rec.latest, { locale: "all" }) }] : [] };
+      },
+    },
     async findByID(a: Doc) {
       if (a.collection === "tenants") return { ...tenant, features: { ...tenant.features } };
       if (a.collection === "content-engines") return { id: 60, hubAuthor: true };

@@ -284,6 +284,56 @@ export function liveDiffKeys(pre: Doc, post: Doc, changedColumns: readonly strin
   return out;
 }
 
+/**
+ * Keys NEVER overlaid by `liveBaseOverlay`: the ones the write itself recomputes (`id`, the
+ * timestamps, `version`, `lastEditedBy`), the status sidecar, and `_status` (the live gate already
+ * pins it to published on main and latest).
+ */
+export const LIVE_BASE_OVERLAY_SKIP = ["id", "createdAt", "updatedAt", "version", "translationStatus", "lastEditedBy", "_status"] as const;
+
+/**
+ * Snapshot-drift guard (16-11-26, the GCV article 9474 incident). A NON-draft `payload.update`
+ * does not base the write on the main row: Payload merges the incoming `data` over the LATEST
+ * VERSION snapshot (`getLatestCollectionVersion`) and writes the whole merge to the main row.
+ * When the main row and that snapshot differ on a field the edit does not touch (a byline fixed
+ * by a script / SQL without a new version, say), the live write silently reverts that field on
+ * the main row to the stale snapshot value. D12 then (rightly) sees `author` move and rolls back
+ * with 409, so the article could never be live-edited.
+ *
+ * This returns the extra `data` keys that pin every such field to the MAIN row's value (`pre`,
+ * read with `locale: "all"`, depth 0), so the base no longer matters:
+ *   - a key already in `data` (the edit's own columns) is never touched;
+ *   - a plain field that differs ⇒ `data[k] = pre[k] ?? null`;
+ *   - a LOCALIZED field that differs on `en` ⇒ `data[k] = pre[k].en ?? null` (the write is
+ *     `locale: "en"`); a difference on another locale cannot be pinned this way and stays for the
+ *     post-write check to catch (⇒ rollback + 409).
+ * The overlay is NOT part of `changedColumns`: the post-write check still compares every one of
+ * these columns, so an overlay that did not take effect is still caught.
+ */
+export function liveBaseOverlay(a: {
+  pre: Doc;
+  base: Doc | null | undefined;
+  data: Doc;
+  localized?: readonly string[];
+}): { overlay: Doc; keys: string[] } {
+  const { pre, base, data } = a;
+  const localized = a.localized ?? LIVE_LOCALIZED_FIELDS;
+  const overlay: Doc = {};
+  if (!base) return { overlay, keys: [] };
+  const keys = new Set([...Object.keys(pre), ...Object.keys(base)]);
+  for (const k of keys) {
+    if ((LIVE_BASE_OVERLAY_SKIP as readonly string[]).includes(k) || has(data, k)) continue;
+    if (localized.includes(k)) {
+      const p = isPlainObject(pre[k]) && !isLexicalNode(pre[k]) ? (pre[k] as Doc) : {};
+      const b = isPlainObject(base[k]) && !isLexicalNode(base[k]) ? (base[k] as Doc) : {};
+      if (!liveValueEqual(p.en, b.en)) overlay[k] = p.en ?? null;
+      continue;
+    }
+    if (!liveValueEqual(pre[k], base[k])) overlay[k] = pre[k] ?? null;
+  }
+  return { overlay, keys: Object.keys(overlay) };
+}
+
 const instant = (v: unknown): number | null => {
   if (v == null) return null;
   const t = new Date(v as string).getTime();

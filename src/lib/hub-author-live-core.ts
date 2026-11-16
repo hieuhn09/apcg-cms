@@ -28,8 +28,9 @@
  *   → `withHubArticleLock` (advisory lock, ONE transaction; busy ⇒ 503) and inside it:
  *     `lockRow` = `SELECT 1 FROM articles WHERE id = $1 FOR NO KEY UPDATE` on the
  *     transaction's session (D16) → gate 2 + `expectedVersion` again → `pre` (D12) →
+ *     the latest-version base + `liveBaseOverlay` (snapshot-drift guard, below) →
  *     `beforeWrite?` (D15, test seam only) → the write (D1) → `post` + latest → D12 ⇒
- *     rollback + 409 draft_diverged → 200 `{ok, id, tenant, workflowStatus, version, changed}`
+ *     rollback + 409 draft_diverged (reason `post_write_mismatch:<leg>`) → 200 `{ok, id, tenant, workflowStatus, version, changed}`
  *     with `version` re-read in the transaction (never `updated.version`).
  *
  * D1 — the write: a NON-draft `payload.update` on the transaction's `req`, `locale: "en"`,
@@ -41,6 +42,12 @@
  * Wide + an `engine` article not yet `editedByHuman` ⇒ the write also sets
  * `editedByHuman: true` (OD2), so an engine re-send of the same `engineDraftId` gets the
  * intake's 409 `human_edited_content_not_overwritten` instead of overwriting the edit.
+ *
+ * Snapshot-drift guard (16-11-26): a NON-draft `payload.update` merges `data` over the LATEST VERSION
+ * snapshot, not the main row. If the two differ on a field the edit does not touch (e.g. `author` moved on
+ * main by a script / SQL with no new version) the write reverted that field and D12 rolled every edit
+ * back (GCV article 9474). `liveBaseOverlay` pins those fields to main's value in the write data; they
+ * are NOT in `changedColumns`, so D12 still verifies them.
  *
  * Hero focal point (10-11-26): `fields.heroFocal` is a live key on EVERY live tenant (never
  * media-locked); a focal-only edit takes the `changed: []` branch (no article write); the focal is
@@ -94,6 +101,7 @@ import {
   isLiveWideTenant,
   liveEditTenants,
   liveGateReason,
+  liveBaseOverlay,
   liveLockedReason,
   livePostWriteCheck,
   liveWideTenants,
@@ -172,6 +180,12 @@ export function liveHumanEditData(main: Doc, wide: boolean): { editedByHuman?: t
 
 const notLiveEditable = (reason: HubLiveGateReason | "media_locked" | "flags_locked") => json({ ok: false, status: "not_live_editable", reason }, 422);
 const draftDiverged = () => json({ ok: false, status: "draft_diverged", reason: "article has unpublished changes" }, 409);
+/**
+ * D12 failed after the write (rolled back). Same status + `draft_diverged` contract as before (the hub
+ * maps a 409 by `status` only), but the reason names the real cause: nothing says "unpublished changes"
+ * here, because the mismatch is often not a draft at all (a field moved by the write itself).
+ */
+const postWriteMismatch = (leg: string) => json({ ok: false, status: "draft_diverged", reason: `post_write_mismatch:${leg}` }, 409);
 const liveFeatureDisabled = () => json({ ok: false, status: "feature_disabled", reason: "live edit disabled for tenant" }, 403);
 const authorKeyRefused = () => json({ ok: false, status: "forbidden", reason: "author key cannot live-edit" }, 403);
 
@@ -214,6 +228,25 @@ export async function defaultLockRow(payload: Payload, id: Id, req: PayloadReque
   await exec.execute(sql`SELECT 1 FROM articles WHERE id = ${Number(id)} FOR NO KEY UPDATE`);
 }
 
+/**
+ * The base Payload merges a NON-draft update over: the LATEST VERSION snapshot of the article
+ * (`getLatestCollectionVersion`), every locale, depth 0, on the transaction. `null` = no version.
+ */
+export type FindBaseTx = (payload: Payload, id: Id, req: PayloadRequest | undefined) => Promise<Doc | null>;
+
+export const defaultFindBaseTx: FindBaseTx = async (payload, id, req) => {
+  const { docs } = await payload.db.findVersions({
+    collection: "articles",
+    limit: 1,
+    locale: "all",
+    pagination: false,
+    req,
+    sort: "-updatedAt",
+    where: { and: [{ parent: { equals: id } }, { latest: { equals: true } }] },
+  });
+  return ((docs[0] as unknown as { version?: Doc } | undefined)?.version ?? null) as Doc | null;
+};
+
 /** Injectable seams (unit checks / the in-process probe only; production never passes them). */
 export interface HubLiveDeps {
   authenticate?: typeof authenticateHubWriteEngine;
@@ -223,6 +256,8 @@ export interface HubLiveDeps {
   findMain?: (payload: Payload, id: Id) => Promise<Doc | null>;
   /** Reads on the transaction (`pre`, `post`, the returned version). */
   findMainTx?: FindMainTx;
+  /** Snapshot-drift guard: the latest-version base of the write (default `defaultFindBaseTx`). */
+  findBaseTx?: FindBaseTx;
   /** D16 (default `defaultLockRow`). */
   lockRow?: (payload: Payload, id: Id, req: PayloadRequest | undefined) => Promise<void>;
   /** D11 (default: `liveEditTenants()` read from the env on this call). */
@@ -405,6 +440,11 @@ export async function handleHubLiveUpdateWith(
     // D12: `pre`, right after gate 2, before the seam and the write.
     const pre = await readMainAll(payload, articleId, lk.req, findMainTx);
     if (!pre) return fail(notFound());
+    // Snapshot-drift guard: pin every field the edit does not touch to the MAIN row's value, so a
+    // latest-version snapshot that drifted from main cannot be written back over it (see `liveBaseOverlay`).
+    const base = await (deps?.findBaseTx ?? defaultFindBaseTx)(payload, articleId, lk.req);
+    const { overlay, keys: overlayKeys } = liveBaseOverlay({ pre, base, data });
+    if (overlayKeys.length) payload.logger.warn(`[${SCOPE}] latest version drifted from main, pinning: article=${articleId} tenant=${tenant.slug} keys=${overlayKeys.join(",")}`);
     if (deps?.beforeWrite) await deps.beforeWrite();
 
     try {
@@ -414,7 +454,7 @@ export async function handleHubLiveUpdateWith(
         id: articleId,
         req: lk.req,
         locale: "en",
-        data: { ...data } as never,
+        data: { ...data, ...overlay } as never,
         depth: 0,
         overrideAccess: true,
         context: { hubAuthor: { actor: v.actor, action: "update", fields: changed }, engineId: engine.id },
@@ -445,7 +485,7 @@ export async function handleHubLiveUpdateWith(
     });
     if (!check.ok) {
       payload.logger.warn(`[${SCOPE}] post-write check failed: article=${articleId} tenant=${tenant.slug} leg=${check.leg} keys=${check.detail.join(",")}`);
-      return fail(draftDiverged());
+      return fail(postWriteMismatch(check.leg));
     }
     // D1 (iii): the version is the one READ in the transaction, never `updated.version`.
     const version = versionOf(post as Doc);
