@@ -31,6 +31,8 @@
     "audit:add-abb-taxonomy": "tsx scripts/audit/add-abb-taxonomy.ts",
     "audit:prune-authors": "tsx scripts/audit/prune-unused-authors.ts",
     "test:prune-authors": "tsx --test scripts/lib/prune-authors.test.ts",
+    "audit:reassign-authors": "tsx scripts/audit/reassign-gcv-authors.ts",
+    "test:reassign-authors": "tsx --test scripts/lib/reassign-authors.test.ts",
     "probe:gtp": "tsx scripts/gtp-probe.ts",
     "probe:hero-replace": "tsx scripts/hero-replace-probe.ts",
     "test:single-home": "tsx --test src/lib/single-home-pillars.test.ts src/hooks/single-home-pillar.test.ts scripts/lib/local-db-guard.test.ts scripts/lib/gtp-taxonomy.test.ts scripts/lib/vowasia-taxonomy.test.ts scripts/lib/aer-taxonomy.test.ts scripts/lib/agr-taxonomy.test.ts scripts/lib/amb-taxonomy.test.ts scripts/lib/asn-taxonomy.test.ts scripts/lib/central-db-name-guard.test.ts scripts/lib/abb-taxonomy.test.ts",
