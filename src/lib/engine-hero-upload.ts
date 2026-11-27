@@ -28,6 +28,7 @@ import sharp from "sharp";
 import type { Payload } from "payload";
 import { scopedCreate } from "@/lib/scoped";
 import { buildHeroMediaData } from "@/lib/intake-hero-caption";
+import type { HubHeroFocal } from "@/lib/hub-hero-focal-pure";
 import { isBlockedAddress, sniffImageType } from "@/lib/engine-hero-replace-pure";
 import { maxPixelsFor } from "@/lib/hub-direct-upload-pure";
 
@@ -69,6 +70,8 @@ export interface HeroUploadArgs {
   slug: string;
   credit: string | null;
   caption: string | null;
+  /** Optional focal point (already validated); create-only. Absent ⇒ data unchanged. */
+  focal?: HubHeroFocal | null;
 }
 
 const defaultResolve = async (host: string): Promise<string[]> => (await lookup(host, { all: true })).map((a) => a.address);
@@ -186,7 +189,7 @@ export async function uploadHeroMedia(payload: Payload, a: HeroUploadArgs, o: He
       payload,
       collection: "media",
       tenantId: a.tenantId,
-      data: buildHeroMediaData({ title: a.title, credit: a.credit, caption: a.caption }),
+      data: buildHeroMediaData({ title: a.title, credit: a.credit, caption: a.caption, focal: a.focal }),
       file: { data: buffer, mimetype, name, size: buffer.length },
     });
     const doc = media as { id: Id; filename?: string | null };
@@ -206,7 +209,7 @@ export async function uploadHeroLenient(
   slug: string,
   credit: string | null,
   caption: string | null,
-  deps: Pick<HeroUploadDeps, "fetch"> = {},
+  deps: Pick<HeroUploadDeps, "fetch"> & { focal?: HubHeroFocal | null } = {},
 ): Promise<Id | undefined> {
   try {
     const res = deps.fetch ? await deps.fetch(url) : await fetch(url);
@@ -218,7 +221,7 @@ export async function uploadHeroLenient(
       payload,
       collection: "media",
       tenantId,
-      data: buildHeroMediaData({ title, credit, caption }),
+      data: buildHeroMediaData({ title, credit, caption, focal: deps.focal }),
       file: { data: buffer, mimetype, name: `${slug}.${ext}`, size: buffer.length },
     });
     return (media as { id: Id }).id;
