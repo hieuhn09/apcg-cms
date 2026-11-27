@@ -243,3 +243,40 @@ describe("uploadHeroLenient (intake create path, unchanged behaviour)", () => {
     assert.deepEqual(warns, ["[intake] hero upload failed (db down) — publishing without hero"]);
   });
 });
+
+describe("hero focal on media create (engine heroFocal)", () => {
+  it("lenient path writes focalX/focalY when a focal is passed", async () => {
+    const { payload, creates } = fakePayload();
+    const id = await uploadHeroLenient(payload, 3, "https://img.example/a.jpg", "T", "slug", "C", null, { fetch: (async () => res(JPEG)) as never, focal: { x: 50, y: 25 } });
+    assert.equal(id, 55);
+    const c = creates[0] as { data: Record<string, unknown> };
+    assert.deepEqual(c.data, { alt: "T", credit: "C", focalX: 50, focalY: 25, tenant: 3 });
+  });
+  it("lenient path without focal has no focal keys", async () => {
+    const { payload, creates } = fakePayload();
+    await uploadHeroLenient(payload, 3, "https://img.example/a.jpg", "T", "slug", null, null, { fetch: (async () => res(JPEG)) as never, focal: null });
+    const c = creates[0] as { data: Record<string, unknown> };
+    assert.deepEqual(c.data, { alt: "T", credit: undefined, tenant: 3 });
+  });
+  it("strict path writes focalX/focalY when a focal is passed", async () => {
+    const { payload, creates } = fakePayload();
+    const r = await uploadHeroMedia(payload, { tenantId: 3, url: "https://img.example/a.jpg", title: "T", slug: "s", credit: null, caption: null, focal: { x: 30, y: 20 } }, strictOpts, { fetch: (async () => res(JPEG)) as never, resolveHost: async () => ["93.184.216.34"] });
+    assert.ok(r.ok);
+    const c = creates[0] as { data: Record<string, unknown> };
+    assert.deepEqual(c.data, { alt: "T", credit: undefined, focalX: 30, focalY: 20, tenant: 3 });
+  });
+});
+
+describe("re-intake keeps focal create-only", () => {
+  it("refreshExisting in the intake route never creates/updates media nor reads heroFocal", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../app/api/engine/intake/route.ts", import.meta.url), "utf8");
+    const start = src.indexOf("async function refreshExisting(");
+    assert.ok(start > 0);
+    const next = src.indexOf("\nasync function ", start + 10);
+    const body = src.slice(start, next > 0 ? next : undefined);
+    assert.doesNotMatch(body, /heroFocal|focalX|focalY|uploadHero|collection: "media"/);
+    // The refresh call is made before any hero upload.
+    assert.ok(src.indexOf("return await refreshExisting(") < src.indexOf("await uploadHeroLenient("));
+  });
+});
